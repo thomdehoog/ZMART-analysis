@@ -33,6 +33,7 @@ import subprocess
 import json
 import pickle
 import tempfile
+import types
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -41,33 +42,40 @@ from typing import Optional, Dict, Any
 def load_function(func_name: str, functions_dir: Path):
     """
     Load a function module from the functions directory.
-    
+
+    Uses exec-based loading instead of importlib.util.spec_from_file_location
+    to avoid Windows DLL search path side effects that can break packages
+    like PyTorch when step files are on network drives.
+
     Parameters
     ----------
     func_name : str
         Name of the function (without .py extension)
     functions_dir : Path
         Directory containing function files
-        
+
     Returns
     -------
     module
         The loaded Python module
-        
+
     Raises
     ------
     FileNotFoundError
         If the function file doesn't exist
     """
     func_path = functions_dir / f"{func_name}.py"
-    
+
     if not func_path.exists():
         raise FileNotFoundError(f"Function file not found: {func_path}")
-    
-    spec = importlib.util.spec_from_file_location(func_name, func_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    
+
+    namespace = {"__name__": func_name, "__file__": str(func_path)}
+    with open(func_path) as f:
+        exec(compile(f.read(), str(func_path), "exec"), namespace)
+
+    module = types.ModuleType(func_name)
+    module.__dict__.update(namespace)
+
     return module
 
 
@@ -337,7 +345,7 @@ def run_pipeline(yaml_path: str, label: str, input_data: Optional[Dict] = None) 
     # Determine functions directory
     # Default: sibling 'steps' folder relative to pipelines folder
     functions_dir_str = yaml_metadata.get('functions_dir', '../steps')
-    functions_dir = (yaml_path.parent / functions_dir_str).resolve()
+    functions_dir = Path(os.path.abspath(yaml_path.parent / functions_dir_str))
     
     # Find the workflow key (any key that isn't 'metadata')
     workflow_name = None
@@ -456,7 +464,7 @@ import json
 from pathlib import Path
 
 # Add engine directory to path
-engine_dir = Path({repr(str(Path(__file__).parent.resolve()))})
+engine_dir = Path({repr(os.path.abspath(Path(__file__).parent))})
 sys.path.insert(0, str(engine_dir))
 
 from engine import run_pipeline
