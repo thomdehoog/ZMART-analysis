@@ -141,10 +141,9 @@ def main():
     section("Removing")
     removed = 0
     for name in targets:
-        result = subprocess.run(
-            [conda, "env", "remove", "-n", name, "-y"],
-            capture_output=True, text=True,
-        )
+        cmd = [conda, "env", "remove", "-n", name, "-y"]
+        print(f"  [RUN]  {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             ok(name)
             removed += 1
