@@ -30,7 +30,7 @@ All steps share the same process and memory. Fast, no serialization overhead.
   ┌──────────────────────────────────────────────────────────────┐
   │    main process                                              │
   │                                                              │
-  │    preprocess --> segment --> extract_features               │
+  │    step 1 --> step 2 --> step 3                              │
   │                                                              │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -46,7 +46,7 @@ All steps run together in a single subprocess, in a different conda env than the
   │  ┌────────────────────────────────────────────────────────┐  │
   │  │  subprocess                                            │  │
   │  │                                                        │  │
-  │  │    preprocess --> segment --> extract_features         │  │
+  │  │  step 1 --> step 2 --> step 3                          │  │
   │  │                                                        │  │
   │  └────────────────────────────────────────────────────────┘  │
   │                                                              │
@@ -61,13 +61,13 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   ┌────────────────────────────────────────────────────────────────┐
   │  main process                                                  │
   │                                                                │
-  │                    ┌──────────────────┐                        │ 
-  │                    │ subprocess:      │                        │
-  │    preprocess -->  │     segment      │ --> extract_features   │
-  │                    │                  │                        │
-  │                    └──────────────────┘                        │
-  │                      data serialized                           │
-  │                      automatically                             │
+  │              ┌──────────────────┐                              │ 
+  │              │ subprocess:      │                              │
+  │  step 1 -->  │     step 2       │ --> step 3                   │
+  │              │                  │                              │
+  │              └──────────────────┘                              │
+  │                 data serialized                                │
+  │                 automatically                                  │
   └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -82,11 +82,11 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   │  ┌────────────────────────────────────────────────────────┐  │
   │  │  subprocess                                            │  │
   │  │                                                        │  │
-  │  │                  ┌──────────────────┐                  │  │
-  │  │                  │ subprocess:      │                  │  │
-  │  │    step_one -->  │     segment      │ --> step_two     │  │
-  │  │                  │                  │                  │  │
-  │  │                  └──────────────────┘                  │  │
+  │  │              ┌──────────────────┐                      │  │
+  │  │              │ subprocess:      │                      │  │
+  │  │  step 1 -->  │     step 2       │ --> step 3           │  │
+  │  │              │                  │                      │  │
+  │  │              └──────────────────┘                      │  │
   │  │                                                        │  │
   │  └────────────────────────────────────────────────────────┘  │
   │                                                              │
