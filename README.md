@@ -28,9 +28,9 @@ All steps share the same process and memory. Fast, no serialization overhead.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
-  │  single process                                              │
+  │    main process                                              │
   │                                                              │
-  │    preprocess --> segment --> extract_features --> feedback│
+  │    preprocess --> segment --> extract_features               │
   │                                                              │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -41,12 +41,12 @@ All steps run together in a single subprocess, in a different conda env than the
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
-  │  orchestrator                                                │
+  │   main process                                               │
   │                                                              │
   │  ┌────────────────────────────────────────────────────────┐  │
   │  │  subprocess                                            │  │
   │  │                                                        │  │
-  │  │    preprocess --> segment --> extract_features       │  │
+  │  │    preprocess --> segment --> extract_features         │  │
   │  │                                                        │  │
   │  └────────────────────────────────────────────────────────┘  │
   │                                                              │
@@ -58,17 +58,17 @@ All steps run together in a single subprocess, in a different conda env than the
 Individual steps get their own subprocess. The engine serializes pipeline_data between processes automatically. Use when a specific step has dependencies that conflict with other steps.
 
 ```
-  ┌──────────────────────────────────────────────────────────────┐
-  │  main process                                                │
-  │                                                              │
-  │                    ┌──────────────────┐                      │
-  │                    │ subprocess       │                      │
-  │    preprocess --> │   segment        │ --> verify          │
-  │                    │                  │                      │
-  │                    └──────────────────┘                      │
-  │                      data serialized                         │
-  │                      automatically                           │
-  └──────────────────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────────────┐
+  │  main process                                                  │
+  │                                                                │
+  │                    ┌──────────────────┐                        │ 
+  │                    │ subprocess:      │                        │
+  │    preprocess -->  │     segment      │ --> extract_features   │
+  │                    │                  │                        │
+  │                    └──────────────────┘                        │
+  │                      data serialized                           │
+  │                      automatically                             │
+  └────────────────────────────────────────────────────────────────┘
 ```
 
 ### Mode 4: Mixed (nested environments)
@@ -77,14 +77,14 @@ The pipeline runs in one env, but individual steps can switch to yet another env
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
-  │  orchestrator                                                │
+  │   main process                                               │
   │                                                              │
   │  ┌────────────────────────────────────────────────────────┐  │
   │  │  subprocess                                            │  │
   │  │                                                        │  │
   │  │                  ┌──────────────────┐                  │  │
-  │  │                  │ subprocess       │                  │  │
-  │  │    step_one --> │   step_special   │ --> step_two   │  │
+  │  │                  │ subprocess:      │                  │  │
+  │  │    step_one -->  │     segment      │ --> step_two     │  │
   │  │                  │                  │                  │  │
   │  │                  └──────────────────┘                  │  │
   │  │                                                        │  │
