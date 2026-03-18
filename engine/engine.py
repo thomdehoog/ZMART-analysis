@@ -39,6 +39,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+# Resolved once at import time. Used wherever the engine needs to
+# reference its own location (subprocess scripts, path setup, etc.).
+ENGINE_DIR = os.path.abspath(os.path.dirname(__file__))
+
 
 def load_function(func_name: str, functions_dir: Path):
     """
@@ -460,15 +464,12 @@ def _run_pipeline_in_environment(yaml_path: Path, label: str,
     # Serialize input_data for the subprocess
     input_json = json.dumps(input_data) if input_data else 'None'
     
-    engine_dir = os.path.abspath(Path(__file__).parent)
-
     script = f'''
 import sys
 import json
-from pathlib import Path
 
 # Add engine directory to path
-sys.path.insert(0, {repr(engine_dir)})
+sys.path.insert(0, {repr(ENGINE_DIR)})
 
 from engine import run_pipeline
 
