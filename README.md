@@ -12,7 +12,7 @@ The common workarounds are either to find one environment that satisfies all dep
 
 Smart Analysis solves this with three ideas:
 
-1. **YAML-defined pipelines.** Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
+1. **YAML defined pipelines.** Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
 
 2. **Automatic environment switching.** Each step can declare which conda environment it needs. The engine handles subprocess spawning, data serialization, and result collection transparently.
 
@@ -61,7 +61,7 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   ┌────────────────────────────────────────────────────────────────┐
   │  main process                                                  │
   │                                                                │
-  │              ┌──────────────────┐                              │ 
+  │              ┌──────────────────┐                              │
   │              │ subprocess       │                              │
   │  step 1 -->  │     step 2       │ --> step 3                   │
   │              │                  │                              │
@@ -92,7 +92,7 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   └──────────────────────────────────────────────────────────────┘
 ```
 
-The YAML for these modes is straightforward:
+### YAML examples
 
 ```yaml
 # Mode 1: no environment key, everything runs locally
@@ -110,7 +110,7 @@ my-workflow:
 ```yaml
 # Mode 2: pipeline level environment
 metadata:
-  environment: "SMART--rare_event_selection--main"
+  environment: "SMART--my_workflow--main"
   functions_dir: "../steps"
 
 my-workflow:
@@ -133,10 +133,9 @@ METADATA = {
 ```bash
 git clone https://github.com/thomdehoog/smart-analysis.git
 cd smart-analysis
-pip install pyyaml
 ```
 
-### Writing a Step
+### Writing a step
 
 Every step is a Python file with two things: a `METADATA` dict and a `run` function.
 
@@ -170,7 +169,7 @@ def run(pipeline_data: dict, **params) -> dict:
     return pipeline_data
 ```
 
-### Writing a Pipeline
+### Writing a pipeline
 
 ```yaml
 # pipelines/my_pipeline.yaml
@@ -192,7 +191,7 @@ my-workflow:
       format: "csv"
 ```
 
-### Running a Pipeline
+### Running a pipeline
 
 ```python
 import sys
@@ -208,11 +207,11 @@ result = run_pipeline(
 )
 ```
 
-## Environment Switching
+## Environment switching
 
 This is the core feature. Scientific Python has a dependency conflict problem. Packages like PyTorch, TensorFlow, and scipy ship native libraries that can interfere with each other. The engine isolates steps in separate conda environments when needed.
 
-### Environment Naming Convention
+### Environment naming convention
 
 ```
 SMART--{workflow}--{step}
@@ -222,70 +221,57 @@ SMART--rare_event_selection--segment    isolated env for a specific step
 SMART--basic_test--env_a                test environment A
 ```
 
-### Environment Setup
+### Environment setup
 
-Each workflow includes setup and cleanup scripts:
+Each workflow includes setup and cleanup scripts.
 
 ```bash
-cd workflows/rare_event_selection/environments
-
-# auto detects GPU (CUDA/MPS/CPU), creates conda env, installs packages
-python setup_env.py
-
-# remove all envs for this workflow
-python clean_env.py
+python workflows/rare_event_selection/environments/setup_env.py
+python workflows/rare_event_selection/environments/clean_env.py
 ```
 
-The setup script auto detects your GPU, picks the right PyTorch wheel, installs all packages via pip (avoiding conda/pip conflicts), and runs diagnostics to verify everything works.
+The setup script auto detects your GPU (NVIDIA CUDA, Apple MPS, or CPU), picks the right PyTorch build, installs all packages via pip (avoiding conda/pip DLL conflicts), and runs diagnostics to verify everything works.
 
-## Project Structure
+## Project structure
 
 ```
 smart-analysis/
-|   engine/
-|   |   engine.py              # pipeline orchestrator
-|   |   conda_utils.py         # conda discovery and GPU detection
-|   |   test_conda_utils.py    # unit tests (21 tests)
-|
-|   workflows/
-|   |   basic_test/            # engine test suite (9 integration tests)
-|   |   |   environments/
-|   |   |   |   setup_env.py
-|   |   |   |   clean_env.py
-|   |   |   pipelines/         # 9 test pipelines
-|   |   |   steps/             # 8 test steps
-|   |   |   run_all.py
-|   |
-|   |   rare_event_selection/  # example: microscopy cell analysis
-|   |   |   environments/
-|   |   |   |   setup_env.py
-|   |   |   |   clean_env.py
-|   |   |   pipelines/
-|   |   |   steps/
-|   |   |   run_pipeline.py
-|
-|   docs/
-|   |   Pipeline_Engine_Documentation.md
-|
-|   requirements.txt
-|   LICENSE
-|   .gitignore
+    engine/
+        engine.py              # pipeline orchestrator
+        conda_utils.py         # conda discovery and GPU detection
+        test_conda_utils.py    # unit tests (21 tests)
+
+    workflows/
+        basic_test/            # engine test suite (9 integration tests)
+            environments/
+                setup_env.py
+                clean_env.py
+            pipelines/         # 9 test pipelines
+            steps/             # 8 test steps
+            run_all.py
+
+        rare_event_selection/  # example: microscopy cell analysis
+            environments/
+                setup_env.py
+                clean_env.py
+            pipelines/
+            steps/
+            run_pipeline.py
+
+    docs/
+        Pipeline_Engine_Documentation.md
+
+    requirements.txt
+    LICENSE
+    .gitignore
 ```
 
 ## Testing
 
+The test suite sets up environments, runs all tests, and cleans up automatically.
+
 ```bash
-# set up test environments
-cd workflows/basic_test/environments
-python setup_env.py
-
-# run all 9 tests
-cd ..
-python run_all.py
-
-# clean up
-cd environments
-python clean_env.py
+python workflows/basic_test/run_all.py
 ```
 
 The test suite covers:
@@ -303,7 +289,7 @@ The test suite covers:
 ## Requirements
 
 - Python 3.10+
-- PyYAML
+- PyYAML (auto installed by test suite if missing)
 - Conda (for environment switching)
 
 ## License
