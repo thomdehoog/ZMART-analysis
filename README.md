@@ -1,6 +1,6 @@
 # Smart Analysis
 
-A Python pipeline engine for scientific analysis workflows. Define multi-step processing pipelines in YAML, and let the engine handle execution, data flow, and environment isolation.
+A Python pipeline engine for scientific image analysis workflows. Define multi-step processing pipelines in YAML, and let the engine handle execution, data flow, and environment isolation.
 
 ## The Problem
 
