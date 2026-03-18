@@ -66,8 +66,7 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   │  step 1 -->  │     step 2       │ --> step 3                   │
   │              │                  │                              │
   │              └──────────────────┘                              │
-  │                 data serialized                                │
-  │                 automatically                                  │
+  │                                                                │
   └────────────────────────────────────────────────────────────────┘
 ```
 
