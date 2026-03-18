@@ -6,7 +6,7 @@ A Python pipeline engine for scientific analysis workflows. Define multi-step pr
 
 Scientific analysis pipelines often combine tools with conflicting dependencies. A typical workflow might need scikit-image for preprocessing, PyTorch for deep learning, and specialized packages for feature extraction. These tools ship native libraries that can interfere with each other, leading to crashes that are hard to diagnose and harder to fix.
 
-The traditional workaround is manual: run each tool in a separate script, save intermediate results to disk, and hope the file formats are compatible. This is fragile, hard to reproduce, and painful to modify.
+The common workarounds are either to find one environment that satisfies all dependencies -- a time-consuming trial-and-error process that is not always possible -- or to run each tool in a separate script, save intermediate results to disk, and stitch everything together manually. Both approaches are fragile, hard to reproduce, and painful to modify.
 
 ## The Solution
 
