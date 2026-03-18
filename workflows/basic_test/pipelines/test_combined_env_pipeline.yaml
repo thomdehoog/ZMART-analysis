@@ -1,0 +1,20 @@
+# Test: Combined environment switching (most complex)
+# Pipeline runs in SMART--basic_test--env_a, but step_env_b
+# requests SMART--basic_test--env_c (nested subprocess).
+
+metadata:
+  purpose: "Test nested environment switching"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+  environment: "SMART--basic_test--env_a"
+
+combined-env-test:
+  - step_local:
+      note: "Runs in env_a"
+
+  - step_env_b:
+      note: "Switches to env_c (nested subprocess)"
+
+  - step_local_2:
+      note: "Back to env_a"

@@ -1,0 +1,18 @@
+# Test: Step-level environment switching
+# step_env runs in SMART--basic_test--env_b via subprocess.
+
+metadata:
+  purpose: "Test step-level environment switching"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+step-env-test:
+  - step_local:
+      stage: "before_env_switch"
+
+  - step_env:
+      stage: "in_different_env"
+
+  - step_local_2:
+      stage: "after_env_switch"

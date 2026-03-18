@@ -1,0 +1,15 @@
+# Test: Multiple local steps with data flow
+# All steps run in the main process and pass data between them.
+
+metadata:
+  purpose: "Test data flow between local steps"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+mixed-test:
+  - step_local:
+      stage: "first"
+
+  - step_local_2:
+      stage: "second"

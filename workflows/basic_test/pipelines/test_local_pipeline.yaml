@@ -1,0 +1,13 @@
+# Test: Local execution only
+# All steps run in the main process.
+
+metadata:
+  purpose: "Test local execution (no environment switching)"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+local-test:
+  - step_local:
+      test_param: "hello"
+      number: 42

@@ -1,0 +1,16 @@
+# Test: Pipeline-level environment switching
+# Entire pipeline runs in SMART--basic_test--env_b.
+
+metadata:
+  purpose: "Test pipeline-level environment switching"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+  environment: "SMART--basic_test--env_b"
+
+pipeline-env-test:
+  - step_local:
+      note: "Runs in env_b, not the calling environment"
+
+  - step_local_2:
+      note: "Also runs in env_b"

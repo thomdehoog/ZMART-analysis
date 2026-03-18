@@ -18,7 +18,9 @@ import subprocess
 import sys
 import argparse
 import time
+from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from conda_utils import get_conda_info, get_conda_exe, list_envs_by_prefix
 
 
