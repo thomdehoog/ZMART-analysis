@@ -6,61 +6,131 @@ A Python pipeline engine for scientific analysis workflows. Define multi-step pr
 
 Scientific analysis pipelines often combine tools with conflicting dependencies. A typical workflow might need scikit-image for preprocessing, PyTorch for deep learning, and specialized packages for feature extraction. These tools ship native libraries that can interfere with each other, leading to crashes that are hard to diagnose and harder to fix.
 
-The common workarounds are either to find one environment that satisfies all dependencies -- a time-consuming trial-and-error process that is not always possible -- or to run each tool in a separate script, save intermediate results to disk, and stitch everything together manually. Both approaches are fragile, hard to reproduce, and painful to modify.
+The common workarounds are either to find one environment that satisfies all dependencies, a time-consuming trial-and-error process that is not always possible, or to run each tool in a separate script, save intermediate results to disk, and stitch everything together manually. Both approaches are fragile, hard to reproduce, and painful to modify.
 
 ## The Solution
 
 Smart Analysis solves this with three ideas:
 
-1. **YAML-defined pipelines** -- Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
+1. **YAML-defined pipelines.** Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
 
-2. **Automatic environment switching** -- Each step can declare which conda environment it needs. The engine handles subprocess spawning, data serialization, and result collection. Your preprocessing step can run in one environment while your segmentation runs in another, seamlessly.
+2. **Automatic environment switching.** Each step can declare which conda environment it needs. The engine handles subprocess spawning, data serialization, and result collection transparently.
 
-3. **Shared data dictionary** -- A single `pipeline_data` dictionary flows through every step. Each step reads what it needs from previous steps and adds its own results. No manual file I/O between steps.
+3. **Shared data dictionary.** A single `pipeline_data` dictionary flows through every step. Each step reads what it needs from previous steps and adds its own results. No manual file I/O between steps.
 
 ## How It Works
 
-You define your workflow in YAML. The engine reads it and executes each step in order, passing a shared data dictionary between them. If a step needs a different conda environment, the engine handles it automatically.
+You define your workflow in YAML. The engine reads it and executes each step in order, passing a shared data dictionary between them.
+
+### Mode 1: All steps local (same process)
+
+All steps share the same process and memory. Fast, no serialization overhead.
 
 ```
-                          pipeline_data
-                      (shared dictionary)
-                              |
-     +------------+     +-----v------+     +-----------+     +----------+
-     |            |     |            |     |           |     |          |
-     | preprocess |---->|  segment   |---->|  extract  |---->| feedback |
-     |            |     |            |     |  features |     |          |
-     +------------+     +-----+------+     +-----------+     +----------+
-       env: local          env: local        env: local        env: local
-       sigma: 1.0          diameter: null    percentile: 99    output: ./out
+  pipeline_data flows through all steps in one process
+  ====================================================
+
+  +------------+     +----------+     +-----------+     +----------+
+  |            |     |          |     |           |     |          |
+  | preprocess | ==> | segment  | ==> |  extract  | ==> | feedback |
+  |            |     |          |     |  features |     |          |
+  +------------+     +----------+     +-----------+     +----------+
+    env: local         env: local       env: local        env: local
 ```
 
-Each box is a Python file with a `run()` function. The YAML controls the order and parameters:
+### Mode 2: Pipeline level environment (one subprocess)
+
+All steps run together in a single subprocess, in a different conda env than the orchestrator. Useful when the entire workflow needs packages not available in the orchestrator env.
+
+```
+  orchestrator (your terminal)
+  ============================
+
+  +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -+
+  :  subprocess (SMART--rare_event_selection--main)                :
+  :                                                                :
+  :  +------------+     +----------+     +-----------+             :
+  :  |            |     |          |     |           |             :
+  :  | preprocess | ==> | segment  | ==> |  extract  |            :
+  :  |            |     |          |     |  features |            :
+  :  +------------+     +----------+     +-----------+             :
+  :                                                                :
+  +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -+
+```
+
+### Mode 3: Step level environment (per step subprocess)
+
+Individual steps get their own subprocess. The engine serializes pipeline_data between processes automatically. Use when a specific step has dependencies that conflict with other steps.
+
+```
+  main process
+  ============
+
+  +------------+     +- - - - - - - - - - - -+     +-----------+
+  |            |     :  subprocess (env_b)    :     |           |
+  | preprocess | ==> :  +----------------+   : ==> |  verify   |
+  |            |     :  |    segment     |   :     |           |
+  +------------+     :  +----------------+   :     +-----------+
+    env: local       +- - - - - - - - - - - -+       env: local
+                       data serialized
+                       automatically
+```
+
+### Mode 4: Mixed (nested environments)
+
+The pipeline runs in one env, but individual steps can switch to yet another env. The engine handles the nesting.
+
+```
+  orchestrator
+  ============
+
+  +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -+
+  :  subprocess (env_a)                                          :
+  :                                                              :
+  :  +----------+   +- - - - - - - - - -+   +----------+        :
+  :  |          |   :  subprocess (env_c):   |          |        :
+  :  | step_one | =>:  +-------------+  : =>| step_two |        :
+  :  |          |   :  | step_special|  :   |          |        :
+  :  +----------+   :  +-------------+  :   +----------+        :
+  :    env: local    +- - - - - - - - - -+     env: local        :
+  :                    env: env_c                                :
+  +- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -+
+```
+
+The YAML for these modes is straightforward:
 
 ```yaml
-rare-event-selection:
+# Mode 1: no environment key, everything runs locally
+metadata:
+  verbose: 3
+  functions_dir: "../steps"
+
+my-workflow:
   - preprocess:
       sigma: 1.0
   - segment:
       diameter: null
-  - extract_features:
-      percentile: 99
-  - feedback:
-      output_dir: "./out"
 ```
 
-When a step declares a different environment, the engine spawns a subprocess, serializes the data, runs the step, and collects the result -- all transparently:
+```yaml
+# Mode 2: pipeline level environment
+metadata:
+  environment: "SMART--rare_event_selection--main"
+  functions_dir: "../steps"
 
+my-workflow:
+  - preprocess:
+      sigma: 1.0
+  - segment:
+      diameter: null
 ```
-     +------------+     +- - - - - - - - - - -+     +-----------+
-     |            |     :  subprocess (env_b)  :     |           |
-     | preprocess |---->:  +----------------+  :---->|  verify   |
-     |            |     :  |    segment     |  :     |           |
-     +------------+     :  +----------------+  :     +-----------+
-       env: local       +- - - - - - - - - - -+       env: local
-                            env: env_b
-                            data serialized
-                            automatically
+
+```python
+# Mode 3: step level environment (in the step file)
+METADATA = {
+    "environment": "SMART--my_workflow--segment",
+    "data_transfer": "file_paths",  # or "pickle" for complex objects
+}
 ```
 
 ## Quick Start
@@ -145,37 +215,7 @@ result = run_pipeline(
 
 ## Environment Switching
 
-This is the core feature. Scientific Python has a dependency conflict problem: packages like PyTorch, TensorFlow, and scipy ship native libraries (DLLs on Windows, .so on Linux) that can interfere with each other. The engine isolates steps in separate conda environments when needed.
-
-### Three Levels of Isolation
-
-**Level 1 -- Local (no isolation)**
-
-Step runs in the main process. Fast, no overhead. Use when dependencies are compatible.
-
-```python
-METADATA = {"environment": "local"}
-```
-
-**Level 2 -- Pipeline-level environment**
-
-All steps run together in one subprocess, in a different conda env than the orchestrator.
-
-```yaml
-metadata:
-  environment: "SMART--my_workflow--main"
-```
-
-**Level 3 -- Step-level environment**
-
-Individual steps get their own subprocess. Use when a specific step has unique dependencies.
-
-```python
-METADATA = {
-    "environment": "SMART--my_workflow--segment",
-    "data_transfer": "file_paths",  # or "pickle" for complex objects
-}
-```
+This is the core feature. Scientific Python has a dependency conflict problem. Packages like PyTorch, TensorFlow, and scipy ship native libraries that can interfere with each other. The engine isolates steps in separate conda environments when needed.
 
 ### Environment Naming Convention
 
@@ -194,43 +234,47 @@ Each workflow includes setup and cleanup scripts:
 ```bash
 cd workflows/rare_event_selection/environments
 
-# auto-detects GPU (CUDA/MPS/CPU), creates conda env, installs packages
+# auto detects GPU (CUDA/MPS/CPU), creates conda env, installs packages
 python setup_env.py
 
 # remove all envs for this workflow
 python clean_env.py
 ```
 
-The setup script auto-detects your GPU, picks the right PyTorch wheel, installs all packages via pip (avoiding conda/pip DLL conflicts), and runs diagnostics to verify everything works.
+The setup script auto detects your GPU, picks the right PyTorch wheel, installs all packages via pip (avoiding conda/pip conflicts), and runs diagnostics to verify everything works.
 
 ## Project Structure
 
 ```
 smart-analysis/
-|-- engine/
-|   |-- engine.py              # pipeline orchestrator
-|   |-- conda_utils.py         # conda discovery and GPU detection
-|   '-- test_conda_utils.py    # unit tests (21 tests)
-|-- workflows/
-|   |-- basic_test/            # engine test suite (9 integration tests)
-|   |   |-- environments/
-|   |   |   |-- setup_env.py
-|   |   |   '-- clean_env.py
-|   |   |-- pipelines/         # 9 test pipelines
-|   |   |-- steps/             # 8 test steps
-|   |   '-- run_all.py
-|   '-- rare_event_selection/  # example: microscopy cell analysis
-|       |-- environments/
-|       |   |-- setup_env.py
-|       |   '-- clean_env.py
-|       |-- pipelines/
-|       |-- steps/
-|       '-- run_pipeline.py
-|-- docs/
-|   '-- Pipeline_Engine_Documentation.md
-|-- requirements.txt
-|-- LICENSE
-'-- .gitignore
+|   engine/
+|   |   engine.py              # pipeline orchestrator
+|   |   conda_utils.py         # conda discovery and GPU detection
+|   |   test_conda_utils.py    # unit tests (21 tests)
+|
+|   workflows/
+|   |   basic_test/            # engine test suite (9 integration tests)
+|   |   |   environments/
+|   |   |   |   setup_env.py
+|   |   |   |   clean_env.py
+|   |   |   pipelines/         # 9 test pipelines
+|   |   |   steps/             # 8 test steps
+|   |   |   run_all.py
+|   |
+|   |   rare_event_selection/  # example: microscopy cell analysis
+|   |   |   environments/
+|   |   |   |   setup_env.py
+|   |   |   |   clean_env.py
+|   |   |   pipelines/
+|   |   |   steps/
+|   |   |   run_pipeline.py
+|
+|   docs/
+|   |   Pipeline_Engine_Documentation.md
+|
+|   requirements.txt
+|   LICENSE
+|   .gitignore
 ```
 
 ## Testing
@@ -250,10 +294,11 @@ python clean_env.py
 ```
 
 The test suite covers:
+
 - Local step execution
 - Data flow between steps
-- Step-level environment switching
-- Pipeline-level environment switching
+- Step level environment switching
+- Pipeline level environment switching
 - Nested environment switching
 - Data survival across serialization
 - Pickle transfer mode
@@ -268,4 +313,4 @@ The test suite covers:
 
 ## License
 
-MIT License -- see LICENSE file for details.
+MIT License. See LICENSE file for details.
