@@ -44,7 +44,7 @@ All steps run together in a single subprocess, in a different conda env than the
   │  orchestrator                                                │
   │                                                              │
   │  ┌────────────────────────────────────────────────────────┐  │
-  │  │  subprocess (SMART--rare_event_selection--main)        │  │
+  │  │  subprocess                                            │  │
   │  │                                                        │  │
   │  │    preprocess ═══> segment ═══> extract_features       │  │
   │  │                                                        │  │
@@ -62,7 +62,7 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   │  main process                                                │
   │                                                              │
   │                    ┌──────────────────┐                      │
-  │                    │ subprocess env_b │                      │
+  │                    │ subprocess       │                      │
   │    preprocess ═══> │   segment        │ ═══> verify          │
   │                    │                  │                      │
   │                    └──────────────────┘                      │
@@ -80,10 +80,10 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   │  orchestrator                                                │
   │                                                              │
   │  ┌────────────────────────────────────────────────────────┐  │
-  │  │  subprocess (env_a)                                    │  │
+  │  │  subprocess                                            │  │
   │  │                                                        │  │
   │  │                  ┌──────────────────┐                  │  │
-  │  │                  │ subprocess env_c │                  │  │
+  │  │                  │ subprocess       │                  │  │
   │  │    step_one ═══> │   step_special   │ ═══> step_two   │  │
   │  │                  │                  │                  │  │
   │  │                  └──────────────────┘                  │  │
