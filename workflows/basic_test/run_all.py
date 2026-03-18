@@ -1,15 +1,19 @@
 """
 Run all basic_test pipelines and report results.
 
+Automatically sets up test environments before running,
+and cleans them up afterwards.
+
 Usage:
     python run_all.py
-
-Requires SMART--basic_test--env_a/b/c environments to be set up.
-Run environments/setup_env.py first.
+    python run_all.py --keep-envs    # do not clean up after
+    python run_all.py --skip-setup   # assume envs already exist
 """
 
 import sys
+import subprocess
 import time
+import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
@@ -32,12 +36,12 @@ TESTS = [
     ("step_env",
      "pipelines/test_step_env_pipeline.yaml",
      True,
-     "Step-level environment switching"),
+     "Step level environment switching"),
 
     ("pipeline_env",
      "pipelines/test_pipeline_env_pipeline.yaml",
      True,
-     "Pipeline-level environment switching"),
+     "Pipeline level environment switching"),
 
     ("combined",
      "pipelines/test_combined_env_pipeline.yaml",
@@ -66,8 +70,30 @@ TESTS = [
 ]
 
 
+def run_script(script_path):
+    """Run a Python script as a subprocess and return success status."""
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        capture_output=False,
+    )
+    return result.returncode == 0
+
+
 def main():
+    parser = argparse.ArgumentParser(description="Run basic_test suite")
+    parser.add_argument(
+        "--keep-envs", action="store_true",
+        help="Do not clean up environments after tests",
+    )
+    parser.add_argument(
+        "--skip-setup", action="store_true",
+        help="Skip environment setup (assume envs exist)",
+    )
+    args = parser.parse_args()
+
     base = Path(__file__).parent
+    setup_script = base / "environments" / "setup_env.py"
+    clean_script = base / "environments" / "clean_env.py"
     t_start = time.time()
 
     print()
@@ -77,7 +103,31 @@ def main():
 
     print()
     print(f"  Tests:                 {len(TESTS)}")
-    print(f"  Engine:                {Path(__file__).parent.parent.parent / 'engine'}")
+    print(f"  Engine:                {base.parent.parent / 'engine'}")
+    print()
+
+    # ------------------------------------------------------------------
+    # Setup environments
+    # ------------------------------------------------------------------
+    if not args.skip_setup:
+        print("=" * WIDTH)
+        print("  Phase 1: Environment Setup")
+        print("=" * WIDTH)
+        print()
+
+        if not run_script(setup_script):
+            print()
+            print("  [FAIL]    Environment setup failed. Cannot run tests.")
+            sys.exit(1)
+
+        print()
+
+    # ------------------------------------------------------------------
+    # Run tests
+    # ------------------------------------------------------------------
+    print("=" * WIDTH)
+    print("  Phase 2: Running Tests")
+    print("=" * WIDTH)
     print()
 
     results = []
@@ -118,6 +168,18 @@ def main():
         print()
 
     # ------------------------------------------------------------------
+    # Cleanup environments
+    # ------------------------------------------------------------------
+    if not args.keep_envs and not args.skip_setup:
+        print("=" * WIDTH)
+        print("  Phase 3: Cleanup")
+        print("=" * WIDTH)
+        print()
+
+        run_script(clean_script)
+        print()
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     elapsed = time.time() - t_start
@@ -135,7 +197,7 @@ def main():
         print(f"  {status}    {name}")
 
     print()
-    print(f"  {'-' * (WIDTH - 4)}")
+    print(f"  {'_' * (WIDTH - 4)}")
     print(f"  Passed:                {n_passed}/{n_total}")
     print(f"  Time:                  {elapsed:.0f}s")
     print()
