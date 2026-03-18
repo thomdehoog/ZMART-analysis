@@ -12,8 +12,8 @@ Usage:
     python setup_env.py --dry-run
 
 Naming convention:
-    SMART--{workflow}--main     — default env for the workflow
-    SMART--{workflow}--{step}   — isolated env for a specific step
+    SMART--{workflow}--main     -- default env for the workflow
+    SMART--{workflow}--{step}   -- isolated env for a specific step
 
 Requirements:
     - conda (Miniconda or Anaconda)
@@ -22,12 +22,13 @@ Requirements:
 
 import subprocess
 import sys
-import platform
 import argparse
-import shutil
-import json
-import re
-from pathlib import Path
+import time
+
+from conda_utils import (
+    get_conda_info, get_conda_exe, env_exists,
+    detect_gpu, gpu_label, get_torch_install_args,
+)
 
 
 WORKFLOW = "rare_event_selection"
@@ -41,139 +42,48 @@ PIP_PACKAGES = [
     "cellpose",
 ]
 
-
-def get_conda_info():
-    """Get conda configuration via 'conda info --json'.
-
-    This is the single source of truth for conda executable,
-    environment directories, and existing environments.
-
-    Returns
-    -------
-    dict
-        Parsed JSON output from conda info.
-
-    Raises
-    ------
-    FileNotFoundError
-        If conda is not available.
-    """
-    try:
-        result = subprocess.run(
-            ["conda", "info", "--json"],
-            capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-    except FileNotFoundError:
-        pass
-
-    raise FileNotFoundError(
-        "Could not run 'conda info'. Please ensure:\n"
-        "  - Conda is installed\n"
-        "  - You are running from a conda-enabled terminal\n"
-        "    (Anaconda Prompt, Miniconda Prompt, or terminal with conda init)"
-    )
+WIDTH = 70
 
 
-def get_conda_exe(conda_info):
-    """Get the conda executable path from conda info."""
-    conda_exe = conda_info.get("conda_exe")
-    if conda_exe and Path(conda_exe).exists():
-        return conda_exe
+# ---------------------------------------------------------------------------
+# Display
+# ---------------------------------------------------------------------------
 
-    root_prefix = conda_info.get("root_prefix", "")
-    if root_prefix:
-        if platform.system() == "Windows":
-            candidate = Path(root_prefix) / "Scripts" / "conda.exe"
-        else:
-            candidate = Path(root_prefix) / "bin" / "conda"
-        if candidate.exists():
-            return str(candidate)
+def banner(title):
+    print()
+    print("=" * WIDTH)
+    print(f"  {title}")
+    print("=" * WIDTH)
 
-    return "conda"
+def section(title):
+    print()
+    print(f"  {title}")
+    print(f"  {'-' * (WIDTH - 4)}")
 
+def info(label, value):
+    print(f"  {label + ':':<24s} {value}")
 
-def env_exists(conda_info, env_name):
-    """Check if a conda environment exists."""
-    for env_path in conda_info.get("envs", []):
-        if Path(env_path).name == env_name:
-            return True
-    return False
+def step(number, total, description):
+    print()
+    print(f"  [{number}/{total}] {description}")
+    print(f"  {'-' * (WIDTH - 4)}")
 
+def ok(message):
+    print(f"  [OK]   {message}")
 
-def detect_gpu():
-    """Auto-detect available GPU acceleration and CUDA version.
+def fail(message):
+    print(f"  [FAIL] {message}")
 
-    Returns
-    -------
-    str
-        "cu124", "cu121", etc. for NVIDIA CUDA (matched to installed version),
-        "mps" for Apple Silicon, "cpu" otherwise.
-    """
-    system = platform.system()
+def skip(message):
+    print(f"  [SKIP] {message}")
 
-    # macOS: check for Apple Silicon (MPS)
-    if system == "Darwin":
-        if platform.machine() == "arm64":
-            return "mps"
-        return "cpu"
-
-    # Windows/Linux: check for NVIDIA GPU and detect CUDA version
-    nvidia_smi = shutil.which("nvidia-smi")
-    if not nvidia_smi:
-        return "cpu"
-
-    try:
-        result = subprocess.run(
-            [nvidia_smi], capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            return "cpu"
-
-        # nvidia-smi output contains "CUDA Version: XX.Y"
-        for line in result.stdout.split("\n"):
-            if "CUDA Version" in line:
-                match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", line)
-                if match:
-                    major, minor = int(match.group(1)), int(match.group(2))
-                    cuda_tag = f"cu{major}{minor}"
-                    available = ["cu128", "cu126", "cu124", "cu121", "cu118"]
-                    if cuda_tag in available:
-                        return cuda_tag
-                    # Pick the highest compatible version
-                    for tag in available:
-                        tag_major = int(tag[2:-1])
-                        tag_minor = int(tag[-1])
-                        if tag_major < major or (tag_major == major and tag_minor <= minor):
-                            return tag
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        pass
-
-    # NVIDIA present but couldn't detect version
-    return "cu124"
+def cmd_line(cmd):
+    print(f"  $ {' '.join(cmd)}")
 
 
-def get_torch_install_args(gpu):
-    """Get pip install arguments for PyTorch based on GPU type."""
-    if gpu == "mps":
-        return ["torch", "torchvision"]
-    elif gpu == "cpu":
-        return ["torch", "torchvision",
-                "--index-url", "https://download.pytorch.org/whl/cpu"]
-    else:
-        return ["torch", "torchvision",
-                "--index-url", f"https://download.pytorch.org/whl/{gpu}"]
-
-
-def run(cmd, dry_run=False):
-    """Run a command, printing it first."""
-    print(f"\n  $ {' '.join(cmd)}")
-    if dry_run:
-        print("  (dry run — skipped)")
-        return
-    subprocess.run(cmd, check=True)
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -189,7 +99,7 @@ def main():
     )
     parser.add_argument(
         "--gpu", default=None,
-        help="GPU backend: cu124, cu121, mps, cpu (default: auto-detect)",
+        help="GPU backend: cu128, cu124, cu121, mps, cpu (default: auto-detect)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -198,68 +108,170 @@ def main():
     args = parser.parse_args()
 
     env_name = f"SMART--{WORKFLOW}--{args.step}"
+    gpu = args.gpu or detect_gpu()
+    t_start = time.time()
 
-    system = platform.system()
-    print(f"Platform: {system} ({platform.machine()})")
+    # ------------------------------------------------------------------
+    # Header
+    # ------------------------------------------------------------------
+    banner("SMART Analysis -- Environment Setup")
 
-    # Get conda info
+    section("System")
+    import platform as pf
+    info("Platform", f"{pf.system()} ({pf.machine()})")
+    info("Python target", args.python)
+    info("GPU backend", gpu_label(gpu))
+
+    # ------------------------------------------------------------------
+    # Conda
+    # ------------------------------------------------------------------
+    section("Conda")
     try:
         conda_info = get_conda_info()
     except FileNotFoundError as e:
-        print(f"ERROR: {e}")
+        fail(str(e))
         sys.exit(1)
 
     conda = get_conda_exe(conda_info)
-    print(f"Conda: {conda}")
+    envs_dirs = conda_info.get("envs_dirs", [])
+
+    info("Executable", conda)
+    info("Root prefix", conda_info.get("root_prefix", "unknown"))
+    info("Envs directory", envs_dirs[0] if envs_dirs else "unknown")
+    info("Conda version", conda_info.get("conda_version", "unknown"))
 
     if env_exists(conda_info, env_name):
-        print(f"Environment '{env_name}' already exists. Remove it first with clean_env.py.")
+        fail(f"Environment '{env_name}' already exists.")
+        print(f"         Remove it first:  python clean_env.py --step {args.step}")
         sys.exit(1)
 
-    # Auto-detect GPU if not specified
-    gpu = args.gpu or detect_gpu()
-    print(f"GPU backend: {gpu}")
-    print(f"Environment: {env_name} (Python {args.python})")
+    section("Environment")
+    info("Name", env_name)
+    info("Workflow", WORKFLOW)
+    info("Step", args.step)
 
-    # Step 1: Create conda env with Python only
-    print("\n[1/3] Creating conda environment...")
-    run(
-        [conda, "create", "-n", env_name, f"python={args.python}", "-y"],
-        args.dry_run,
-    )
+    # ------------------------------------------------------------------
+    # Step 1: Create conda env
+    # ------------------------------------------------------------------
+    step(1, 4, "Creating conda environment")
+    create_cmd = [conda, "create", "-n", env_name,
+                  f"python={args.python}", "-y", "-q"]
+    cmd_line(create_cmd)
+    if args.dry_run:
+        skip("dry run")
+    else:
+        result = subprocess.run(create_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            fail("Failed to create environment")
+            print(result.stderr)
+            sys.exit(1)
+        ok(f"Created {env_name}")
 
-    # Step 2: Build pip command via conda run
-    pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name, "pip"]
+    # ------------------------------------------------------------------
+    # Step 2: Install PyTorch
+    # ------------------------------------------------------------------
+    torch_args = get_torch_install_args(gpu)
 
-    # Step 3: Install torch via pip with correct backend
-    print("\n[2/3] Installing PyTorch...")
-    run(pip_cmd + ["install"] + get_torch_install_args(gpu), args.dry_run)
+    step(2, 4, f"Installing PyTorch ({gpu_label(gpu)})")
+    pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name,
+               "pip", "install"] + torch_args
+    cmd_line(pip_cmd)
+    if args.dry_run:
+        skip("dry run")
+    else:
+        result = subprocess.run(pip_cmd)
+        if result.returncode != 0:
+            fail("PyTorch installation failed")
+            sys.exit(1)
+        ok("PyTorch installed")
 
-    # Step 4: Install remaining packages via pip
-    print("\n[3/3] Installing packages...")
-    run(pip_cmd + ["install"] + PIP_PACKAGES, args.dry_run)
+    # ------------------------------------------------------------------
+    # Step 3: Install packages
+    # ------------------------------------------------------------------
+    step(3, 4, "Installing analysis packages")
+    pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name,
+               "pip", "install"] + PIP_PACKAGES
+    cmd_line(pip_cmd)
+    if args.dry_run:
+        skip("dry run")
+    else:
+        result = subprocess.run(pip_cmd)
+        if result.returncode != 0:
+            fail("Package installation failed")
+            sys.exit(1)
+        for pkg in PIP_PACKAGES:
+            ok(pkg)
 
-    # Verify
-    if not args.dry_run:
-        print("\n[verify] Checking installation...")
-        subprocess.run(
-            [
-                conda, "run", "--no-capture-output", "-n", env_name, "python", "-c",
-                "import torch; "
-                "cuda = torch.cuda.is_available(); "
-                "mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available(); "
-                "backend = 'CUDA' if cuda else ('MPS' if mps else 'CPU'); "
-                "print(f'torch {torch.__version__}, backend: {backend}'); "
-                "from skimage.filters import gaussian; import numpy as np; "
-                "gaussian(np.zeros((10,10)), sigma=1); "
-                "import torch; print('scipy+torch DLL test: OK'); "
-                "from cellpose import models; print('cellpose OK'); "
-                "print('All checks passed')",
-            ],
-            check=True,
-        )
+    # ------------------------------------------------------------------
+    # Step 4: Diagnostics
+    # ------------------------------------------------------------------
+    step(4, 4, "Running diagnostics")
 
-    print(f"\nDone. Activate with: conda activate {env_name}")
+    if args.dry_run:
+        skip("dry run")
+    else:
+        checks = [
+            ("PyTorch loads",
+             "import torch; print(torch.__version__)"),
+            ("GPU backend available",
+             "import torch; "
+             "cuda = torch.cuda.is_available(); "
+             "mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available(); "
+             "b = 'CUDA' if cuda else ('MPS' if mps else 'CPU'); "
+             "print(b)"),
+            ("scikit-image",
+             "from skimage.filters import gaussian; "
+             "import numpy as np; "
+             "gaussian(np.zeros((10,10)), sigma=1); "
+             "print('OK')"),
+            ("scipy + torch coexist",
+             "from skimage.filters import gaussian; "
+             "import numpy as np; "
+             "gaussian(np.zeros((10,10)), sigma=1); "
+             "import torch; print('OK')"),
+            ("cellpose",
+             "from cellpose import models; print('OK')"),
+        ]
+
+        all_passed = True
+        for label, code in checks:
+            result = subprocess.run(
+                [conda, "run", "--no-capture-output", "-n", env_name,
+                 "python", "-c", code],
+                capture_output=True, text=True,
+            )
+            output = result.stdout.strip()
+            if result.returncode == 0:
+                ok(f"{label:<28s} {output}")
+            else:
+                fail(f"{label:<28s}")
+                all_passed = False
+
+        if not all_passed:
+            banner("Setup FAILED")
+            print("  Some diagnostics did not pass.")
+            print("  Review the output above and check your installation.")
+            sys.exit(1)
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    elapsed = time.time() - t_start
+
+    banner("Setup Complete")
+
+    section("Summary")
+    info("Environment", env_name)
+    info("GPU backend", gpu_label(gpu))
+    info("Python", args.python)
+    info("Packages", str(len(PIP_PACKAGES) + 2))
+    info("Time", f"{elapsed:.0f}s")
+
+    section("Next steps")
+    print(f"  Activate:    conda activate {env_name}")
+    print(f"  Remove:      python clean_env.py --step {args.step}")
+    print()
+    print("=" * WIDTH)
 
 
 if __name__ == "__main__":
