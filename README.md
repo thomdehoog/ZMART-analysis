@@ -27,15 +27,16 @@ You define your workflow in YAML. The engine reads it and executes each step in 
 All steps share the same process and memory. Fast, no serialization overhead.
 
 ```
-  pipeline_data flows through all steps in one process
-  ====================================================
-
-  +------------+     +----------+     +-----------+     +----------+
-  |            |     |          |     |           |     |          |
-  | preprocess | ==> | segment  | ==> |  extract  | ==> | feedback |
-  |            |     |          |     |  features |     |          |
-  +------------+     +----------+     +-----------+     +----------+
-    env: local         env: local       env: local        env: local
+  +--------------------------------------------------------------+
+  |  single process                                              |
+  |                                                              |
+  |  +------------+   +----------+   +-----------+   +--------+  |
+  |  |            |   |          |   |           |   |        |  |
+  |  | preprocess |==>| segment  |==>|  extract  |==>|feedback|  |
+  |  |            |   |          |   |  features |   |        |  |
+  |  +------------+   +----------+   +-----------+   +--------+  |
+  |                                                              |
+  +--------------------------------------------------------------+
 ```
 
 ### Mode 2: Pipeline level environment (one subprocess)
