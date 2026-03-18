@@ -30,7 +30,7 @@ All steps share the same process and memory. Fast, no serialization overhead.
   ┌──────────────────────────────────────────────────────────────┐
   │  single process                                              │
   │                                                              │
-  │    preprocess ═══> segment ═══> extract_features ═══> feedback│
+  │    preprocess ──→ segment ──→ extract_features ──→ feedback│
   │                                                              │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -46,7 +46,7 @@ All steps run together in a single subprocess, in a different conda env than the
   │  ┌────────────────────────────────────────────────────────┐  │
   │  │  subprocess                                            │  │
   │  │                                                        │  │
-  │  │    preprocess ═══> segment ═══> extract_features       │  │
+  │  │    preprocess ──→ segment ──→ extract_features       │  │
   │  │                                                        │  │
   │  └────────────────────────────────────────────────────────┘  │
   │                                                              │
@@ -63,7 +63,7 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   │                                                              │
   │                    ┌──────────────────┐                      │
   │                    │ subprocess       │                      │
-  │    preprocess ═══> │   segment        │ ═══> verify          │
+  │    preprocess ──→ │   segment        │ ──→ verify          │
   │                    │                  │                      │
   │                    └──────────────────┘                      │
   │                      data serialized                         │
@@ -84,7 +84,7 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   │  │                                                        │  │
   │  │                  ┌──────────────────┐                  │  │
   │  │                  │ subprocess       │                  │  │
-  │  │    step_one ═══> │   step_special   │ ═══> step_two   │  │
+  │  │    step_one ──→ │   step_special   │ ──→ step_two   │  │
   │  │                  │                  │                  │  │
   │  │                  └──────────────────┘                  │  │
   │  │                                                        │  │
