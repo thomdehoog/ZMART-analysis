@@ -127,22 +127,13 @@ def main():
     info("Python target", args.python)
     info("GPU backend", gpu_label(gpu))
 
-    # ------------------------------------------------------------------
-    # Conda
-    # ------------------------------------------------------------------
-    section("Conda")
+    # Conda info (needed early for version check)
     try:
         conda_info = get_conda_info()
     except FileNotFoundError as e:
         fail(str(e))
         sys.exit(1)
 
-    conda = get_conda_exe(conda_info)
-    envs_dirs = conda_info.get("envs_dirs", [])
-
-    info("Executable", conda)
-    info("Root prefix", conda_info.get("root_prefix", "unknown"))
-    info("Envs directory", envs_dirs[0] if envs_dirs else "unknown")
     conda_version = conda_info.get("conda_version", "unknown")
     info("Conda version", conda_version)
 
@@ -150,10 +141,20 @@ def main():
         parts = conda_version.split(".")
         major_minor = float(f"{parts[0]}.{parts[1]}")
         if major_minor < 25.7:
-            print()
             warn("Conda version < 25.7 detected.")
             warn("Environment switching may be unstable.")
             warn("Consider: conda update -n base conda")
+
+    # ------------------------------------------------------------------
+    # Conda
+    # ------------------------------------------------------------------
+    section("Conda")
+    conda = get_conda_exe(conda_info)
+    envs_dirs = conda_info.get("envs_dirs", [])
+
+    info("Executable", conda)
+    info("Root prefix", conda_info.get("root_prefix", "unknown"))
+    info("Envs directory", envs_dirs[0] if envs_dirs else "unknown")
 
     if env_exists(conda_info, env_name):
         fail(f"Environment '{env_name}' already exists.")
