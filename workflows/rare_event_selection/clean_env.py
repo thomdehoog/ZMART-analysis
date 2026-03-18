@@ -8,72 +8,80 @@ Usage:
     python clean_env.py             # remove all envs for this workflow
     python clean_env.py --step main # remove only the main env
     python clean_env.py --dry-run   # list without removing
+
+Requirements:
+    - conda (Miniconda or Anaconda)
+    - Run from a conda-enabled terminal
 """
 
 import subprocess
 import sys
 import platform
 import argparse
-import shutil
 import json
+from pathlib import Path
 
 
 WORKFLOW = "rare_event_selection"
 PREFIX = f"SMART--{WORKFLOW}--"
 
 
-def find_conda():
-    """Find the conda executable."""
-    conda = shutil.which("conda")
-    if conda:
-        return conda
+def get_conda_info():
+    """Get conda configuration via 'conda info --json'.
 
-    import os
+    Returns
+    -------
+    dict
+        Parsed JSON output from conda info.
 
-    candidates = []
-    if platform.system() == "Windows":
-        candidates = [
-            r"C:\ProgramData\Miniconda3\condabin\conda.bat",
-            r"C:\ProgramData\MinicondaZMB\condabin\conda.bat",
-            r"C:\Users\{}\Miniconda3\condabin\conda.bat".format(os.getlogin()),
-        ]
-    elif platform.system() == "Darwin":
-        candidates = [
-            "/opt/homebrew/Caskroom/miniconda/base/condabin/conda",
-            "/usr/local/Caskroom/miniconda/base/condabin/conda",
-            "~/miniconda3/condabin/conda",
-        ]
-    else:
-        candidates = [
-            "/opt/conda/condabin/conda",
-            "~/miniconda3/condabin/conda",
-            "~/anaconda3/condabin/conda",
-        ]
+    Raises
+    ------
+    FileNotFoundError
+        If conda is not available.
+    """
+    try:
+        result = subprocess.run(
+            ["conda", "info", "--json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    except FileNotFoundError:
+        pass
 
-    for path in candidates:
-        path = os.path.expanduser(path)
-        if os.path.exists(path):
-            return path
-
-    return None
-
-
-def list_workflow_envs(conda):
-    """List all conda envs matching the workflow prefix."""
-    result = subprocess.run(
-        [conda, "env", "list", "--json"],
-        capture_output=True, text=True,
+    raise FileNotFoundError(
+        "Could not run 'conda info'. Please ensure:\n"
+        "  - Conda is installed\n"
+        "  - You are running from a conda-enabled terminal\n"
+        "    (Anaconda Prompt, Miniconda Prompt, or terminal with conda init)"
     )
-    envs = json.loads(result.stdout).get("envs", [])
 
-    import os
 
+def get_conda_exe(conda_info):
+    """Get the conda executable path from conda info."""
+    conda_exe = conda_info.get("conda_exe")
+    if conda_exe and Path(conda_exe).exists():
+        return conda_exe
+
+    root_prefix = conda_info.get("root_prefix", "")
+    if root_prefix:
+        if platform.system() == "Windows":
+            candidate = Path(root_prefix) / "Scripts" / "conda.exe"
+        else:
+            candidate = Path(root_prefix) / "bin" / "conda"
+        if candidate.exists():
+            return str(candidate)
+
+    return "conda"
+
+
+def list_workflow_envs(conda_info):
+    """List all conda envs matching the workflow prefix."""
     matching = []
-    for env_path in envs:
-        name = os.path.basename(env_path)
+    for env_path in conda_info.get("envs", []):
+        name = Path(env_path).name
         if name.startswith(PREFIX):
             matching.append(name)
-
     return matching
 
 
@@ -92,15 +100,18 @@ def main():
     )
     args = parser.parse_args()
 
-    conda = find_conda()
-    if not conda:
-        print("ERROR: conda not found.")
+    try:
+        conda_info = get_conda_info()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
         sys.exit(1)
+
+    conda = get_conda_exe(conda_info)
 
     if args.step:
         targets = [f"{PREFIX}{args.step}"]
     else:
-        targets = list_workflow_envs(conda)
+        targets = list_workflow_envs(conda_info)
 
     if not targets:
         print(f"No environments found matching {PREFIX}*")

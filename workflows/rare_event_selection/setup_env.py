@@ -17,6 +17,7 @@ Naming convention:
 
 Requirements:
     - conda (Miniconda or Anaconda)
+    - Run from a conda-enabled terminal
 """
 
 import subprocess
@@ -24,12 +25,14 @@ import sys
 import platform
 import argparse
 import shutil
+import json
+import re
+from pathlib import Path
 
 
 WORKFLOW = "rare_event_selection"
 PYTHON_VERSION = "3.12"
 
-# Packages installed via pip (order matters for dependency resolution)
 PIP_PACKAGES = [
     "pyyaml",
     "numpy",
@@ -39,43 +42,64 @@ PIP_PACKAGES = [
 ]
 
 
-def find_conda():
-    """Find the conda executable."""
-    conda = shutil.which("conda")
-    if conda:
-        return conda
+def get_conda_info():
+    """Get conda configuration via 'conda info --json'.
 
-    # Common locations
-    candidates = []
-    if platform.system() == "Windows":
-        candidates = [
-            r"C:\ProgramData\Miniconda3\condabin\conda.bat",
-            r"C:\ProgramData\MinicondaZMB\condabin\conda.bat",
-            r"C:\Users\{}\Miniconda3\condabin\conda.bat".format(
-                __import__("os").getlogin()
-            ),
-        ]
-    elif platform.system() == "Darwin":
-        candidates = [
-            "/opt/homebrew/Caskroom/miniconda/base/condabin/conda",
-            "/usr/local/Caskroom/miniconda/base/condabin/conda",
-            "~/miniconda3/condabin/conda",
-        ]
-    else:
-        candidates = [
-            "/opt/conda/condabin/conda",
-            "~/miniconda3/condabin/conda",
-            "~/anaconda3/condabin/conda",
-        ]
+    This is the single source of truth for conda executable,
+    environment directories, and existing environments.
 
-    import os
+    Returns
+    -------
+    dict
+        Parsed JSON output from conda info.
 
-    for path in candidates:
-        path = os.path.expanduser(path)
-        if os.path.exists(path):
-            return path
+    Raises
+    ------
+    FileNotFoundError
+        If conda is not available.
+    """
+    try:
+        result = subprocess.run(
+            ["conda", "info", "--json"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    except FileNotFoundError:
+        pass
 
-    return None
+    raise FileNotFoundError(
+        "Could not run 'conda info'. Please ensure:\n"
+        "  - Conda is installed\n"
+        "  - You are running from a conda-enabled terminal\n"
+        "    (Anaconda Prompt, Miniconda Prompt, or terminal with conda init)"
+    )
+
+
+def get_conda_exe(conda_info):
+    """Get the conda executable path from conda info."""
+    conda_exe = conda_info.get("conda_exe")
+    if conda_exe and Path(conda_exe).exists():
+        return conda_exe
+
+    root_prefix = conda_info.get("root_prefix", "")
+    if root_prefix:
+        if platform.system() == "Windows":
+            candidate = Path(root_prefix) / "Scripts" / "conda.exe"
+        else:
+            candidate = Path(root_prefix) / "bin" / "conda"
+        if candidate.exists():
+            return str(candidate)
+
+    return "conda"
+
+
+def env_exists(conda_info, env_name):
+    """Check if a conda environment exists."""
+    for env_path in conda_info.get("envs", []):
+        if Path(env_path).name == env_name:
+            return True
+    return False
 
 
 def detect_gpu():
@@ -102,33 +126,22 @@ def detect_gpu():
 
     try:
         result = subprocess.run(
-            [nvidia_smi, "--query-gpu=driver_version", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=10,
+            [nvidia_smi], capture_output=True, text=True, timeout=10,
         )
         if result.returncode != 0:
             return "cpu"
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        return "cpu"
 
-    # Detect CUDA version from nvidia-smi
-    try:
-        result = subprocess.run(
-            [nvidia_smi],
-            capture_output=True, text=True, timeout=10,
-        )
         # nvidia-smi output contains "CUDA Version: XX.Y"
         for line in result.stdout.split("\n"):
             if "CUDA Version" in line:
-                import re
                 match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", line)
                 if match:
                     major, minor = int(match.group(1)), int(match.group(2))
                     cuda_tag = f"cu{major}{minor}"
-                    # Map to available PyTorch wheel tags
                     available = ["cu128", "cu126", "cu124", "cu121", "cu118"]
                     if cuda_tag in available:
                         return cuda_tag
-                    # Pick the highest compatible version (driver is backwards compatible)
+                    # Pick the highest compatible version
                     for tag in available:
                         tag_major = int(tag[2:-1])
                         tag_minor = int(tag[-1])
@@ -137,32 +150,20 @@ def detect_gpu():
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
-    # Fallback: NVIDIA present but couldn't detect version
+    # NVIDIA present but couldn't detect version
     return "cu124"
 
 
 def get_torch_install_args(gpu):
-    """Get pip install arguments for PyTorch based on GPU type.
-
-    Parameters
-    ----------
-    gpu : str
-        "cu124", "cu121", "mps", or "cpu".
-
-    Returns
-    -------
-    list[str]
-        Arguments to append to `pip install`.
-    """
+    """Get pip install arguments for PyTorch based on GPU type."""
     if gpu == "mps":
-        # macOS: default PyPI torch includes MPS support
         return ["torch", "torchvision"]
     elif gpu == "cpu":
-        return ["torch", "torchvision", "--index-url",
-                "https://download.pytorch.org/whl/cpu"]
+        return ["torch", "torchvision",
+                "--index-url", "https://download.pytorch.org/whl/cpu"]
     else:
-        return ["torch", "torchvision", "--index-url",
-                f"https://download.pytorch.org/whl/{gpu}"]
+        return ["torch", "torchvision",
+                "--index-url", f"https://download.pytorch.org/whl/{gpu}"]
 
 
 def run(cmd, dry_run=False):
@@ -180,19 +181,19 @@ def main():
     )
     parser.add_argument(
         "--step", default="main",
-        help="Step name for isolation (default: main)"
+        help="Step name for isolation (default: main)",
     )
     parser.add_argument(
         "--python", default=PYTHON_VERSION,
-        help=f"Python version (default: {PYTHON_VERSION})"
+        help=f"Python version (default: {PYTHON_VERSION})",
     )
     parser.add_argument(
         "--gpu", default=None,
-        help="GPU backend: cu124, cu121, mps, cpu (default: auto-detect)"
+        help="GPU backend: cu124, cu121, mps, cpu (default: auto-detect)",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
-        help="Print commands without executing"
+        help="Print commands without executing",
     )
     args = parser.parse_args()
 
@@ -201,13 +202,19 @@ def main():
     system = platform.system()
     print(f"Platform: {system} ({platform.machine()})")
 
-    # Find conda
-    conda = find_conda()
-    if not conda:
-        print("ERROR: conda not found. Install Miniconda first.")
-        print("  https://docs.conda.io/en/latest/miniconda.html")
+    # Get conda info
+    try:
+        conda_info = get_conda_info()
+    except FileNotFoundError as e:
+        print(f"ERROR: {e}")
         sys.exit(1)
+
+    conda = get_conda_exe(conda_info)
     print(f"Conda: {conda}")
+
+    if env_exists(conda_info, env_name):
+        print(f"Environment '{env_name}' already exists. Remove it first with clean_env.py.")
+        sys.exit(1)
 
     # Auto-detect GPU if not specified
     gpu = args.gpu or detect_gpu()
@@ -222,7 +229,7 @@ def main():
     )
 
     # Step 2: Build pip command via conda run
-    pip_cmd = [conda, "run", "-n", env_name, "pip"]
+    pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name, "pip"]
 
     # Step 3: Install torch via pip with correct backend
     print("\n[2/3] Installing PyTorch...")
@@ -237,7 +244,7 @@ def main():
         print("\n[verify] Checking installation...")
         subprocess.run(
             [
-                conda, "run", "-n", env_name, "python", "-c",
+                conda, "run", "--no-capture-output", "-n", env_name, "python", "-c",
                 "import torch; "
                 "cuda = torch.cuda.is_available(); "
                 "mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available(); "
