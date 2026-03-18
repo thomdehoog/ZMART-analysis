@@ -8,7 +8,7 @@ metadata:
   version: "1.0"
   verbose: 3
   functions_dir: "../steps"
-  environment: "SMART_rare_event_selection_main"
+  environment: "SMART--rare_event_selection--main"
 
 rare-event-selection:
   - preprocess:

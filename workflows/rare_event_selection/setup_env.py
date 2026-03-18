@@ -1,19 +1,19 @@
 """
-Create conda environment for smart-analysis.
+Create conda environment for the rare_event_selection workflow.
 
 Uses conda for the Python interpreter, pip for all packages.
 This avoids DLL conflicts between scipy and torch on Windows
 that occur when mixing conda and pip packages.
 
 Usage:
-    python setup_env.py --workflow rare_event_selection
-    python setup_env.py --workflow rare_event_selection --step segment
-    python setup_env.py --workflow rare_event_selection --cuda cpu
-    python setup_env.py --workflow rare_event_selection --dry-run
+    python setup_env.py
+    python setup_env.py --step segment
+    python setup_env.py --cuda cpu
+    python setup_env.py --dry-run
 
 Naming convention:
-    SMART_{workflow}_main     — default env for the workflow
-    SMART_{workflow}_{step}   — isolated env for a specific step
+    SMART--{workflow}--main     — default env for the workflow
+    SMART--{workflow}--{step}   — isolated env for a specific step
 
 Requirements:
     - conda (Miniconda or Anaconda)
@@ -26,6 +26,7 @@ import argparse
 import shutil
 
 
+WORKFLOW = "rare_event_selection"
 PYTHON_VERSION = "3.12"
 
 # Packages installed via pip (order matters for dependency resolution)
@@ -91,20 +92,32 @@ def run(cmd, dry_run=False):
     if dry_run:
         print("  (dry run — skipped)")
         return
-    result = subprocess.run(cmd, check=True)
-    return result
+    subprocess.run(cmd, check=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Set up smart-analysis conda env")
-    parser.add_argument("--workflow", required=True, help="Workflow name (e.g. rare_event_selection)")
-    parser.add_argument("--step", default="main", help="Step name for isolation (default: main)")
-    parser.add_argument("--python", default=PYTHON_VERSION, help=f"Python version (default: {PYTHON_VERSION})")
-    parser.add_argument("--cuda", default="cu124", help="CUDA version: cu124, cu121, cpu (default: cu124)")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
+    parser = argparse.ArgumentParser(
+        description=f"Set up conda env for {WORKFLOW} workflow"
+    )
+    parser.add_argument(
+        "--step", default="main",
+        help="Step name for isolation (default: main)"
+    )
+    parser.add_argument(
+        "--python", default=PYTHON_VERSION,
+        help=f"Python version (default: {PYTHON_VERSION})"
+    )
+    parser.add_argument(
+        "--cuda", default="cu124",
+        help="CUDA version: cu124, cu121, cpu (default: cu124)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Print commands without executing"
+    )
     args = parser.parse_args()
 
-    env_name = f"SMART_{args.workflow}_{args.step}"
+    env_name = f"SMART--{WORKFLOW}--{args.step}"
 
     system = platform.system()
     print(f"Platform: {system} ({platform.machine()})")
@@ -119,7 +132,7 @@ def main():
 
     # macOS: force CPU (no CUDA support)
     if system == "Darwin" and args.cuda != "cpu":
-        print(f"Note: macOS does not support CUDA, switching to cpu")
+        print("Note: macOS does not support CUDA, switching to cpu")
         args.cuda = "cpu"
 
     torch_index = get_torch_index_url(args.cuda)
@@ -128,21 +141,20 @@ def main():
 
     # Step 1: Create conda env with Python only
     print("\n[1/3] Creating conda environment...")
-    run([conda, "create", "-n", env_name, f"python={args.python}", "-y"], args.dry_run)
+    run(
+        [conda, "create", "-n", env_name, f"python={args.python}", "-y"],
+        args.dry_run,
+    )
 
-    # Step 2: Find pip in the new env
-    if system == "Windows":
-        pip = subprocess.run(
-            [conda, "run", "-n", env_name, "python", "-c", "import sys; print(sys.executable)"],
-            capture_output=True, text=True
-        ).stdout.strip()
-        pip_cmd = [conda, "run", "-n", env_name, "pip"]
-    else:
-        pip_cmd = [conda, "run", "-n", env_name, "pip"]
+    # Step 2: Build pip command via conda run
+    pip_cmd = [conda, "run", "-n", env_name, "pip"]
 
     # Step 3: Install torch via pip with correct index
     print("\n[2/3] Installing PyTorch...")
-    run(pip_cmd + ["install", "torch", "torchvision", "--index-url", torch_index], args.dry_run)
+    run(
+        pip_cmd + ["install", "torch", "torchvision", "--index-url", torch_index],
+        args.dry_run,
+    )
 
     # Step 4: Install remaining packages via pip
     print("\n[3/3] Installing packages...")
@@ -151,15 +163,19 @@ def main():
     # Verify
     if not args.dry_run:
         print("\n[verify] Checking installation...")
-        subprocess.run([
-            conda, "run", "-n", env_name, "python", "-c",
-            "import torch; print(f'torch {torch.__version__}, CUDA: {torch.cuda.is_available()}'); "
-            "from skimage.filters import gaussian; import numpy as np; "
-            "gaussian(np.zeros((10,10)), sigma=1); "
-            "import torch; print('scipy+torch DLL test: OK'); "
-            "from cellpose import models; print('cellpose OK'); "
-            "print('All checks passed')"
-        ], check=True)
+        subprocess.run(
+            [
+                conda, "run", "-n", env_name, "python", "-c",
+                "import torch; "
+                "print(f'torch {torch.__version__}, CUDA: {torch.cuda.is_available()}'); "
+                "from skimage.filters import gaussian; import numpy as np; "
+                "gaussian(np.zeros((10,10)), sigma=1); "
+                "import torch; print('scipy+torch DLL test: OK'); "
+                "from cellpose import models; print('cellpose OK'); "
+                "print('All checks passed')",
+            ],
+            check=True,
+        )
 
     print(f"\nDone. Activate with: conda activate {env_name}")
 
