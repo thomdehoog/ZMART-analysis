@@ -79,12 +79,13 @@ def find_conda():
 
 
 def detect_gpu():
-    """Auto-detect available GPU acceleration.
+    """Auto-detect available GPU acceleration and CUDA version.
 
     Returns
     -------
     str
-        "cu124" for NVIDIA CUDA, "mps" for Apple Silicon, "cpu" otherwise.
+        "cu124", "cu121", etc. for NVIDIA CUDA (matched to installed version),
+        "mps" for Apple Silicon, "cpu" otherwise.
     """
     system = platform.system()
 
@@ -94,12 +95,50 @@ def detect_gpu():
             return "mps"
         return "cpu"
 
-    # Windows/Linux: check for NVIDIA GPU
-    if shutil.which("nvidia-smi"):
-        return "cu124"
+    # Windows/Linux: check for NVIDIA GPU and detect CUDA version
+    nvidia_smi = shutil.which("nvidia-smi")
+    if not nvidia_smi:
+        return "cpu"
 
-    # Fallback: no GPU found
-    return "cpu"
+    try:
+        result = subprocess.run(
+            [nvidia_smi, "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode != 0:
+            return "cpu"
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return "cpu"
+
+    # Detect CUDA version from nvidia-smi
+    try:
+        result = subprocess.run(
+            [nvidia_smi],
+            capture_output=True, text=True, timeout=10,
+        )
+        # nvidia-smi output contains "CUDA Version: XX.Y"
+        for line in result.stdout.split("\n"):
+            if "CUDA Version" in line:
+                import re
+                match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", line)
+                if match:
+                    major, minor = int(match.group(1)), int(match.group(2))
+                    cuda_tag = f"cu{major}{minor}"
+                    # Map to available PyTorch wheel tags
+                    available = ["cu128", "cu126", "cu124", "cu121", "cu118"]
+                    if cuda_tag in available:
+                        return cuda_tag
+                    # Pick the highest compatible version (driver is backwards compatible)
+                    for tag in available:
+                        tag_major = int(tag[2:-1])
+                        tag_minor = int(tag[-1])
+                        if tag_major < major or (tag_major == major and tag_minor <= minor):
+                            return tag
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+
+    # Fallback: NVIDIA present but couldn't detect version
+    return "cu124"
 
 
 def get_torch_install_args(gpu):
