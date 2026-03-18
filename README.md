@@ -20,24 +20,47 @@ Smart Analysis solves this with three ideas:
 
 ## How It Works
 
-```
-  YAML Config                    Engine                         Steps
-  -----------                    ------                         -----
+You define your workflow in YAML. The engine reads it and executes each step in order, passing a shared data dictionary between them. If a step needs a different conda environment, the engine handles it automatically.
 
-  rare-event-selection:     ->   run_pipeline()            ->   preprocess.py
-    - preprocess:                  |                              |
-        sigma: 1.0                 |  pipeline_data = {}          | reads image
-    - segment:                     |  for step in steps:          | applies filters
-        diameter: null             |      load step               | stores result
-    - extract_features:            |      check environment       |
-        percentile: 99             |      run step              segment.py
-    - feedback:                    |      collect result           |
-        output_dir: ./out          |  return pipeline_data        | runs Cellpose
-                                                                  | stores masks
-                                                                  |
-                                                              extract_features.py
-                                                                  |
-                                                                  ...
+```
+                          pipeline_data
+                      (shared dictionary)
+                              |
+     +------------+     +-----v------+     +-----------+     +----------+
+     |            |     |            |     |           |     |          |
+     | preprocess |---->|  segment   |---->|  extract  |---->| feedback |
+     |            |     |            |     |  features |     |          |
+     +------------+     +-----+------+     +-----------+     +----------+
+       env: local          env: local        env: local        env: local
+       sigma: 1.0          diameter: null    percentile: 99    output: ./out
+```
+
+Each box is a Python file with a `run()` function. The YAML controls the order and parameters:
+
+```yaml
+rare-event-selection:
+  - preprocess:
+      sigma: 1.0
+  - segment:
+      diameter: null
+  - extract_features:
+      percentile: 99
+  - feedback:
+      output_dir: "./out"
+```
+
+When a step declares a different environment, the engine spawns a subprocess, serializes the data, runs the step, and collects the result -- all transparently:
+
+```
+     +------------+     +- - - - - - - - - - -+     +-----------+
+     |            |     :  subprocess (env_b)  :     |           |
+     | preprocess |---->:  +----------------+  :---->|  verify   |
+     |            |     :  |    segment     |  :     |           |
+     +------------+     :  +----------------+  :     +-----------+
+       env: local       +- - - - - - - - - - -+       env: local
+                            env: env_b
+                            data serialized
+                            automatically
 ```
 
 ## Quick Start
