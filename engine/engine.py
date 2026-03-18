@@ -460,14 +460,15 @@ def _run_pipeline_in_environment(yaml_path: Path, label: str,
     # Serialize input_data for the subprocess
     input_json = json.dumps(input_data) if input_data else 'None'
     
+    engine_dir = os.path.abspath(Path(__file__).parent)
+
     script = f'''
 import sys
 import json
 from pathlib import Path
 
 # Add engine directory to path
-engine_dir = Path({repr(os.path.abspath(Path(__file__).parent))})
-sys.path.insert(0, str(engine_dir))
+sys.path.insert(0, {repr(engine_dir)})
 
 from engine import run_pipeline
 
