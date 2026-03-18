@@ -140,7 +140,7 @@ def main():
         parts = conda_version.split(".")
         major_minor = float(f"{parts[0]}.{parts[1]}")
         if major_minor < 25.7:
-            conda_warn = " (< 25.7 -- env switching may be unstable)"
+            conda_warn = " (env switching may be unstable in conda version < 25.7 !!)"
     info("Conda version", conda_version + conda_warn)
 
     # ------------------------------------------------------------------
