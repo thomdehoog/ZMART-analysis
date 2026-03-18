@@ -62,7 +62,7 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
   │  main process                                                  │
   │                                                                │
   │              ┌──────────────────┐                              │ 
-  │              │ subprocess:      │                              │
+  │              │ subprocess       │                              │
   │  step 1 -->  │     step 2       │ --> step 3                   │
   │              │                  │                              │
   │              └──────────────────┘                              │
@@ -83,7 +83,7 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   │  │  subprocess                                            │  │
   │  │                                                        │  │
   │  │              ┌──────────────────┐                      │  │
-  │  │              │ subprocess:      │                      │  │
+  │  │              │ subprocess       │                      │  │
   │  │  step 1 -->  │     step 2       │ --> step 3           │  │
   │  │              │                  │                      │  │
   │  │              └──────────────────┘                      │  │
