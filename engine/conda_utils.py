@@ -4,6 +4,7 @@ Shared conda utilities for environment setup and cleanup scripts.
 Provides conda discovery, environment queries, and GPU detection.
 """
 
+import os
 import subprocess
 import platform
 import shutil
@@ -11,12 +12,19 @@ import json
 import re
 from pathlib import Path
 
+# Conda sets CONDA_EXE when any environment is activated.
+# This propagates to all subprocesses automatically.
+CONDA_CMD = os.environ.get("CONDA_EXE", "conda")
+
 
 def get_conda_info():
     """Get conda configuration via 'conda info --json'.
 
     This is the single source of truth for the conda executable,
     environment directories, and existing environments.
+
+    Uses CONDA_EXE environment variable to find conda, which is set
+    automatically by conda activation and propagates to subprocesses.
 
     Returns
     -------
@@ -30,7 +38,7 @@ def get_conda_info():
     """
     try:
         result = subprocess.run(
-            ["conda", "info", "--json"],
+            [CONDA_CMD, "info", "--json"],
             capture_output=True, text=True,
         )
         if result.returncode == 0:
@@ -51,7 +59,7 @@ def get_conda_exe(conda_info):
     conda_exe = conda_info.get("conda_exe")
     if conda_exe and Path(conda_exe).exists():
         return conda_exe
-    return "conda"
+    return CONDA_CMD
 
 
 def env_exists(conda_info, env_name):

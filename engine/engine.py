@@ -30,7 +30,7 @@ import sys
 import yaml
 import importlib.util
 import subprocess
-from conda_utils import get_conda_info, get_conda_exe
+from conda_utils import CONDA_CMD
 import json
 import pickle
 import tempfile
@@ -255,8 +255,7 @@ def _execute_script(script: str, environment: str = None,
     try:
         # Build command
         if environment and environment.lower() != 'local':
-            conda_exe = get_conda_exe(get_conda_info())
-            cmd = [conda_exe, "run", "-n", environment, "python", script_path]
+            cmd = [CONDA_CMD, "run", "-n", environment, "python", script_path]
         else:
             cmd = [sys.executable, script_path]
         
