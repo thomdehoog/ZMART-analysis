@@ -49,13 +49,13 @@ def info(label, value):
     print(f"  {label + ':':<24s} {value}")
 
 def ok(message):
-    print(f"  [OK]   {message}")
+    print(f"  [ OK ]    {message}")
 
 def fail(message):
-    print(f"  [FAIL] {message}")
+    print(f"  [FAIL]    {message}")
 
 def skip(message):
-    print(f"  [SKIP] {message}")
+    print(f"  [SKIP]    {message}")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +144,7 @@ def main():
     removed = 0
     for name in targets:
         cmd = [conda, "env", "remove", "-n", name, "-y"]
-        print(f"  [RUN]  {' '.join(cmd)}")
+        print(f"  [ RUN]    {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode == 0:
             ok(name)

@@ -70,20 +70,20 @@ def step(number, total, description):
     print(f"  [{number}/{total}] {description}")
     print(f"  {'-' * (WIDTH - 4)}")
 
-def run_label(message):
-    print(f"  [RUN]  {message}")
-
 def ok(message):
-    print(f"  [OK]   {message}")
+    print(f"  [ OK ]    {message}")
 
 def fail(message):
-    print(f"  [FAIL] {message}")
+    print(f"  [FAIL]    {message}")
 
 def skip(message):
-    print(f"  [SKIP] {message}")
+    print(f"  [SKIP]    {message}")
+
+def warn(message):
+    print(f"  [WARN]    {message}")
 
 def cmd_line(cmd):
-    print(f"  [RUN]  {' '.join(cmd)}")
+    print(f"  [ RUN]    {' '.join(cmd)}")
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +151,9 @@ def main():
         major_minor = float(f"{parts[0]}.{parts[1]}")
         if major_minor < 25.7:
             print()
-            print("  [WARN] Conda version < 25.7 detected.")
-            print("         Environment switching may be unstable.")
-            print("         Consider: conda update -n base conda")
+            warn("Conda version < 25.7 detected.")
+            warn("Environment switching may be unstable.")
+            warn("Consider: conda update -n base conda")
 
     if env_exists(conda_info, env_name):
         fail(f"Environment '{env_name}' already exists.")
