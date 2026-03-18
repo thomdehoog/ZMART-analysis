@@ -134,7 +134,7 @@ This can be set at two levels:
 ### 3.1 Directory Structure
 
 ```
-analysis_workflows/
+smart-analysis/
 ├── engine/
 │   └── engine.py                    # The orchestration engine
 └── workflows/
@@ -255,7 +255,7 @@ print(result["analysis"]["output_path"])
 **Step 1: Create the folder structure**
 
 ```
-analysis_workflows/
+smart-analysis/
 └── workflows/
     └── demo/
         ├── pipelines/
@@ -1038,9 +1038,8 @@ start_time: "2026-01-27 14:32:15"
 end_time: "2026-01-27 14:35:42"
 runtime_seconds: 207.1
 parameters_used:
-  model_type: "cyto2"
-  diameter: 30
-  channels: [0, 1]
+  # Cellpose v4 uses CPSAM model (no model_type parameter)
+  diameter: null  # auto-detect
 input_files: 42
 output_files: 42
 ```
@@ -1230,9 +1229,8 @@ cell-analysis:
   
   # Segment cells using Cellpose
   - segmentation:
-      model_type: "cyto2"
-      diameter: 30             # Expected cell diameter in pixels
-      channels: [0, 1]         # [cytoplasm, nucleus]
+      # Cellpose v4 uses CPSAM model (no model_type parameter)
+      diameter: null  # auto-detect
 ```
 
 ### 10.5 Environment Switching
@@ -1503,7 +1501,7 @@ def run(pipeline_data: dict, **params) -> dict:
 ### Directory Structure
 
 ```
-analysis_workflows/
+smart-analysis/
 ├── engine/
 │   └── engine.py
 └── workflows/
@@ -1585,4 +1583,4 @@ Warnings and errors are always shown.
 
 ---
 
-*Documentation version 2.0 - Last updated January 2026*
+*Documentation version 2.0 - Last updated March 2026*

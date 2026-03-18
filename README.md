@@ -16,8 +16,8 @@ A Python orchestration engine that executes sequences of functions defined in YA
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/pipeline-engine.git
-cd pipeline-engine
+git clone https://github.com/thomdehoog/smart-analysis.git
+cd smart-analysis
 
 # Install dependencies
 pip install pyyaml
@@ -89,17 +89,24 @@ print(result["hello"]["message"])
 ## Directory Structure
 
 ```
-pipeline_engine/
+smart-analysis/
 ├── engine/
-│   └── engine.py              # The orchestration engine
+│   ├── engine.py
+│   ├── conda_utils.py
+│   └── test_conda_utils.py
 ├── workflows/
-│   └── {workflow_name}/
+│   ├── basic_test/
+│   │   ├── environments/
+│   │   ├── pipelines/
+│   │   ├── steps/
+│   │   └── run_all.py
+│   └── rare_event_selection/
+│       ├── environments/
 │       ├── pipelines/
-│       │   └── {name}_pipeline.yaml
-│       └── steps/
-│           └── {step}.py
-└── docs/
-    └── Pipeline_Engine_Documentation.md
+│       ├── steps/
+│       └── run_pipeline.py
+├── docs/
+└── requirements.txt
 ```
 
 ## Environment Switching
