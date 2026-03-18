@@ -135,15 +135,13 @@ def main():
         sys.exit(1)
 
     conda_version = conda_info.get("conda_version", "unknown")
-    info("Conda version", conda_version)
-
+    conda_warn = ""
     if conda_version != "unknown":
         parts = conda_version.split(".")
         major_minor = float(f"{parts[0]}.{parts[1]}")
         if major_minor < 25.7:
-            warn("Conda version < 25.7 detected.")
-            warn("Environment switching may be unstable.")
-            warn("Consider: conda update -n base conda")
+            conda_warn = " (< 25.7 -- env switching may be unstable)"
+    info("Conda version", conda_version + conda_warn)
 
     # ------------------------------------------------------------------
     # Conda
