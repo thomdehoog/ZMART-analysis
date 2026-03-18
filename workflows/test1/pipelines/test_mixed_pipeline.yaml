@@ -1,0 +1,26 @@
+# Test Pipeline: Mixed Local Steps
+# 
+# Tests a pipeline with multiple local steps.
+# All steps run in the main process but pass data between them.
+#
+# Directory Structure:
+#   analysis_workflows/workflows/test1/
+#   ├── pipelines/
+#   │   └── test_mixed_pipeline_v2.yaml  (this file)
+#   └── steps/
+#       ├── step_local.py
+#       └── step_local_2.py
+
+metadata:
+  purpose: "Test mixed local execution with data flow"
+  version: "2.0"
+  verbose: 2
+  functions_dir: "../steps"
+
+# Workflow name
+mixed-test:
+  - step_local:
+      stage: "first"
+      
+  - step_local_2:
+      stage: "second"

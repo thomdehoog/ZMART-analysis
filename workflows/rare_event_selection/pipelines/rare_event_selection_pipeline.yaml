@@ -1,0 +1,26 @@
+# Rare Event Selection Pipeline
+#
+# Segments cells, extracts features, selects rare events
+# by percentile threshold, and writes feedback JSON.
+
+metadata:
+  purpose: "Select rare cells by feature threshold"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+rare-event-selection:
+  - preprocess:
+      sigma: 1.0
+      clip_limit: 0.03
+
+  - segment:
+      diameter: null
+      gpu: false
+
+  - extract_features:
+      select_by: "area"
+      percentile: 99
+
+  - feedback:
+      output_dir: "./output"

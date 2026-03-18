@@ -1,0 +1,8 @@
+# Pipeline Engine Requirements
+
+# Core dependency
+pyyaml>=6.0
+
+# Optional: for development/testing
+# pytest>=7.0
+# pytest-cov>=4.0

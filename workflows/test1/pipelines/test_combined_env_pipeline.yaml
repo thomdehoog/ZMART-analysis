@@ -1,0 +1,31 @@
+# Test Pipeline: Combined Environment Switching
+# 
+# Tests the most complex scenario:
+# - The ENTIRE pipeline runs in env_a (set in metadata)
+# - One step (step_env_b) requests env_c
+# - The engine spawns pipeline in env_a, then nested subprocess for env_c
+#
+# This tests: main process -> env_a subprocess -> env_c subprocess
+
+metadata:
+  purpose: "Test combined: pipeline in env_a, step in env_c"
+  version: "2.0"
+  verbose: 2
+  functions_dir: "../steps"
+  # Pipeline runs in env_a
+  environment: "env_a"
+
+# Workflow name
+combined-env-test:
+  # This runs in env_a (the pipeline's environment)
+  - step_local:
+      note: "Runs in env_a"
+      
+  # This should switch to env_c (nested subprocess)
+  # step_env_b.py has environment: "env_c"
+  - step_env_b:
+      note: "Should run in env_c, not env_a"
+      
+  # This returns to env_a
+  - step_local_2:
+      note: "Back to env_a"
