@@ -1,0 +1,16 @@
+# Test: Pickle data transfer mode
+# Writes test data, then transfers via pickle to a different env.
+
+metadata:
+  purpose: "Test pickle serialization between environments"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+pickle-test:
+  - step_write_data:
+
+  - step_pickle:
+      note: "Switches to env_b using pickle transfer"
+
+  - step_verify_data:

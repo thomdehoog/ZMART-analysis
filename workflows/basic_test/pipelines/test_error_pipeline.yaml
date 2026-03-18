@@ -1,0 +1,14 @@
+# Test: Error handling
+# Runs a step that deliberately fails to verify the engine reports it.
+
+metadata:
+  purpose: "Test engine error handling"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+error-test:
+  - step_local:
+      note: "Should succeed"
+
+  - step_error:

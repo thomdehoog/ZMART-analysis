@@ -1,0 +1,16 @@
+# Test: Data survival across environment switching
+# Writes test data, switches env, then verifies all data is intact.
+
+metadata:
+  purpose: "Test data survives env switch serialization"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+data-survival-test:
+  - step_write_data:
+
+  - step_env:
+      note: "Switches to env_b -- data must survive JSON serialization"
+
+  - step_verify_data:

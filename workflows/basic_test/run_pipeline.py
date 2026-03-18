@@ -20,11 +20,15 @@ from engine import run_pipeline
 
 
 PIPELINES = {
-    "local":        "pipelines/test_local_pipeline.yaml",
-    "mixed":        "pipelines/test_mixed_pipeline.yaml",
-    "step_env":     "pipelines/test_step_env_pipeline.yaml",
-    "pipeline_env": "pipelines/test_pipeline_env_pipeline.yaml",
-    "combined":     "pipelines/test_combined_env_pipeline.yaml",
+    "local":         "pipelines/test_local_pipeline.yaml",
+    "mixed":         "pipelines/test_mixed_pipeline.yaml",
+    "step_env":      "pipelines/test_step_env_pipeline.yaml",
+    "pipeline_env":  "pipelines/test_pipeline_env_pipeline.yaml",
+    "combined":      "pipelines/test_combined_env_pipeline.yaml",
+    "data_survival": "pipelines/test_data_survival_pipeline.yaml",
+    "pickle":        "pipelines/test_pickle_pipeline.yaml",
+    "error":         "pipelines/test_error_pipeline.yaml",
+    "missing_step":  "pipelines/test_missing_step_pipeline.yaml",
 }
 
 

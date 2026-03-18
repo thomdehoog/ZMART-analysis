@@ -1,0 +1,14 @@
+# Test: Missing step file
+# References a step that does not exist to verify the engine error message.
+
+metadata:
+  purpose: "Test engine handles missing step files"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+missing-step-test:
+  - step_local:
+      note: "Should succeed"
+
+  - step_does_not_exist:
