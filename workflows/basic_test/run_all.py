@@ -16,6 +16,11 @@ import time
 import argparse
 from pathlib import Path
 
+try:
+    import yaml
+except ModuleNotFoundError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
+
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
 from engine import run_pipeline
 
