@@ -1,13 +1,13 @@
 """
-Remove conda environments for the rare_event_selection workflow.
+Remove conda environments for the basic_test workflow.
 
-Finds and removes all environments matching the SMART--rare_event_selection--*
+Finds and removes all environments matching the SMART--basic_test--*
 naming pattern.
 
 Usage:
-    python clean_env.py             # remove all envs for this workflow
-    python clean_env.py --step main # remove only the main env
-    python clean_env.py --dry-run   # list without removing
+    python clean_env.py               # remove all envs for this workflow
+    python clean_env.py --step env_a  # remove only env_a
+    python clean_env.py --dry-run     # list without removing
 
 Requirements:
     - conda (Miniconda or Anaconda)
@@ -20,11 +20,11 @@ import argparse
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "engine"))
 from conda_utils import get_conda_info, get_conda_exe, list_envs_by_prefix
 
 
-WORKFLOW = "rare_event_selection"
+WORKFLOW = "basic_test"
 PREFIX = f"SMART--{WORKFLOW}--"
 
 WIDTH = 70
@@ -68,7 +68,7 @@ def main():
     )
     parser.add_argument(
         "--step", default=None,
-        help="Remove only this step's env (e.g. main, segment). "
+        help="Remove only this step's env (e.g. env_a). "
              "If omitted, removes all envs for this workflow.",
     )
     parser.add_argument(
@@ -107,7 +107,6 @@ def main():
         if not targets:
             section("Result")
             fail(f"Environment '{target_name}' not found")
-            print()
             if all_matching:
                 print(f"  Available environments:")
                 for name in all_matching:

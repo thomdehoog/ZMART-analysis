@@ -26,7 +26,7 @@ import argparse
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "engine"))
 from conda_utils import (
     get_conda_info, get_conda_exe, env_exists,
     detect_gpu, gpu_label, get_torch_install_args,
@@ -143,7 +143,17 @@ def main():
     info("Executable", conda)
     info("Root prefix", conda_info.get("root_prefix", "unknown"))
     info("Envs directory", envs_dirs[0] if envs_dirs else "unknown")
-    info("Conda version", conda_info.get("conda_version", "unknown"))
+    conda_version = conda_info.get("conda_version", "unknown")
+    info("Conda version", conda_version)
+
+    if conda_version != "unknown":
+        parts = conda_version.split(".")
+        major_minor = float(f"{parts[0]}.{parts[1]}")
+        if major_minor < 25.7:
+            print()
+            print("  [WARN] Conda version < 25.7 detected.")
+            print("         Environment switching may be unstable.")
+            print("         Consider: conda update -n base conda")
 
     if env_exists(conda_info, env_name):
         fail(f"Environment '{env_name}' already exists.")
