@@ -68,6 +68,9 @@ def step(number, total, description):
     print(f"  [{number}/{total}] {description}")
     print(f"  {'-' * (WIDTH - 4)}")
 
+def run_label(message):
+    print(f"  [RUN]  {message}")
+
 def ok(message):
     print(f"  [OK]   {message}")
 
@@ -156,6 +159,7 @@ def main():
     step(1, 4, "Creating conda environment")
     create_cmd = [conda, "create", "-n", env_name,
                   f"python={args.python}", "-y", "-q"]
+    run_label("conda create")
     cmd_line(create_cmd)
     if args.dry_run:
         skip("dry run")
@@ -175,6 +179,7 @@ def main():
     step(2, 4, f"Installing PyTorch ({gpu_label(gpu)})")
     pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name,
                "pip", "install"] + torch_args
+    run_label("pip install")
     cmd_line(pip_cmd)
     if args.dry_run:
         skip("dry run")
@@ -191,6 +196,8 @@ def main():
     step(3, 4, "Installing analysis packages")
     pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name,
                "pip", "install"] + PIP_PACKAGES
+    print(f"  Packages: {', '.join(PIP_PACKAGES)}")
+    run_label("pip install")
     cmd_line(pip_cmd)
     if args.dry_run:
         skip("dry run")
