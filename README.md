@@ -4,7 +4,7 @@ A Python pipeline engine for scientific analysis workflows. Define multi-step pr
 
 ## The Problem
 
-Scientific analysis pipelines often combine tools with conflicting dependencies. A typical microscopy workflow might need scikit-image for preprocessing, Cellpose (PyTorch) for segmentation, and specialized packages for feature extraction. On Windows, simply importing scipy before PyTorch can corrupt the DLL search path and crash your script. Installing packages from mixed sources (conda + pip) makes it worse.
+Scientific analysis pipelines often combine tools with conflicting dependencies. A typical workflow might need scikit-image for preprocessing, PyTorch for deep learning, and specialized packages for feature extraction. These tools ship native libraries that can interfere with each other, leading to crashes that are hard to diagnose and harder to fix.
 
 The traditional workaround is manual: run each tool in a separate script, save intermediate results to disk, and hope the file formats are compatible. This is fragile, hard to reproduce, and painful to modify.
 
