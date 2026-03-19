@@ -9,7 +9,6 @@ METADATA = {
     "description": "Test step - runs in env_c",
     "version": "1.0",
     "environment": "SMART--basic_test--env_c",
-    "data_transfer": "file_paths",
 }
 
 
