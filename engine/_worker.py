@@ -1,13 +1,40 @@
 """
-Worker — Manages a subprocess for a (environment, step) pair.
+Worker — Manages a subprocess for a single (environment, step) pair.
 
 Spawns worker_script.py in the target conda environment and communicates
 via multiprocessing.connection (TCP sockets with pickle serialization).
 
-Two modes:
-  - persistent: subprocess stays alive between execute() calls, keeping
-    imported modules and ML models warm in memory.
-  - oneshot: subprocess processes one request and exits.
+Lifecycle
+---------
+1. ensure_running(): Allocate random port, spawn subprocess, wait for
+   it to connect back. Uses authkey for secure handshake.
+2. execute(): Pickle (pipeline_data, params), send to worker, wait for
+   response. Returns the step's result dict.
+3. shutdown(): Send None sentinel, wait for graceful exit. Escalates:
+   wait 5s → SIGTERM → wait 2s → SIGKILL.
+
+Two modes
+---------
+- persistent (oneshot=False): Subprocess stays alive between execute()
+  calls, keeping imported modules and ML models warm in memory.
+  Managed by WorkerPool, reaped when idle.
+
+- oneshot (oneshot=True): Subprocess processes one request and exits.
+  Created and destroyed per call. No warmup benefit but no idle cost.
+
+Connection protocol
+-------------------
+- Parent creates Listener on localhost:0 (random port)
+- Subprocess receives port + authkey via CLI args
+- Subprocess connects back as Client
+- Messages are pickle-serialized bytes via send_bytes/recv_bytes
+- Shutdown sentinel: None (pickled)
+
+Error handling
+--------------
+- WorkerSpawnError: subprocess failed to start or connect
+- WorkerCrashedError: subprocess died during execution
+- StepExecutionError: step's run() raised (includes remote traceback)
 """
 
 import logging

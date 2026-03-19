@@ -1,9 +1,32 @@
 """
 WorkerPool — Per-step dispatch with concurrency control.
 
-Routes step execution to either persistent or oneshot workers
-based on the step's METADATA. Enforces per-step concurrency
-limits via semaphores.
+Routes step execution to either persistent or oneshot workers based on the
+step's METADATA. Enforces per-step concurrency limits via semaphores.
+
+Worker types
+------------
+- Persistent (worker="persistent"): Subprocess stays alive between calls.
+  Keeps imported modules and ML models warm in memory. Reused for repeated
+  invocations of the same step. Reaped after idle_timeout seconds.
+
+- Oneshot (worker="subprocess", the default): Subprocess spawned for each
+  call, exits after one execution. No memory overhead between calls.
+
+Concurrency control
+-------------------
+Each (environment, step_path) pair gets a Semaphore(max_workers).
+If max_workers=1 (default), calls to the same step serialize.
+If max_workers>1, up to N concurrent executions are allowed.
+
+Thread safety
+-------------
+- _pool_lock protects the worker/lock/semaphore dicts during creation.
+- _worker_locks[key] protects individual persistent workers from concurrent
+  execute() calls.
+- Semaphores are accessed via local reference (not dict lookup) to avoid
+  a race condition with the reaper thread or shutdown_all().
+- Reaper runs every 30s as a daemon thread, shuts down idle workers.
 """
 
 import logging

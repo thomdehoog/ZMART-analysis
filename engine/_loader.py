@@ -1,4 +1,24 @@
-"""Step loading and METADATA extraction."""
+"""
+Step loading and METADATA extraction.
+
+Two independent operations for the pipeline engine:
+
+1. get_step_settings(step_path) — Reads a step file's METADATA dict via AST
+   parsing. No code is executed. Used by the pipeline to decide WHERE to run
+   a step (local vs subprocess, which environment, worker type).
+
+2. load_function(func_name, functions_dir) — Loads a step module via exec()
+   for in-process execution. Only called for steps that run locally
+   (needs_isolation == False). Uses exec instead of importlib to avoid
+   Windows DLL search path issues with PyTorch on network drives.
+
+Architecture note
+-----------------
+These two operations are deliberately separate. Routing (get_step_settings)
+must never execute module code, because the step may require packages only
+available in a remote conda environment. Execution (load_function) only
+happens after routing confirms the step runs in the current process.
+"""
 
 import ast
 import logging

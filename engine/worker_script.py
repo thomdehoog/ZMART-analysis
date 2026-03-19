@@ -1,14 +1,36 @@
 """
 Worker Script — Subprocess step runner.
 
-Runs INSIDE a target conda environment. Handles two modes:
-  --oneshot:  process one request and exit (spawn-run-exit)
-  default:    loop until shutdown sentinel or parent death (persistent)
+This script runs INSIDE a target conda environment as a child process of
+Worker (_worker.py). It loads a step module, connects back to the parent
+via TCP, and processes requests in a loop.
 
-Self-contained: no imports from the engine package, because it may run
-in a different conda environment with a different Python version.
+IMPORTANT: This file is self-contained — no imports from the engine package.
+It may run in a completely different conda environment with different packages
+and even a different Python version than the orchestrator.
 
-Usage (called by Worker, not directly):
+Two modes
+---------
+--oneshot   Process one request and exit. Used for spawn-run-exit steps.
+(default)   Loop until shutdown sentinel or parent death. Used for persistent
+            workers that keep ML models warm in memory.
+
+Protocol
+--------
+1. Parent spawns this script with --port, --authkey, --step [--oneshot]
+2. Script connects to parent on localhost:port with authkey
+3. Script loads the step module via exec()
+4. Loop: receive (pipeline_data, params) → call module.run() → send response
+5. Exit on: None sentinel, parent death, or oneshot completion
+
+Logging
+-------
+Logs to stderr at WARNING+ by default (to avoid filling the pipe buffer
+on persistent workers). Set SMART_LOG_LEVEL=DEBUG in the environment for
+verbose output during troubleshooting.
+
+Usage (called by Worker, not directly)
+--------------------------------------
     python worker_script.py --port PORT --authkey HEX --step /path/to/step.py
     python worker_script.py --port PORT --authkey HEX --step /path/to/step.py --oneshot
 """

@@ -1,4 +1,19 @@
-"""Exception classes for the pipeline engine."""
+"""
+Exception hierarchy for the pipeline engine.
+
+All worker-related exceptions inherit from WorkerError, so callers can
+catch the base class for any subprocess issue, or catch specific types:
+
+    WorkerError (base)
+    ├── WorkerSpawnError      — subprocess failed to start or connect
+    ├── WorkerCrashedError    — subprocess died during execution
+    └── StepExecutionError    — step's run() raised an exception
+                                (includes .remote_traceback from subprocess)
+
+Note: local (in-process) steps propagate their original exception type
+directly — they do NOT wrap in StepExecutionError. This is an important
+behavioral difference when writing error handling code.
+"""
 
 
 class WorkerError(Exception):

@@ -1,9 +1,40 @@
 """
-Unit and integration tests for the unified pipeline engine.
+Test suite for the unified pipeline engine.
 
-Run from the engine directory:
-    python test_engine.py
-    python -m pytest test_engine.py -v
+Covers the full stack: module loading, AST-based METADATA extraction,
+subprocess workers (oneshot and persistent), worker pool with concurrency
+control, pipeline orchestration, multi-job patterns (concurrent, sequential,
+adaptive feedback), real environment isolation, and regression guards for
+every known past bug.
+
+Structure
+---------
+- TestErrors                  Exception hierarchy
+- TestLoadFunction            exec-based module loading
+- TestGetStepSettings         AST-based METADATA extraction
+- TestWorkerOneshot           Spawn-run-exit subprocess workers
+- TestWorkerPersistent        Warm persistent workers
+- TestWorkerErrorPaths        Crash, timeout, missing file
+- TestPool                    Concurrency control, reaper, semaphores
+- TestPipelineEngine          End-to-end pipeline orchestration
+- TestReturnValidation        Step return type enforcement
+- TestYAMLEdgeCases           Config parsing edge cases
+- TestInputData               Input handling (None, falsy, etc.)
+- TestLifecycle               Engine startup/shutdown
+- TestMultiJob                Multi-job patterns (local only)
+- TestIsolation               Real subprocess isolation (env-dependent)
+- TestMultiJobIsolation       Multi-job + isolation (env-dependent)
+- TestRegression              Guards against specific past bugs
+- TestPackageAPI              Public exports and versioning
+
+Usage
+-----
+    python -m pytest engine/test_engine.py -v            # all tests
+    python -m pytest engine/test_engine.py -k Regression  # just regressions
+    python -m pytest engine/test_engine.py -v --tb=short  # compact output
+
+Environment-dependent tests (TestIsolation, TestMultiJobIsolation) auto-skip
+if conda environments SMART--basic_test--env_b/env_c are not found.
 """
 
 import atexit
@@ -1389,6 +1420,220 @@ class TestMultiJobIsolation(unittest.TestCase):
             for expected, f in futures:
                 r = f.result(timeout=60)
                 self.assertEqual(r["type"], expected)
+
+
+# ── Regression ────────────────────────────────────────────────
+#
+# Each test guards against a specific past bug.
+# Docstrings explain what broke and how it was fixed.
+
+
+class TestRegression(unittest.TestCase):
+    """
+    Regression tests for known past bugs.
+
+    These must never be removed — they exist because each failure mode
+    actually happened or was discovered during review. If a refactor
+    breaks one, the original bug has been reintroduced.
+    """
+
+    def test_metadata_extraction_never_executes_code(self):
+        """
+        Bug: get_step_settings() used exec() to read METADATA, running all
+        module-level imports. A step with 'import torch' at module level
+        crashed the main process even when destined for a subprocess.
+
+        Fix: AST-based extraction in _loader._extract_metadata().
+        """
+        path = _temp_step("""
+            import nonexistent_package_that_would_crash
+            raise RuntimeError("this line must never execute")
+            METADATA = {"environment": "some_remote_env", "worker": "persistent"}
+            def run(pd, **p): return pd
+        """)
+        # Must succeed — no code is executed, only the AST is parsed
+        s = get_step_settings(Path(path))
+        self.assertEqual(s["environment"], "some_remote_env")
+        self.assertEqual(s["worker"], "persistent")
+
+    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
+    def test_load_function_only_called_for_local_steps(self):
+        """
+        Bug: _pipeline.py called load_function() for EVERY step, even
+        isolated ones. The module was exec'd in the main process then
+        discarded — wasteful and dangerous (wrong-env imports crash).
+
+        Fix: load_function() moved into the else branch (local-only).
+        """
+        _temp_step("""
+            def run(pd, **p):
+                pd["local"] = True
+                return pd
+        """, name="reg_local")
+        _temp_step(f"""
+            METADATA = {{"environment": "{_TEST_ENV_B}"}}
+            def run(pd, **p):
+                pd["isolated"] = True
+                return pd
+        """, name="reg_isolated")
+        yaml = _temp_yaml("wf:\n  - reg_local:\n  - reg_isolated:")
+
+        from unittest.mock import patch
+        from engine import _pipeline, PipelineEngine
+        original = _pipeline.load_function
+        loaded_names = []
+
+        def tracking_load(name, *args, **kwargs):
+            loaded_names.append(name)
+            return original(name, *args, **kwargs)
+
+        with patch.object(_pipeline, 'load_function',
+                          side_effect=tracking_load):
+            with PipelineEngine() as engine:
+                r = engine.run_pipeline(yaml, "t", {})
+
+        self.assertTrue(r["local"])
+        self.assertTrue(r["isolated"])
+        self.assertEqual(loaded_names, ["reg_local"],
+                         "load_function must only run for local steps, "
+                         f"but ran for: {loaded_names}")
+
+    def test_pool_semaphore_uses_local_reference(self):
+        """
+        Bug: pool.execute() accessed self._semaphores[key] outside the pool
+        lock at .acquire() and .release(). If the reaper or shutdown_all()
+        popped the key concurrently, KeyError was raised.
+
+        Fix: local reference (sem = ...) taken inside the lock.
+        """
+        import inspect
+        from engine._pool import WorkerPool
+        source = inspect.getsource(WorkerPool.execute)
+        self.assertNotIn(
+            "self._semaphores[key].acquire", source,
+            "Semaphore dict lookup outside lock — race with reaper/shutdown"
+        )
+        self.assertNotIn(
+            "self._semaphores[key].release", source,
+            "Semaphore dict lookup outside lock — race with reaper/shutdown"
+        )
+
+    def test_local_error_preserves_original_exception_type(self):
+        """
+        Contract: local steps propagate the original exception type.
+        Code that catches only StepExecutionError would silently miss
+        errors from local steps.
+        """
+        _temp_step('def run(pd, **p): raise ValueError("local boom")',
+                   name="reg_local_err")
+        yaml = _temp_yaml("wf:\n  - reg_local_err:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as engine:
+            with self.assertRaises(ValueError) as ctx:
+                engine.run_pipeline(yaml, "t", {})
+        self.assertIn("local boom", str(ctx.exception))
+
+    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
+    def test_isolated_error_wraps_in_step_execution_error(self):
+        """
+        Contract: isolated steps wrap errors in StepExecutionError with
+        remote_traceback. Code that catches only ValueError would miss
+        errors from isolated steps.
+        """
+        _temp_step(f"""
+            METADATA = {{"environment": "{_TEST_ENV_B}"}}
+            def run(pd, **p): raise ValueError("isolated boom")
+        """, name="reg_iso_err")
+        yaml = _temp_yaml("wf:\n  - reg_iso_err:")
+
+        from engine._errors import StepExecutionError
+        from engine import PipelineEngine
+        with PipelineEngine() as engine:
+            with self.assertRaises(StepExecutionError) as ctx:
+                engine.run_pipeline(yaml, "t", {})
+        self.assertIn("isolated boom", str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, ValueError)
+
+    def test_step_without_metadata_defaults_to_local(self):
+        """
+        Bug: if AST extraction returns {} for a step with no METADATA,
+        the defaults must be safe (local, subprocess, 1). A crash or
+        routing to a nonexistent environment would break simple steps.
+        """
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="reg_bare")
+        yaml = _temp_yaml("wf:\n  - reg_bare:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as engine:
+            r = engine.run_pipeline(yaml, "t", {})
+        self.assertTrue(r["ok"])
+
+    def test_missing_run_fails_at_execution_not_routing(self):
+        """
+        Bug: with AST extraction, routing succeeds even if the step has
+        no run() function. The error must come at execution time with a
+        clear AttributeError, not during METADATA reading.
+        """
+        _temp_step("x = 1", name="reg_no_run")
+        yaml = _temp_yaml("wf:\n  - reg_no_run:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as engine:
+            with self.assertRaises(AttributeError):
+                engine.run_pipeline(yaml, "t", {})
+
+    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
+    def test_pipeline_data_keys_survive_env_crossing(self):
+        """
+        Bug: data accumulated by local steps could be lost during pickle
+        serialization when crossing an environment boundary. All keys
+        from prior steps must survive the round-trip intact.
+        """
+        _temp_step("""
+            def run(pd, **p):
+                pd["step_1"] = {"value": 42, "nested": [1, 2, 3]}
+                return pd
+        """, name="reg_surv_1")
+        _temp_step(f"""
+            METADATA = {{"environment": "{_TEST_ENV_B}"}}
+            def run(pd, **p):
+                pd["step_2"] = pd["step_1"]["value"] * 2
+                return pd
+        """, name="reg_surv_2")
+        _temp_step("""
+            def run(pd, **p):
+                pd["step_3"] = {
+                    "saw_step_1": "step_1" in pd,
+                    "saw_step_2": "step_2" in pd,
+                    "step_1_nested": pd.get("step_1", {}).get("nested"),
+                }
+                return pd
+        """, name="reg_surv_3")
+        yaml = _temp_yaml(
+            "wf:\n  - reg_surv_1:\n  - reg_surv_2:\n  - reg_surv_3:"
+        )
+
+        from engine import PipelineEngine
+        with PipelineEngine() as engine:
+            r = engine.run_pipeline(yaml, "t", {})
+
+        self.assertTrue(r["step_3"]["saw_step_1"])
+        self.assertTrue(r["step_3"]["saw_step_2"])
+        self.assertEqual(r["step_3"]["step_1_nested"], [1, 2, 3])
+        self.assertEqual(r["step_2"], 84)
+
+    def test_get_step_settings_returns_dict_not_module(self):
+        """
+        Bug: get_step_settings() used to take a module object. After the
+        AST refactor it takes a file path. If someone accidentally reverts
+        the signature, this test catches it immediately.
+        """
+        path = _temp_step('METADATA = {"environment": "test_env"}')
+        # Must accept a Path, not a module
+        s = get_step_settings(Path(path))
+        self.assertEqual(s["environment"], "test_env")
 
 
 # ── Package API ───────────────────────────────────────────────

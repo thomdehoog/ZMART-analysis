@@ -4,6 +4,36 @@ PipelineEngine — Unified orchestrator for sequential Python pipelines.
 Reads YAML pipeline configs, iterates over steps, and delegates execution
 based on each step's METADATA settings (environment, worker type,
 concurrency limits).
+
+Execution flow for each step
+-----------------------------
+1. Read step file's METADATA via AST (no code execution)
+2. Determine target environment and whether isolation is needed
+3. If isolated: delegate to WorkerPool (subprocess in target conda env)
+   If local:    load module via exec() and call module.run() in-process
+4. Validate return type (must be dict)
+
+Key classes
+-----------
+PipelineEngine
+    The main orchestrator. Supports blocking (run_pipeline) and async
+    (submit) execution. Manages a WorkerPool and ThreadPoolExecutor.
+
+run_pipeline (module-level function)
+    Convenience wrapper that creates a temporary engine, runs one
+    pipeline, and cleans up. Simplest entry point for scripts.
+
+YAML format
+-----------
+    metadata:
+      verbose: 1                    # 0=quiet, 1=engine, 2=steps, 3=both
+      functions_dir: "../steps"     # relative to YAML file
+      environment: "conda_env"      # optional: override for all steps
+
+    workflow_name:
+      - step_name:
+          param1: value1
+      - another_step:
 """
 
 import logging
