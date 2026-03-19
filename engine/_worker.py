@@ -227,6 +227,3 @@ class Worker:
         return (f"Worker(env={self.environment!r}, "
                 f"step={Path(self.step_path).name!r}, "
                 f"alive={self.is_alive()})")
-
-    def __del__(self):
-        self.shutdown()

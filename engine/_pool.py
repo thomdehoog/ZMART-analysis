@@ -98,11 +98,12 @@ class WorkerPool:
 
     def _ensure_reaper(self):
         """Start the reaper thread on first persistent worker use."""
-        if self._reaper is None:
-            self._reaper = threading.Thread(
-                target=self._reaper_loop, daemon=True,
-            )
-            self._reaper.start()
+        with self._pool_lock:
+            if self._reaper is None:
+                self._reaper = threading.Thread(
+                    target=self._reaper_loop, daemon=True,
+                )
+                self._reaper.start()
 
     def active_workers(self):
         """Return list of (env, step) keys for alive persistent workers."""
@@ -142,6 +143,3 @@ class WorkerPool:
             alive = sum(1 for w in self._workers.values() if w.is_alive())
             total = len(self._workers)
         return f"WorkerPool(persistent={alive}/{total})"
-
-    def __del__(self):
-        self.shutdown_all()
