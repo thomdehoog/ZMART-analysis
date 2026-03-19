@@ -6,12 +6,10 @@ based on each step's METADATA settings (environment, worker type,
 concurrency limits).
 """
 
-import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict
 
 import yaml
 
@@ -75,7 +73,7 @@ class PipelineEngine:
         verbose = yaml_metadata.get("verbose", 0)
 
         functions_dir_str = yaml_metadata.get("functions_dir", "../steps")
-        functions_dir = Path(os.path.abspath(yaml_path.parent / functions_dir_str))
+        functions_dir = (yaml_path.parent / functions_dir_str).resolve()
 
         # Find workflow key (first key that isn't 'metadata')
         workflow_name = None
@@ -97,7 +95,7 @@ class PipelineEngine:
         step_names = [list(s.keys())[0] for s in steps_config]
 
         pipeline_env = yaml_metadata.get("environment")
-        current_env = os.path.basename(sys.prefix)
+        current_env = Path(sys.prefix).name
 
         def engine_log(msg):
             if verbose in (1, 3):
@@ -216,7 +214,7 @@ class PipelineEngine:
 
 
 def run_pipeline(yaml_path: str, label: str,
-                 input_data: Optional[Dict] = None) -> dict:
+                 input_data: dict | None = None) -> dict:
     """
     Run a pipeline. Creates a temporary engine and cleans up after.
 

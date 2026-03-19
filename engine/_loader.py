@@ -2,7 +2,6 @@
 
 import types
 from pathlib import Path
-from typing import Any, Dict
 
 
 def load_function(func_name: str, functions_dir: Path):
@@ -27,7 +26,7 @@ def load_function(func_name: str, functions_dir: Path):
     return module
 
 
-def get_step_settings(module) -> Dict[str, Any]:
+def get_step_settings(module) -> dict:
     """
     Get execution settings from a step's METADATA.
 

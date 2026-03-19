@@ -17,7 +17,6 @@ import argparse
 import os
 import pickle
 import sys
-import time
 import traceback
 import types
 from multiprocessing.connection import Client
