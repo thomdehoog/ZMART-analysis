@@ -6,15 +6,19 @@ based on each step's METADATA settings (environment, worker type,
 concurrency limits).
 """
 
+import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 import yaml
 
-from ._loader import load_function, get_step_settings
+from ._loader import get_step_settings, load_function
 from ._pool import WorkerPool
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineEngine:
@@ -42,6 +46,9 @@ class PipelineEngine:
         self._pool = WorkerPool(idle_timeout=idle_timeout)
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent)
         self._accepting = True
+        logger.debug("PipelineEngine created: idle_timeout=%.0f, "
+                     "max_concurrent=%d, execution_timeout=%.0f",
+                     idle_timeout, max_concurrent, execution_timeout)
 
     def run_pipeline(self, yaml_path, label, input_data=None):
         """
@@ -65,6 +72,7 @@ class PipelineEngine:
             raise RuntimeError("Engine has been shut down")
 
         yaml_path = Path(yaml_path)
+        logger.info("Pipeline starting: %s [%s]", yaml_path.name, label)
 
         with open(yaml_path, "r") as f:
             config = yaml.safe_load(f)
@@ -74,6 +82,7 @@ class PipelineEngine:
 
         functions_dir_str = yaml_metadata.get("functions_dir", "../steps")
         functions_dir = (yaml_path.parent / functions_dir_str).resolve()
+        logger.debug("Functions directory: %s", functions_dir)
 
         # Find workflow key (first key that isn't 'metadata')
         workflow_name = None
@@ -96,6 +105,9 @@ class PipelineEngine:
 
         pipeline_env = yaml_metadata.get("environment")
         current_env = Path(sys.prefix).name
+        logger.info("Workflow '%s': %d steps %s (current_env=%s, pipeline_env=%s)",
+                     workflow_name, len(step_names), step_names,
+                     current_env, pipeline_env)
 
         def engine_log(msg):
             if verbose in (1, 3):
@@ -120,6 +132,8 @@ class PipelineEngine:
             "input": input_data if input_data is not None else {},
         }
 
+        pipeline_t0 = time.monotonic()
+
         for step_idx, step_config in enumerate(steps_config, start=1):
             func_name = list(step_config.keys())[0]
             params = step_config[func_name] or {}
@@ -127,6 +141,8 @@ class PipelineEngine:
             engine_log(
                 f"\n[engine] Step {step_idx}/{len(steps_config)}: {func_name}"
             )
+
+            step_t0 = time.monotonic()
 
             func_path = functions_dir / f"{func_name}.py"
             settings = get_step_settings(func_path)
@@ -138,6 +154,9 @@ class PipelineEngine:
             # If step says "local" but pipeline declares an environment,
             # run in the pipeline's environment.
             if target_env.lower() == "local" and pipeline_env:
+                logger.debug("Step '%s': overriding environment "
+                             "'local' -> '%s' (pipeline-level)",
+                             func_name, pipeline_env)
                 target_env = pipeline_env
 
             needs_isolation = (
@@ -146,6 +165,9 @@ class PipelineEngine:
             )
 
             mode = "local" if not needs_isolation else worker_type
+            logger.info("Step %d/%d '%s': env=%s, mode=%s, params=%s",
+                        step_idx, len(steps_config), func_name,
+                        target_env, mode, list(params.keys()))
             engine_log(f"[engine]   Environment: {target_env} ({mode})")
 
             if needs_isolation:
@@ -168,8 +190,16 @@ class PipelineEngine:
                     f"expected dict"
                 )
 
+            step_elapsed = time.monotonic() - step_t0
+            logger.info("Step %d/%d '%s': completed in %.2fs "
+                        "(pipeline_data keys: %s)",
+                        step_idx, len(steps_config), func_name,
+                        step_elapsed, list(pipeline_data.keys()))
             engine_log(f"[engine]   Completed: {func_name}")
 
+        pipeline_elapsed = time.monotonic() - pipeline_t0
+        logger.info("Pipeline complete: %s [%s] — %d steps in %.2fs",
+                     yaml_path.name, label, len(steps_config), pipeline_elapsed)
         engine_log(f"\n[engine] Pipeline complete")
         return pipeline_data
 
@@ -183,6 +213,8 @@ class PipelineEngine:
         """
         if not self._accepting:
             raise RuntimeError("Engine has been shut down")
+
+        logger.info("Pipeline submitted: %s [%s]", Path(yaml_path).name, label)
 
         future = self._executor.submit(
             self.run_pipeline, yaml_path, label, input_data,
@@ -198,9 +230,11 @@ class PipelineEngine:
 
     def shutdown(self, wait=True):
         """Shut down the engine, thread pool, and all workers."""
+        logger.info("Engine shutting down (wait=%s)", wait)
         self._accepting = False
         self._executor.shutdown(wait=wait)
         self._pool.shutdown_all()
+        logger.debug("Engine shutdown complete")
 
     def __enter__(self):
         return self

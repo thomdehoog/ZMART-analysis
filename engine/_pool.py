@@ -6,10 +6,13 @@ based on the step's METADATA. Enforces per-step concurrency
 limits via semaphores.
 """
 
+import logging
 import threading
 import time
 
 from ._worker import Worker
+
+logger = logging.getLogger(__name__)
 
 
 class WorkerPool:
@@ -46,9 +49,14 @@ class WorkerPool:
         with self._pool_lock:
             if key not in self._semaphores:
                 self._semaphores[key] = threading.Semaphore(max_workers)
+                logger.debug("Pool: created semaphore for %s (max_workers=%d)",
+                             key, max_workers)
             sem = self._semaphores[key]
 
+        logger.debug("Pool: acquiring semaphore for %s (type=%s)",
+                     key, worker_type)
         sem.acquire()
+        logger.debug("Pool: semaphore acquired for %s", key)
         try:
             if worker_type == "persistent":
                 self._ensure_reaper()
@@ -63,12 +71,15 @@ class WorkerPool:
                 )
         finally:
             sem.release()
+            logger.debug("Pool: semaphore released for %s", key)
 
     def _execute_persistent(self, key, environment, step_path,
                             pipeline_data, params, timeout):
         """Execute via a persistent warm worker."""
         with self._pool_lock:
             if key not in self._workers:
+                logger.info("Pool: creating persistent worker for env=%s, "
+                            "step=%s", environment, step_path)
                 self._workers[key] = Worker(
                     environment=environment,
                     step_path=step_path,
@@ -76,6 +87,8 @@ class WorkerPool:
                     connect_timeout=self.connect_timeout,
                 )
                 self._worker_locks[key] = threading.Lock()
+            else:
+                logger.debug("Pool: reusing persistent worker for %s", key)
 
             worker = self._workers[key]
             lock = self._worker_locks[key]
@@ -86,6 +99,8 @@ class WorkerPool:
     def _execute_oneshot(self, environment, step_path,
                          pipeline_data, params, timeout):
         """Execute via a oneshot worker (spawn, run, exit)."""
+        logger.debug("Pool: creating oneshot worker for env=%s, step=%s",
+                     environment, step_path)
         worker = Worker(
             environment=environment,
             step_path=step_path,
@@ -101,6 +116,8 @@ class WorkerPool:
         """Start the reaper thread on first persistent worker use."""
         with self._pool_lock:
             if self._reaper is None:
+                logger.debug("Pool: starting reaper thread "
+                             "(idle_timeout=%.0fs)", self.idle_timeout)
                 self._reaper = threading.Thread(
                     target=self._reaper_loop, daemon=True,
                 )
@@ -115,11 +132,15 @@ class WorkerPool:
         """Shut down all persistent workers and stop the reaper."""
         self._shutdown_event.set()
         with self._pool_lock:
+            n = len(self._workers)
+            if n:
+                logger.info("Pool: shutting down %d persistent worker(s)", n)
             for worker in self._workers.values():
                 worker.shutdown()
             self._workers.clear()
             self._worker_locks.clear()
             self._semaphores.clear()
+        logger.debug("Pool: shutdown complete, all dictionaries cleared")
 
     def _reaper_loop(self):
         """Background thread that shuts down idle persistent workers."""
@@ -138,7 +159,10 @@ class WorkerPool:
                     self._worker_locks.pop(key)
                     self._semaphores.pop(key, None)
 
+        if to_shutdown:
+            logger.info("Pool: reaping %d idle worker(s)", len(to_shutdown))
         for worker in to_shutdown:
+            logger.debug("Pool: reaping %r", worker)
             worker.shutdown()
 
     def __repr__(self):

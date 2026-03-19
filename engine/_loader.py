@@ -1,8 +1,11 @@
 """Step loading and METADATA extraction."""
 
 import ast
+import logging
 import types
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def get_step_settings(step_path: Path) -> dict:
@@ -21,11 +24,15 @@ def get_step_settings(step_path: Path) -> dict:
     """
     metadata = _extract_metadata(step_path) or {}
 
-    return {
+    settings = {
         "environment": metadata.get("environment", "local"),
         "worker": metadata.get("worker", "subprocess"),
         "max_workers": metadata.get("max_workers", 1),
     }
+    logger.debug("Step settings for %s: environment=%s, worker=%s, max_workers=%d",
+                 step_path.name, settings["environment"],
+                 settings["worker"], settings["max_workers"])
+    return settings
 
 
 def _extract_metadata(step_path: Path) -> dict:
@@ -38,8 +45,12 @@ def _extract_metadata(step_path: Path) -> dict:
                 and len(node.targets) == 1
                 and isinstance(node.targets[0], ast.Name)
                 and node.targets[0].id == "METADATA"):
-            return ast.literal_eval(node.value)
+            result = ast.literal_eval(node.value)
+            logger.debug("Extracted METADATA from %s (line %d): %s",
+                         step_path.name, node.lineno, result)
+            return result
 
+    logger.debug("No METADATA found in %s, using defaults", step_path.name)
     return {}
 
 
@@ -55,10 +66,15 @@ def load_function(func_name: str, functions_dir: Path):
     if not func_path.exists():
         raise FileNotFoundError(f"Function file not found: {func_path}")
 
+    logger.debug("Loading module '%s' via exec: %s", func_name, func_path)
+
     namespace = {"__name__": func_name, "__file__": str(func_path)}
     with open(func_path) as f:
         exec(compile(f.read(), str(func_path), "exec"), namespace)
 
     module = types.ModuleType(func_name)
     module.__dict__.update(namespace)
+
+    logger.debug("Module '%s' loaded (has run=%s, has METADATA=%s)",
+                 func_name, hasattr(module, "run"), hasattr(module, "METADATA"))
     return module

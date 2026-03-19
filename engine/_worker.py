@@ -10,6 +10,7 @@ Two modes:
   - oneshot: subprocess processes one request and exits.
 """
 
+import logging
 import os
 import pickle
 import subprocess
@@ -20,6 +21,8 @@ from pathlib import Path
 
 from .conda_utils import CONDA_CMD
 from ._errors import WorkerSpawnError, WorkerCrashedError, StepExecutionError
+
+logger = logging.getLogger(__name__)
 
 ENGINE_DIR = Path(__file__).resolve().parent
 WORKER_SCRIPT = ENGINE_DIR / "worker_script.py"
@@ -83,15 +86,24 @@ class Worker:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
 
+        step_name = Path(self.step_path).name
+        logger.debug("Worker spawning: env=%s, step=%s, oneshot=%s, port=%d",
+                     self.environment, step_name, self.oneshot, port)
+
         try:
             self._process = subprocess.Popen(
                 cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
             )
         except Exception as e:
+            logger.error("Worker spawn failed for env=%s, step=%s: %s",
+                         self.environment, step_name, e)
             self._cleanup()
             raise WorkerSpawnError(
                 f"Failed to start worker for '{self.environment}': {e}"
             ) from e
+
+        logger.debug("Worker process started: pid=%d, env=%s, step=%s",
+                     self._process.pid, self.environment, step_name)
 
         try:
             self._conn = self._listener.accept()
@@ -99,6 +111,10 @@ class Worker:
             stderr = ""
             if self._process.poll() is not None:
                 stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+            logger.error("Worker connect failed: pid=%d, env=%s, step=%s, "
+                         "timeout=%.0fs, stderr=%s",
+                         self._process.pid, self.environment, step_name,
+                         self.connect_timeout, stderr[:500])
             self._cleanup()
             raise WorkerSpawnError(
                 f"Worker for '{self.environment}' failed to connect "
@@ -106,6 +122,8 @@ class Worker:
             ) from e
 
         self._last_active = time.monotonic()
+        logger.info("Worker ready: pid=%d, env=%s, step=%s, oneshot=%s",
+                     self._process.pid, self.environment, step_name, self.oneshot)
 
     def execute(self, pipeline_data, params, timeout=300.0):
         """
@@ -119,11 +137,20 @@ class Worker:
             If the worker process died during execution.
         """
         self.ensure_running()
+        pid = self._process.pid
+        step_name = Path(self.step_path).name
+        t0 = time.monotonic()
 
         message = (pipeline_data, params)
         try:
-            self._conn.send_bytes(pickle.dumps(message, protocol=2))
+            data = pickle.dumps(message, protocol=2)
+            logger.debug("Worker execute: sending %d bytes to pid=%d "
+                         "(step=%s, timeout=%.0fs)",
+                         len(data), pid, step_name, timeout)
+            self._conn.send_bytes(data)
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
+            logger.error("Worker send failed: pid=%d, step=%s: %s",
+                         pid, step_name, e)
             self._cleanup()
             raise WorkerCrashedError(
                 f"Worker for '{self.environment}' connection lost while sending: {e}"
@@ -131,6 +158,10 @@ class Worker:
 
         try:
             if not self._conn.poll(timeout=timeout):
+                elapsed = time.monotonic() - t0
+                logger.error("Worker timed out: pid=%d, step=%s, "
+                             "elapsed=%.2fs, timeout=%.0fs",
+                             pid, step_name, elapsed, timeout)
                 self._cleanup()
                 raise StepExecutionError(
                     f"Worker for '{self.environment}' timed out after {timeout}s"
@@ -140,31 +171,45 @@ class Worker:
             stderr = ""
             if self._process and self._process.poll() is not None:
                 stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+            logger.error("Worker crashed during execution: pid=%d, step=%s, "
+                         "stderr=%s", pid, step_name, stderr[:500])
             self._cleanup()
             raise WorkerCrashedError(
                 f"Worker for '{self.environment}' crashed during execution. "
                 f"stderr: {stderr}"
             ) from e
 
+        elapsed = time.monotonic() - t0
         response = pickle.loads(raw)
         self._last_active = time.monotonic()
 
         if not isinstance(response, tuple) or len(response) != 2:
+            logger.error("Worker sent invalid response: pid=%d, step=%s, "
+                         "response_type=%s", pid, step_name, type(response).__name__)
             raise WorkerCrashedError(
                 f"Worker for '{self.environment}' sent invalid response"
             )
 
         status, payload = response
         if status == "error":
+            logger.warning("Worker step error: pid=%d, step=%s, "
+                           "elapsed=%.2fs, error=%s",
+                           pid, step_name, elapsed,
+                           payload.get("message", "unknown"))
             raise StepExecutionError(
                 payload.get("message", "Unknown error in worker"),
                 remote_traceback=payload.get("traceback"),
             )
         if status != "ok":
+            logger.error("Worker unknown status: pid=%d, step=%s, status=%r",
+                         pid, step_name, status)
             raise WorkerCrashedError(
                 f"Worker for '{self.environment}' sent unknown status: {status!r}"
             )
 
+        logger.debug("Worker execute complete: pid=%d, step=%s, "
+                     "elapsed=%.2fs, received=%d bytes",
+                     pid, step_name, elapsed, len(raw))
         return payload
 
     def is_idle(self, now=None):
@@ -179,6 +224,11 @@ class Worker:
 
     def shutdown(self):
         """Gracefully shut down the worker subprocess."""
+        pid = self._process.pid if self._process else None
+        if pid:
+            logger.debug("Worker shutdown starting: pid=%d, env=%s",
+                         pid, self.environment)
+
         if self._conn is not None:
             try:
                 self._conn.send_bytes(pickle.dumps(None, protocol=2))
@@ -188,11 +238,16 @@ class Worker:
         if self._process is not None:
             try:
                 self._process.wait(timeout=5.0)
+                logger.debug("Worker exited gracefully: pid=%d", pid)
             except subprocess.TimeoutExpired:
+                logger.warning("Worker did not exit in 5s, terminating: pid=%d",
+                               pid)
                 self._process.terminate()
                 try:
                     self._process.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
+                    logger.warning("Worker did not terminate in 2s, "
+                                   "killing: pid=%d", pid)
                     self._process.kill()
                     self._process.wait(timeout=1.0)
 
