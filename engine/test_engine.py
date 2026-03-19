@@ -213,6 +213,51 @@ class TestWorkerOneshot(unittest.TestCase):
         self.assertFalse(w.is_alive())
         w.shutdown()
 
+    def test_shutdown_after_oneshot_is_safe(self):
+        """Shutdown on an already-exited oneshot worker should not raise."""
+        from engine._worker import Worker
+        path = _temp_step("""
+            def run(pipeline_data, **params):
+                return pipeline_data
+        """)
+        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        w.execute({}, {}, timeout=10)
+        time.sleep(0.3)
+        w.shutdown()  # process already exited — should be graceful
+        w.shutdown()  # double shutdown — also safe
+
+    def test_oneshot_error_still_cleans_up(self):
+        """Worker resources are released even when step raises."""
+        from engine._worker import Worker
+        path = _temp_step("""
+            def run(pd, **p): raise RuntimeError("fail")
+        """)
+        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        with self.assertRaises(StepExecutionError):
+            w.execute({}, {}, timeout=10)
+        w.shutdown()
+        self.assertIsNone(w._conn)
+        self.assertIsNone(w._listener)
+        self.assertIsNone(w._process)
+
+    def test_oneshot_via_pool(self):
+        """Pool's _execute_oneshot creates, uses, and discards a Worker."""
+        from engine._pool import WorkerPool
+        path = _temp_step("""
+            def run(pd, **p):
+                pd["pooled"] = True
+                return pd
+        """)
+        pool = WorkerPool()
+        result = pool.execute(
+            "local", path, {}, {},
+            worker_type="subprocess", timeout=10,
+        )
+        self.assertTrue(result["pooled"])
+        # No persistent workers should remain
+        self.assertEqual(pool.active_workers(), [])
+        pool.shutdown_all()
+
 
 # ── Pipeline Engine ───────────────────────────────────────────
 
