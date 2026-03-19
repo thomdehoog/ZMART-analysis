@@ -21,7 +21,7 @@ try:
 except ModuleNotFoundError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "engine"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from engine import run_pipeline
 
 WIDTH = 70
