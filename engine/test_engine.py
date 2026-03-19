@@ -6,7 +6,8 @@ Run from the engine directory:
     python -m pytest test_engine.py -v
 """
 
-import os
+import atexit
+import shutil
 import sys
 import tempfile
 import textwrap
@@ -30,42 +31,31 @@ BASIC_TEST = ENGINE_DIR.parent / "workflows" / "basic_test"
 STEPS_DIR = BASIC_TEST / "steps"
 PIPELINES_DIR = BASIC_TEST / "pipelines"
 
-# Shared temp directory for test step files
+# All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
+atexit.register(shutil.rmtree, _TEMP_DIR, True)
 
 
 def _temp_step(code, name=None):
-    """Write a temporary step .py file. Returns the file path."""
-    if name:
-        path = os.path.join(_TEMP_DIR, f"{name}.py")
-        with open(path, "w") as f:
-            f.write(textwrap.dedent(code))
-        return path
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, dir=_TEMP_DIR,
-    )
-    f.write(textwrap.dedent(code))
-    f.close()
-    return f.name
+    """Write a temporary step .py file to _TEMP_DIR."""
+    path = Path(_TEMP_DIR) / (f"{name}.py" if name else
+                               f"step_{id(code)}.py")
+    path.write_text(textwrap.dedent(code))
+    return str(path)
 
 
 def _temp_yaml(content):
-    """Write a temporary YAML pipeline file. Returns the file path."""
+    """Write a temporary YAML pipeline file to _TEMP_DIR."""
     text = textwrap.dedent(content)
     if "functions_dir" not in text:
+        header = f'metadata:\n  functions_dir: "{_TEMP_DIR}"\n'
         if "metadata:" in text:
-            text = text.replace(
-                "metadata:",
-                f'metadata:\n  functions_dir: "{_TEMP_DIR}"',
-            )
+            text = text.replace("metadata:", header.rstrip("\n"), 1)
         else:
-            text = f'metadata:\n  functions_dir: "{_TEMP_DIR}"\n' + text
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False,
-    )
-    f.write(text)
-    f.close()
-    return f.name
+            text = header + text
+    path = Path(_TEMP_DIR) / f"pipeline_{id(content)}.yaml"
+    path.write_text(text)
+    return str(path)
 
 
 # ── Errors ────────────────────────────────────────────────────
@@ -223,8 +213,8 @@ class TestWorkerOneshot(unittest.TestCase):
         w = Worker("local", path, oneshot=True, connect_timeout=10)
         w.execute({}, {}, timeout=10)
         time.sleep(0.3)
-        w.shutdown()  # process already exited — should be graceful
-        w.shutdown()  # double shutdown — also safe
+        w.shutdown()
+        w.shutdown()  # double shutdown
 
     def test_oneshot_error_still_cleans_up(self):
         """Worker resources are released even when step raises."""
@@ -254,7 +244,6 @@ class TestWorkerOneshot(unittest.TestCase):
             worker_type="subprocess", timeout=10,
         )
         self.assertTrue(result["pooled"])
-        # No persistent workers should remain
         self.assertEqual(pool.active_workers(), [])
         pool.shutdown_all()
 
@@ -329,7 +318,6 @@ class TestReturnValidation(unittest.TestCase):
                 e.run_pipeline(yaml, "t", {})
         self.assertIn("ret_none", str(ctx.exception))
         self.assertIn("NoneType", str(ctx.exception))
-        os.unlink(yaml)
 
     def test_list_return_raises_type_error(self):
         _temp_step('def run(pd, **p): return [1,2]', name="ret_list")
@@ -339,7 +327,6 @@ class TestReturnValidation(unittest.TestCase):
             with self.assertRaises(TypeError) as ctx:
                 e.run_pipeline(yaml, "t", {})
         self.assertIn("list", str(ctx.exception))
-        os.unlink(yaml)
 
 
 # ── Edge Cases: YAML ──────────────────────────────────────────
@@ -353,7 +340,6 @@ class TestYAMLEdgeCases(unittest.TestCase):
         with PipelineEngine() as e:
             with self.assertRaises(ValueError):
                 e.run_pipeline(yaml, "t", {})
-        os.unlink(yaml)
 
     def test_no_workflow_key_raises(self):
         yaml = _temp_yaml("metadata:\n  verbose: 0")
@@ -361,7 +347,6 @@ class TestYAMLEdgeCases(unittest.TestCase):
         with PipelineEngine() as e:
             with self.assertRaises(ValueError):
                 e.run_pipeline(yaml, "t", {})
-        os.unlink(yaml)
 
     def test_no_metadata_uses_defaults(self):
         _temp_step("""
@@ -375,7 +360,6 @@ class TestYAMLEdgeCases(unittest.TestCase):
         with PipelineEngine() as e:
             r = e.run_pipeline(yaml, "t", {})
         self.assertTrue(r["ok"])
-        os.unlink(yaml)
 
     def test_null_params(self):
         _temp_step("""
@@ -388,7 +372,6 @@ class TestYAMLEdgeCases(unittest.TestCase):
         with PipelineEngine() as e:
             r = e.run_pipeline(yaml, "t", {})
         self.assertEqual(r["params"], {})
-        os.unlink(yaml)
 
     def test_nonexistent_yaml_raises(self):
         from engine import run_pipeline
@@ -481,11 +464,8 @@ class TestPoolEdgeCases(unittest.TestCase):
         """)
         pool = WorkerPool()
         results = []
-        starts = []
 
         def run_one():
-            t = time.monotonic()
-            starts.append(t)
             r = pool.execute("local", path, {}, {},
                              worker_type="subprocess", max_workers=1,
                              timeout=15)
