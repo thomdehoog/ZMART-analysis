@@ -160,6 +160,10 @@ class Worker:
                 payload.get("message", "Unknown error in worker"),
                 remote_traceback=payload.get("traceback"),
             )
+        if status != "ok":
+            raise WorkerCrashedError(
+                f"Worker for '{self.environment}' sent unknown status: {status!r}"
+            )
 
         return payload
 

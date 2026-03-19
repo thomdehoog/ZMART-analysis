@@ -37,7 +37,7 @@ def get_step_settings(module) -> dict:
         - worker: "persistent" or "subprocess"
         - max_workers: max concurrent workers (int, default 1)
     """
-    metadata = getattr(module, "METADATA", {})
+    metadata = getattr(module, "METADATA", None) or {}
 
     return {
         "environment": metadata.get("environment", "local"),

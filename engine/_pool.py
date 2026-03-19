@@ -118,6 +118,7 @@ class WorkerPool:
                 worker.shutdown()
             self._workers.clear()
             self._worker_locks.clear()
+            self._semaphores.clear()
 
     def _reaper_loop(self):
         """Background thread that shuts down idle persistent workers."""

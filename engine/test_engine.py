@@ -34,12 +34,19 @@ PIPELINES_DIR = BASIC_TEST / "pipelines"
 # All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
 atexit.register(shutil.rmtree, _TEMP_DIR, True)
+_counter = 0
+
+
+def _next_id():
+    global _counter
+    _counter += 1
+    return _counter
 
 
 def _temp_step(code, name=None):
     """Write a temporary step .py file to _TEMP_DIR."""
     path = Path(_TEMP_DIR) / (f"{name}.py" if name else
-                               f"step_{id(code)}.py")
+                               f"step_{_next_id()}.py")
     path.write_text(textwrap.dedent(code))
     return str(path)
 
@@ -53,7 +60,7 @@ def _temp_yaml(content):
             text = text.replace("metadata:", header.rstrip("\n"), 1)
         else:
             text = header + text
-    path = Path(_TEMP_DIR) / f"pipeline_{id(content)}.yaml"
+    path = Path(_TEMP_DIR) / f"pipeline_{_next_id()}.yaml"
     path.write_text(text)
     return str(path)
 
@@ -138,6 +145,13 @@ class TestGetStepSettings(unittest.TestCase):
         """data_transfer was removed — should not appear in settings."""
         s = get_step_settings(self._module())
         self.assertNotIn("data_transfer", s)
+
+    def test_metadata_none_uses_defaults(self):
+        """METADATA = None should not crash."""
+        mod = types.ModuleType("bad")
+        mod.METADATA = None
+        s = get_step_settings(mod)
+        self.assertEqual(s["environment"], "local")
 
 
 # ── Worker (oneshot) ──────────────────────────────────────────
@@ -454,11 +468,12 @@ class TestPoolEdgeCases(unittest.TestCase):
         pool.shutdown_all()
 
     def test_semaphore_limits_concurrency(self):
+        """With max_workers=1, two calls must run sequentially, not in parallel."""
         from engine._pool import WorkerPool
         path = _temp_step("""
             import time
             def run(pd, **p):
-                time.sleep(0.3)
+                time.sleep(0.4)
                 pd["done"] = True
                 return pd
         """)
@@ -471,16 +486,20 @@ class TestPoolEdgeCases(unittest.TestCase):
                              timeout=15)
             results.append(r)
 
+        t0 = time.monotonic()
         threads = [threading.Thread(target=run_one) for _ in range(2)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=30)
+        elapsed = time.monotonic() - t0
         pool.shutdown_all()
 
         self.assertEqual(len(results), 2)
         for r in results:
             self.assertTrue(r["done"])
+        # If serialized: elapsed >= 0.8s. If parallel: elapsed ~0.4s.
+        self.assertGreater(elapsed, 0.7, "Calls ran in parallel — semaphore broken")
 
 
 # ── Package API ───────────────────────────────────────────────

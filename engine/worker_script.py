@@ -29,11 +29,12 @@ def load_step_module(step_path):
     Same approach as engine.py to avoid Windows DLL search path issues
     that can break packages like PyTorch on network drives.
     """
-    namespace = {"__name__": os.path.basename(step_path), "__file__": step_path}
+    name = os.path.splitext(os.path.basename(step_path))[0]
+    namespace = {"__name__": name, "__file__": step_path}
     with open(step_path) as f:
         exec(compile(f.read(), step_path, "exec"), namespace)
 
-    module = types.ModuleType(os.path.basename(step_path))
+    module = types.ModuleType(name)
     module.__dict__.update(namespace)
     return module
 
