@@ -135,6 +135,7 @@ class WorkerPool:
                 if worker.is_idle(now) and not self._worker_locks[key].locked():
                     to_shutdown.append(self._workers.pop(key))
                     self._worker_locks.pop(key)
+                    self._semaphores.pop(key, None)
 
         for worker in to_shutdown:
             worker.shutdown()

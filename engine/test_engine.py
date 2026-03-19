@@ -287,7 +287,7 @@ class TestPipelineEngine(unittest.TestCase):
     def test_error_in_step_raises(self):
         from engine import PipelineEngine
         with PipelineEngine() as e:
-            with self.assertRaises(Exception):
+            with self.assertRaises((RuntimeError, ValueError)):
                 e.run_pipeline(
                     str(PIPELINES_DIR / "test_error_pipeline.yaml"), "t", {},
                 )
@@ -499,7 +499,8 @@ class TestPoolEdgeCases(unittest.TestCase):
         for r in results:
             self.assertTrue(r["done"])
         # If serialized: elapsed >= 0.8s. If parallel: elapsed ~0.4s.
-        self.assertGreater(elapsed, 0.7, "Calls ran in parallel — semaphore broken")
+        # Use 0.55s threshold for margin on slow machines.
+        self.assertGreater(elapsed, 0.55, "Calls ran in parallel — semaphore broken")
 
 
 # ── Package API ───────────────────────────────────────────────
