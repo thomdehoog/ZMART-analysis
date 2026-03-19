@@ -46,8 +46,9 @@ class WorkerPool:
         with self._pool_lock:
             if key not in self._semaphores:
                 self._semaphores[key] = threading.Semaphore(max_workers)
+            sem = self._semaphores[key]
 
-        self._semaphores[key].acquire()
+        sem.acquire()
         try:
             if worker_type == "persistent":
                 self._ensure_reaper()
@@ -61,7 +62,7 @@ class WorkerPool:
                     pipeline_data, params, timeout,
                 )
         finally:
-            self._semaphores[key].release()
+            sem.release()
 
     def _execute_persistent(self, key, environment, step_path,
                             pipeline_data, params, timeout):

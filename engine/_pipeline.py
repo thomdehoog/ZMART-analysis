@@ -128,8 +128,8 @@ class PipelineEngine:
                 f"\n[engine] Step {step_idx}/{len(steps_config)}: {func_name}"
             )
 
-            module = load_function(func_name, functions_dir)
-            settings = get_step_settings(module)
+            func_path = functions_dir / f"{func_name}.py"
+            settings = get_step_settings(func_path)
 
             target_env = settings["environment"]
             worker_type = settings["worker"]
@@ -149,10 +149,9 @@ class PipelineEngine:
             engine_log(f"[engine]   Environment: {target_env} ({mode})")
 
             if needs_isolation:
-                func_path = str(functions_dir / f"{func_name}.py")
                 pipeline_data = self._pool.execute(
                     environment=target_env,
-                    step_path=func_path,
+                    step_path=str(func_path),
                     pipeline_data=pipeline_data,
                     params=params,
                     worker_type=worker_type,
@@ -160,6 +159,7 @@ class PipelineEngine:
                     timeout=self.execution_timeout,
                 )
             else:
+                module = load_function(func_name, functions_dir)
                 pipeline_data = module.run(pipeline_data, **params)
 
             if not isinstance(pipeline_data, dict):
