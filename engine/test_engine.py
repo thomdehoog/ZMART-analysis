@@ -503,6 +503,285 @@ class TestPoolEdgeCases(unittest.TestCase):
         self.assertGreater(elapsed, 0.55, "Calls ran in parallel — semaphore broken")
 
 
+# ── Persistent Worker ─────────────────────────────────────────
+
+
+class TestWorkerPersistent(unittest.TestCase):
+
+    def test_reuses_same_process(self):
+        from engine._worker import Worker
+        path = _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid"] = os.getpid()
+                return pd
+        """)
+        w = Worker("local", path, oneshot=False, connect_timeout=10)
+        try:
+            r1 = w.execute({}, {}, timeout=10)
+            r2 = w.execute({}, {}, timeout=10)
+            self.assertEqual(r1["pid"], r2["pid"])
+            self.assertTrue(w.is_alive())
+        finally:
+            w.shutdown()
+
+    def test_recovers_from_crash(self):
+        from engine._worker import Worker
+        path = _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid"] = os.getpid()
+                return pd
+        """)
+        w = Worker("local", path, oneshot=False, connect_timeout=10)
+        try:
+            r1 = w.execute({}, {}, timeout=10)
+            w._process.kill()
+            w._process.wait()
+            self.assertFalse(w.is_alive())
+            r2 = w.execute({}, {}, timeout=10)
+            self.assertNotEqual(r1["pid"], r2["pid"])
+        finally:
+            w.shutdown()
+
+    def test_idle_resets_on_execute(self):
+        from engine._worker import Worker
+        path = _temp_step("def run(pd, **p): return pd")
+        w = Worker("local", path, oneshot=False,
+                   idle_timeout=0.3, connect_timeout=10)
+        try:
+            w.execute({}, {}, timeout=10)
+            time.sleep(0.2)
+            self.assertFalse(w.is_idle())
+            w.execute({}, {}, timeout=10)
+            self.assertFalse(w.is_idle())
+            time.sleep(0.4)
+            self.assertTrue(w.is_idle())
+        finally:
+            w.shutdown()
+
+
+# ── Worker Error Paths ────────────────────────────────────────
+
+
+class TestWorkerErrorPaths(unittest.TestCase):
+
+    def test_process_crash_raises_worker_crashed(self):
+        from engine._worker import Worker
+        from engine._errors import WorkerCrashedError
+        path = _temp_step("""
+            import os
+            def run(pd, **p): os._exit(1)
+        """)
+        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        with self.assertRaises(WorkerCrashedError):
+            w.execute({}, {}, timeout=10)
+        w.shutdown()
+
+    def test_timeout_raises_step_execution_error(self):
+        from engine._worker import Worker
+        path = _temp_step("""
+            import time
+            def run(pd, **p):
+                time.sleep(30)
+                return pd
+        """)
+        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        with self.assertRaises(StepExecutionError) as ctx:
+            w.execute({}, {}, timeout=1)
+        self.assertIn("timed out", str(ctx.exception))
+        w.shutdown()
+
+
+# ── Persistent Pool ──────────────────────────────────────────
+
+
+class TestPoolPersistent(unittest.TestCase):
+
+    def test_persistent_worker_created_and_reused(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid"] = os.getpid()
+                return pd
+        """)
+        pool = WorkerPool(idle_timeout=60)
+        r1 = pool.execute("local", path, {}, {},
+                          worker_type="persistent", timeout=10)
+        r2 = pool.execute("local", path, {}, {},
+                          worker_type="persistent", timeout=10)
+        self.assertEqual(r1["pid"], r2["pid"])
+        self.assertEqual(len(pool.active_workers()), 1)
+        pool.shutdown_all()
+        self.assertEqual(len(pool.active_workers()), 0)
+
+    def test_reaper_removes_idle_worker(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("def run(pd, **p): return pd")
+        pool = WorkerPool(idle_timeout=0.2)
+        pool.execute("local", path, {}, {},
+                     worker_type="persistent", timeout=10)
+        self.assertEqual(len(pool.active_workers()), 1)
+        time.sleep(0.4)
+        pool._reap_idle()
+        self.assertEqual(len(pool.active_workers()), 0)
+        pool.shutdown_all()
+
+    def test_reaper_skips_active_worker(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("""
+            import time
+            def run(pd, **p):
+                time.sleep(0.5)
+                return pd
+        """)
+        pool = WorkerPool(idle_timeout=0.1)
+        result = [None]
+        def run_step():
+            result[0] = pool.execute("local", path, {}, {},
+                                     worker_type="persistent", timeout=10)
+        t = threading.Thread(target=run_step)
+        t.start()
+        time.sleep(0.2)
+        pool._reap_idle()
+        self.assertEqual(len(pool.active_workers()), 1)
+        t.join(timeout=10)
+        self.assertIsNotNone(result[0])
+        pool.shutdown_all()
+
+
+# ── Error Propagation ─────────────────────────────────────────
+
+
+class TestErrorPropagation(unittest.TestCase):
+
+    def test_error_through_pool_has_remote_traceback(self):
+        from engine._pool import WorkerPool
+        path = _temp_step('def run(pd, **p): raise ValueError("pool err")')
+        pool = WorkerPool()
+        with self.assertRaises(StepExecutionError) as ctx:
+            pool.execute("local", path, {}, {},
+                         worker_type="subprocess", timeout=10)
+        self.assertIn("pool err", str(ctx.exception))
+        self.assertIn("ValueError", ctx.exception.remote_traceback)
+        pool.shutdown_all()
+
+
+# ── Serialization ─────────────────────────────────────────────
+
+
+class TestSerializationRoundTrip(unittest.TestCase):
+
+    def test_complex_types_survive_pickle_tcp(self):
+        from engine._worker import Worker
+        path = _temp_step("def run(pd, **p): return pd")
+        data = {
+            "tuple": (1, 2, 3),
+            "set": {4, 5, 6},
+            "bytes": b"\x00\xff",
+            "nested": {"a": [1, None, True, {"b": 2.5}]},
+            "none": None,
+            "large_int": 10**100,
+        }
+        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        try:
+            result = w.execute(data, {}, timeout=10)
+        finally:
+            w.shutdown()
+        self.assertEqual(result["tuple"], (1, 2, 3))
+        self.assertEqual(result["set"], {4, 5, 6})
+        self.assertEqual(result["bytes"], b"\x00\xff")
+        self.assertEqual(result["nested"]["a"][3]["b"], 2.5)
+        self.assertIsNone(result["none"])
+        self.assertEqual(result["large_int"], 10**100)
+
+
+# ── Loader Edge Cases ─────────────────────────────────────────
+
+
+class TestLoaderEdgeCases(unittest.TestCase):
+
+    def test_syntax_error_raises(self):
+        path = _temp_step("def run(\n    return {}")
+        with self.assertRaises(SyntaxError):
+            load_function(Path(path).stem, Path(path).parent)
+
+    def test_step_missing_run(self):
+        path = _temp_step('x = 1')
+        module = load_function(Path(path).stem, Path(path).parent)
+        self.assertFalse(hasattr(module, "run"))
+
+    def test_empty_metadata_uses_defaults(self):
+        mod = types.ModuleType("empty")
+        mod.METADATA = {}
+        s = get_step_settings(mod)
+        self.assertEqual(s["environment"], "local")
+
+    def test_module_file_attribute(self):
+        path = _temp_step("def run(pd, **p): return pd")
+        module = load_function(Path(path).stem, Path(path).parent)
+        self.assertEqual(module.__file__, path)
+
+    def test_runtime_error_at_module_level(self):
+        path = _temp_step("x = 1 / 0\ndef run(pd, **p): return pd")
+        with self.assertRaises(ZeroDivisionError):
+            load_function(Path(path).stem, Path(path).parent)
+
+
+# ── Pipeline Data Flow ────────────────────────────────────────
+
+
+class TestPipelineDataFlow(unittest.TestCase):
+
+    def test_step2_reads_step1_output(self):
+        _temp_step("""
+            def run(pd, **p):
+                pd["s1"] = "from_step_1"
+                return pd
+        """, name="flow_a")
+        _temp_step("""
+            def run(pd, **p):
+                pd["s2_saw"] = pd.get("s1")
+                return pd
+        """, name="flow_b")
+        yaml = _temp_yaml("wf:\n  - flow_a:\n  - flow_b:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            r = e.run_pipeline(yaml, "t", {})
+        self.assertEqual(r["s2_saw"], "from_step_1")
+
+    def test_custom_metadata_in_result(self):
+        _temp_step("def run(pd, **p): return pd", name="meta_step")
+        yaml = _temp_yaml("""
+            metadata:
+              purpose: "testing"
+              author: "test"
+            wf:
+              - meta_step:
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            r = e.run_pipeline(yaml, "t", {})
+        self.assertEqual(r["metadata"]["purpose"], "testing")
+        self.assertEqual(r["metadata"]["author"], "test")
+
+    def test_submit_callback(self):
+        from engine import PipelineEngine
+        called = []
+        def cb(future):
+            called.append(future.result())
+        with PipelineEngine() as e:
+            f = e.submit(
+                str(PIPELINES_DIR / "test_local_pipeline.yaml"),
+                "t", {}, callback=cb,
+            )
+            f.result(timeout=30)
+        time.sleep(0.1)
+        self.assertEqual(len(called), 1)
+        self.assertIn("step_local", called[0])
+
+
 # ── Package API ───────────────────────────────────────────────
 
 
