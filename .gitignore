@@ -83,3 +83,9 @@ output/
 *.tmp
 *.temp
 *.log
+
+# Dashboard
+node_modules/
+**/dashboard/dist/
+**/dashboard/src/data.json
+cell_selection_dashboard.html
