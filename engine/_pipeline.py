@@ -148,7 +148,13 @@ class PipelineEngine:
             )
         else:
             module = load_function(step_config.name, functions_dir)
-            return module.run(pipeline_data, **step_config.params)
+            try:
+                return module.run(pipeline_data, **step_config.params)
+            except SystemExit as e:
+                raise RuntimeError(
+                    f"Step '{step_config.name}' called sys.exit({e.code}). "
+                    f"Use isolation: maximal for untrusted steps."
+                ) from e
 
     def status(self):
         """

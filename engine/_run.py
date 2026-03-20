@@ -225,8 +225,10 @@ class Run:
         # Phase N>0 result accumulation: phase_idx -> [pipeline_data, ...]
         self._phase_results = defaultdict(list)
 
-        # All futures for status reporting
-        self._all_futures = []
+        # Status counters (no future references held — avoids memory leak)
+        self._n_submitted = 0
+        self._n_completed = 0
+        self._n_failed = 0
 
         logger.info("Run created: %s, workflow=%s, %d phases, priority=%d",
                      self._yaml_path.name, self._workflow_name,
@@ -274,9 +276,10 @@ class Run:
         future = self._engine._executor.submit(
             self._execute_phase_for_job, 0, job, submission_idx,
         )
+        future.add_done_callback(self._on_future_done)
         with self._lock:
             self._job_entries.append((future, scope_key))
-            self._all_futures.append(future)
+            self._n_submitted += 1
 
         return future
 
@@ -308,12 +311,19 @@ class Run:
         future = self._engine._executor.submit(
             self._handle_scope_complete, spatial, temporal,
         )
+        future.add_done_callback(self._on_future_done)
         with self._lock:
-            self._all_futures.append(future)
+            self._n_submitted += 1
         return future
 
     def _handle_scope_complete(self, spatial, temporal):
-        """Wait for pending jobs, collect results, run triggered phase."""
+        """Wait for pending jobs, collect results, run triggered phase.
+
+        Matching uses subset semantics: a job matches if its scope labels
+        are all covered by the scope_complete arguments. Extra keys in
+        scope_complete are tolerated (the job's key must be a subset of
+        the complete key, not an exact match).
+        """
         # Find which phase is triggered
         triggered = None
         for i, phase in enumerate(self._phases):
@@ -329,27 +339,42 @@ class Run:
             )
 
         prev_phase = triggered - 1
+        complete_key = set(_make_scope_key(spatial, temporal))
 
         if prev_phase == 0:
-            # Collect from Phase 0: match by scope key
-            scope_key = _make_scope_key(spatial, temporal)
-
-            # Wait for all Phase 0 jobs in this scope group
-            matching = []
+            # Wait for all Phase 0 jobs whose scope labels are covered
+            matching_futures = []
             with self._lock:
                 for future, key in self._job_entries:
-                    if key == scope_key:
-                        matching.append(future)
+                    if set(key).issubset(complete_key):
+                        matching_futures.append(future)
 
-            if not matching:
+            if not matching_futures:
                 raise ScopeError(
-                    f"No jobs submitted for scope {scope_key}")
+                    f"No jobs submitted matching scope_complete("
+                    f"spatial={spatial}, temporal={temporal})")
 
-            for f in matching:
+            for f in matching_futures:
                 f.result()  # blocks until complete; raises on failure
 
+            # Collect results from all matching scope groups
             with self._lock:
-                indexed = self._pending_results.pop(scope_key, [])
+                indexed = []
+                consumed_keys = []
+                for k, entries in self._pending_results.items():
+                    if set(k).issubset(complete_key):
+                        indexed.extend(entries)
+                        consumed_keys.append(k)
+                for k in consumed_keys:
+                    del self._pending_results[k]
+
+                # Clean up consumed job entries
+                matching_set = set(id(f) for f in matching_futures)
+                self._job_entries = [
+                    (f, k) for f, k in self._job_entries
+                    if id(f) not in matching_set
+                ]
+
             # Sort by submission index to preserve submission order
             indexed.sort(key=lambda item: item[0])
             results = [data for _, data in indexed]
@@ -461,14 +486,18 @@ class Run:
 
         return pipeline_data
 
+    def _on_future_done(self, future):
+        """Callback for completed futures — updates counters without
+        holding references to the future object."""
+        with self._lock:
+            self._n_completed += 1
+            if future.exception() is not None:
+                self._n_failed += 1
+
     @property
     def status(self):
         """Current run state for observability."""
         with self._lock:
-            total = len(self._all_futures)
-            completed = sum(1 for f in self._all_futures if f.done())
-            failed = sum(1 for f in self._all_futures
-                         if f.done() and f.exception() is not None)
             pending_scope = {
                 str(k): len(v)
                 for k, v in self._pending_results.items()
@@ -479,9 +508,9 @@ class Run:
             "priority": self._priority,
             "isolation": self._isolation,
             "phases": len(self._phases),
-            "total_futures": total,
-            "completed": completed,
-            "failed": failed,
+            "total": self._n_submitted,
+            "completed": self._n_completed,
+            "failed": self._n_failed,
             "pending_scope_groups": pending_scope,
         }
 
