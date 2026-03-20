@@ -41,8 +41,8 @@ import logging
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 
+from .conda_utils import get_current_env
 from ._loader import get_step_settings, load_function
 from ._pool import WorkerPool
 from ._run import Run
@@ -123,7 +123,7 @@ class PipelineEngine:
 
         target_env = settings["environment"]
         device = settings["device"]
-        current_env = Path(sys.prefix).name
+        current_env = get_current_env()
 
         # Pipeline-level env override for local steps
         if target_env.lower() == "local" and pipeline_env:

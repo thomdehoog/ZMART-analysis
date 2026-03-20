@@ -57,6 +57,7 @@ from engine._errors import (
     WorkerError, WorkerSpawnError, WorkerCrashedError,
     StepExecutionError, ScopeError,
 )
+from engine.conda_utils import get_current_env
 
 # Test fixtures
 BASIC_TEST = ENGINE_DIR.parent / "workflows" / "basic_test"
@@ -1513,7 +1514,7 @@ class TestIntegrationIsolation(unittest.TestCase):
         # Force isolation by setting a non-local environment
         # that matches the current env (so it still works, but isolation=maximal
         # forces subprocess execution)
-        current_env = Path(sys.prefix).name
+        current_env = get_current_env()
         functions_dir = Path(_TEMP_DIR).as_posix()
         yaml_content = (
             f'metadata:\n'
@@ -1921,7 +1922,7 @@ class TestPerformance(unittest.TestCase):
         _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
                    name="perf_iso")
 
-        current_env = Path(sys.prefix).name
+        current_env = get_current_env()
         functions_dir = Path(_TEMP_DIR).as_posix()
 
         def make_yaml(isolation):

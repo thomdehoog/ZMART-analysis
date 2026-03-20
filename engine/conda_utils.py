@@ -17,6 +17,45 @@ from pathlib import Path
 CONDA_CMD = os.environ.get("CONDA_EXE", "conda")
 
 
+def get_current_env():
+    """Get the name of the currently active conda environment.
+
+    Uses ``conda info --json`` as the single source of truth. Compares
+    the running interpreter's prefix (sys.prefix) against conda's
+    known environment paths to determine the active environment.
+
+    Works reliably on Windows, macOS, and Linux — including the base
+    environment, which is not listed under ``envs/`` and cannot be
+    identified by path parsing alone.
+
+    Returns
+    -------
+    str
+        Environment name (e.g. "myenv", "base") if the current Python
+        belongs to a conda environment, or "local" otherwise.
+    """
+    import sys
+
+    try:
+        info = get_conda_info()
+    except FileNotFoundError:
+        return "local"
+
+    current_prefix = Path(sys.prefix).resolve()
+    root_prefix = Path(info.get("root_prefix", "")).resolve()
+
+    # Base environment: sys.prefix matches root_prefix
+    if current_prefix == root_prefix:
+        return "base"
+
+    # Named environment: match sys.prefix against known env paths
+    for env_path in info.get("envs", []):
+        if Path(env_path).resolve() == current_prefix:
+            return Path(env_path).name
+
+    return "local"
+
+
 def get_conda_info():
     """Get conda configuration via 'conda info --json'.
 
