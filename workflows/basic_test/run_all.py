@@ -1,5 +1,5 @@
 """
-Run all tests: engine unit tests + integration pipeline tests.
+Run all v3 engine tests: pytest suite + integration pipeline tests.
 
 Automatically sets up test environments before running,
 and cleans them up afterwards. Writes a detailed log file
@@ -9,6 +9,12 @@ Usage:
     python run_all.py
     python run_all.py --keep-envs    # do not clean up after
     python run_all.py --skip-setup   # assume envs already exist
+
+Test phases:
+    1. Environment setup    (conda envs for isolation tests)
+    2. Pytest suite         (108 tests: unit, integration, stress)
+    3. Pipeline YAML tests  (9 pipelines via run_pipeline API)
+    4. Cleanup              (remove conda envs)
 """
 
 import io
@@ -26,7 +32,8 @@ from pathlib import Path
 try:
     import yaml
 except ModuleNotFoundError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
+    subprocess.check_call(
+        [sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
 
 ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(ROOT))
@@ -119,7 +126,6 @@ def system_info():
         ("Working dir", str(ROOT)),
     ]
 
-    # Conda
     conda_exe = os.environ.get("CONDA_EXE", "")
     if conda_exe:
         try:
@@ -131,7 +137,6 @@ def system_info():
         except Exception:
             info.append(("Conda", conda_exe))
 
-    # Engine version
     try:
         import engine
         info.append(("Engine", engine.__version__))
@@ -169,7 +174,6 @@ def _get_conda_exe():
     conda_exe = os.environ.get("CONDA_EXE", "")
     if conda_exe and Path(conda_exe).exists():
         return conda_exe
-    # Fallback: try importing from engine
     try:
         from engine.conda_utils import get_conda_info, get_conda_exe
         return get_conda_exe(get_conda_info())
@@ -180,86 +184,68 @@ def _get_conda_exe():
 TEST_ENV = "SMART--basic_test--env_a"
 
 
-def run_unit_tests():
-    """Run engine unit tests via unittest in the test environment."""
+def run_pytest():
+    """Run the engine pytest suite, streaming filtered output to console."""
     test_file = ROOT / "engine" / "test_engine.py"
     conda = _get_conda_exe()
 
     cmd = [conda, "run", "--no-capture-output", "-n", TEST_ENV,
-           "python", "-m", "unittest", "discover",
-           "-s", str(ROOT / "engine"), "-p", "test_engine.py",
-           "-t", str(ROOT), "-v"]
+           "python", "-m", "pytest", str(test_file),
+           "-v", "--tb=short"]
 
-    # Stream filtered output to console, capture everything for log
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, env=env,
     )
+
     lines = []
     current_class = ""
-    pending_test = None  # (test_name, cls) waiting for result
 
     for line in lines_iter(proc):
         lines.append(line)
 
-        # Detect test start: "test_name (engine.test_engine.Class)"
-        m_start = re.match(
-            r"(\w+) \(engine\.test_engine\.(\w+)\)", line)
-        if m_start:
-            pending_test = (m_start.group(1), m_start.group(2))
-
-        # Detect result at end of line: "... ok" / "... FAIL" / "... ERROR"
-        m_result = re.search(r"\.\.\. (ok|FAIL|ERROR|skipped\b.*)", line)
-        if m_result and pending_test:
-            test_name, cls = pending_test
-            status = m_result.group(1)
+        # Detect pytest verbose output: "path::Class::test ... STATUS"
+        m = re.match(r".*::(\w+)::(\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)", line)
+        if m:
+            cls, test, status = m.group(1), m.group(2), m.group(3)
             if cls != current_class:
                 current_class = cls
                 print(f"\n    {cls}")
-            if status == "ok":
-                icon = "ok"
-            elif status.startswith("skipped"):
-                icon = "skip"
-            else:
-                icon = f"** {status.upper()} **"
-            print(f"      {test_name:<45s} {icon}")
-            pending_test = None
+            icons = {"PASSED": "ok", "FAILED": "** FAIL **",
+                     "ERROR": "** ERROR **", "SKIPPED": "skip"}
+            print(f"      {test:<50s} {icons.get(status, status)}")
 
-        # Show the summary line
-        elif line.startswith("Ran ") or line.startswith("OK") or \
-                line.startswith("FAILED"):
-            print(f"    {line}")
+        # Show summary lines
+        elif line.startswith("=") and ("passed" in line or "failed" in line
+                                        or "error" in line):
+            print(f"    {line.strip()}")
 
     proc.wait()
-    output = "".join(l + "\n" for l in lines)
+    output = "\n".join(lines)
 
-    # Parse summary: "Ran 95 tests in 57.83s" and "OK" / "FAILED (failures=N)"
-    passed = failed = skipped = 0
-    total = 0
-    for line in output.splitlines():
-        m_ran = re.search(r"Ran (\d+) test", line)
-        if m_ran:
-            total = int(m_ran.group(1))
-        m_fail = re.search(r"FAILED \(.*?failures=(\d+)", line)
-        if m_fail:
-            failed += int(m_fail.group(1))
-        m_err = re.search(r"FAILED \(.*?errors=(\d+)", line)
-        if m_err:
-            failed += int(m_err.group(1))
-        m_skip = re.search(r"(?:OK|FAILED).*?skipped=(\d+)", line)
-        if m_skip:
-            skipped = int(m_skip.group(1))
+    # Parse summary: "X passed, Y failed, Z skipped in Ns"
+    passed = failed = skipped = total = 0
+    m_summary = re.search(
+        r"(\d+) passed", output)
+    if m_summary:
+        passed = int(m_summary.group(1))
+    m_fail = re.search(r"(\d+) failed", output)
+    if m_fail:
+        failed = int(m_fail.group(1))
+    m_skip = re.search(r"(\d+) skipped", output)
+    if m_skip:
+        skipped = int(m_skip.group(1))
 
-    passed = total - failed - skipped
+    total = passed + failed + skipped
     ok = proc.returncode == 0
 
     return passed, failed, skipped, total, ok, output
 
 
 def run_pipeline_tests(log, base):
-    """Run integration pipeline tests. Returns list of (name, ok, detail)."""
+    """Run integration pipeline tests via run_pipeline(). Returns results."""
     results = []
 
     for i, (name, yaml_file, should_pass, description) in enumerate(
@@ -272,7 +258,6 @@ def run_pipeline_tests(log, base):
         error_msg = ""
         detail = ""
 
-        # Capture engine output
         capture = io.StringIO()
         old_stdout = sys.stdout
         sys.stdout = capture
@@ -317,7 +302,7 @@ def run_pipeline_tests(log, base):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run all SMART Analysis tests")
+        description="Run all SMART Analysis v3 tests")
     parser.add_argument(
         "--keep-envs", action="store_true",
         help="Do not clean up environments after tests",
@@ -337,27 +322,26 @@ def main():
 
     log()
     log("=" * WIDTH)
-    log("  SMART Analysis -- Full Test Suite")
+    log("  SMART Analysis v3 -- Full Test Suite")
     log("=" * WIDTH)
     log()
 
-    # System info
     sysinfo = system_info()
     for label, value in sysinfo:
         log(f"  {label + ':':<20s} {value}")
     log()
 
-    # State for results (populated by test phases)
     setup_output = ""
     cleanup_output = ""
-    ut_passed = ut_failed = ut_skipped = ut_total = 0
-    ut_ok = False
-    ut_output = ""
-    pt_results = []
+    pt_passed = pt_failed = pt_skipped = pt_total = 0
+    pt_ok = False
+    pt_output = ""
+    yaml_results = []
+
     try:
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
         # Phase 1: Environment Setup
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
         if not args.skip_setup:
             log("=" * WIDTH)
             log("  Phase 1: Environment Setup")
@@ -370,49 +354,47 @@ def main():
             else:
                 log("  [FAIL]    Environment setup failed. Cannot run tests.")
                 raise SystemExit(1)
-
             log()
         else:
             log("  (environment setup skipped)")
             log()
 
-        # --------------------------------------------------------------
-        # Phase 2: Engine Unit Tests
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
+        # Phase 2: Pytest Suite (unit + integration + stress)
+        # ──────────────────────────────────────────────────────
         log("=" * WIDTH)
-        log("  Phase 2: Engine Unit Tests")
+        log("  Phase 2: Pytest Suite")
         log("=" * WIDTH)
         log()
 
-        ut_passed, ut_failed, ut_skipped, ut_total, ut_ok, ut_output = \
-            run_unit_tests()
+        pt_passed, pt_failed, pt_skipped, pt_total, pt_ok, pt_output = \
+            run_pytest()
 
-        if ut_ok:
-            log(f"  [ OK ]    {ut_passed}/{ut_total} passed"
-                + (f" ({ut_skipped} skipped)" if ut_skipped else ""))
+        if pt_ok:
+            log(f"  [ OK ]    {pt_passed}/{pt_total} passed"
+                + (f" ({pt_skipped} skipped)" if pt_skipped else ""))
         else:
-            log(f"  [FAIL]    {ut_passed} passed, {ut_failed} failed"
-                f" out of {ut_total}")
+            log(f"  [FAIL]    {pt_passed} passed, {pt_failed} failed"
+                f" out of {pt_total}")
             log()
-            for line in ut_output.splitlines():
+            for line in pt_output.splitlines():
                 if "FAILED" in line:
                     log(f"            {line.strip()}")
-
         log()
 
-        # --------------------------------------------------------------
-        # Phase 3: Integration Pipeline Tests
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
+        # Phase 3: Pipeline YAML Tests
+        # ──────────────────────────────────────────────────────
         log("=" * WIDTH)
-        log("  Phase 3: Integration Pipeline Tests")
+        log("  Phase 3: Pipeline YAML Tests")
         log("=" * WIDTH)
         log()
 
-        pt_results = run_pipeline_tests(log, base)
+        yaml_results = run_pipeline_tests(log, base)
 
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
         # Phase 4: Cleanup
-        # --------------------------------------------------------------
+        # ──────────────────────────────────────────────────────
         if not args.keep_envs and not args.skip_setup:
             log("=" * WIDTH)
             log("  Phase 4: Cleanup")
@@ -425,36 +407,36 @@ def main():
     except SystemExit:
         pass
 
-    # ------------------------------------------------------------------
-    # Summary (always runs, even after interrupt)
-    # ------------------------------------------------------------------
+    # ──────────────────────────────────────────────────────────
+    # Summary
+    # ──────────────────────────────────────────────────────────
     elapsed = time.time() - t_start
 
-    pt_passed = sum(1 for _, ok, _ in pt_results if ok)
-    pt_total = len(pt_results)
+    yaml_passed = sum(1 for _, ok, _ in yaml_results if ok)
+    yaml_total = len(yaml_results)
 
-    total_passed = ut_passed + pt_passed
-    total_tests = ut_total + pt_total
-    all_ok = ut_ok and (pt_passed == pt_total)
+    total_passed = pt_passed + yaml_passed
+    total_tests = pt_total + yaml_total
+    all_ok = pt_ok and (yaml_passed == yaml_total)
 
     log("=" * WIDTH)
     log("  Results")
     log("=" * WIDTH)
 
     log()
-    log(f"  Engine unit tests:     {ut_passed}/{ut_total}"
-        + (f" ({ut_skipped} skipped)" if ut_skipped else "")
-        + ("  ** FAILURES **" if not ut_ok else ""))
+    log(f"  Pytest suite:          {pt_passed}/{pt_total}"
+        + (f" ({pt_skipped} skipped)" if pt_skipped else "")
+        + ("  ** FAILURES **" if not pt_ok else ""))
 
     log()
-    for name, correct, _ in pt_results:
+    for name, correct, _ in yaml_results:
         status = "[ OK ]" if correct else "[FAIL]"
         log(f"  {status}    {name}")
 
     log()
     log(f"  {'_' * (WIDTH - 4)}")
-    log(f"  Unit tests:            {ut_passed}/{ut_total}")
-    log(f"  Pipeline tests:        {pt_passed}/{pt_total}")
+    log(f"  Pytest:                {pt_passed}/{pt_total}")
+    log(f"  Pipeline YAML:         {yaml_passed}/{yaml_total}")
     log(f"  Total:                 {total_passed}/{total_tests}")
     log(f"  Time:                  {elapsed:.0f}s")
     log()
@@ -467,39 +449,34 @@ def main():
     log()
     log("=" * WIDTH)
 
-    # ------------------------------------------------------------------
-    # Write log file (always, even after interrupt or failure)
-    # ------------------------------------------------------------------
-
+    # ──────────────────────────────────────────────────────────
+    # Detailed log file
+    # ──────────────────────────────────────────────────────────
     log.detail("")
     log.detail("")
     log.detail("=" * WIDTH)
     log.detail("  DETAILED LOG")
     log.detail("=" * WIDTH)
 
-    # System info
     log.detail("")
     log.detail("--- system ---")
     for label, value in sysinfo:
         log.detail(f"  {label}: {value}")
     log.detail("--- end system ---")
 
-    # Setup output
     if setup_output:
         log.detail("")
         log.detail("--- environment setup ---")
         log.detail(setup_output.rstrip())
         log.detail("--- end environment setup ---")
 
-    # Full pytest output
-    if ut_output:
+    if pt_output:
         log.detail("")
         log.detail("--- pytest output ---")
-        log.detail(ut_output.rstrip())
+        log.detail(pt_output.rstrip())
         log.detail("--- end pytest output ---")
 
-    # Per-pipeline detail (engine output, tracebacks)
-    for name, correct, detail in pt_results:
+    for name, correct, detail in yaml_results:
         if detail.strip():
             status = "OK" if correct else "FAIL"
             log.detail("")
@@ -507,7 +484,6 @@ def main():
             log.detail(detail.rstrip())
             log.detail(f"--- end pipeline: {name} ---")
 
-    # Cleanup output
     if cleanup_output:
         log.detail("")
         log.detail("--- cleanup ---")
