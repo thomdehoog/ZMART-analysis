@@ -65,8 +65,14 @@ PIPELINES_DIR = BASIC_TEST / "pipelines"
 # Isolation test environments (auto-detected)
 _TEST_ENV_B = "SMART--basic_test--env_b"
 _TEST_ENV_C = "SMART--basic_test--env_c"
-_ENV_B_EXISTS = (Path(sys.prefix).parent / _TEST_ENV_B).is_dir()
-_ENV_C_EXISTS = (Path(sys.prefix).parent / _TEST_ENV_C).is_dir()
+try:
+    from engine.conda_utils import get_conda_info, env_exists
+    _conda_info = get_conda_info()
+    _ENV_B_EXISTS = env_exists(_conda_info, _TEST_ENV_B)
+    _ENV_C_EXISTS = env_exists(_conda_info, _TEST_ENV_C)
+except Exception:
+    _ENV_B_EXISTS = False
+    _ENV_C_EXISTS = False
 
 # All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
@@ -92,7 +98,10 @@ def _temp_yaml(content):
     """Write a temporary YAML pipeline file to _TEMP_DIR."""
     text = textwrap.dedent(content)
     if "functions_dir" not in text:
-        header = f'metadata:\n  functions_dir: "{_TEMP_DIR}"\n'
+        # Forward slashes: valid on all platforms, avoids YAML interpreting
+        # backslashes as escape sequences on Windows.
+        functions_dir = Path(_TEMP_DIR).as_posix()
+        header = f'metadata:\n  functions_dir: "{functions_dir}"\n'
         if "metadata:" in text:
             text = text.replace("metadata:", header.rstrip("\n"), 1)
         else:
@@ -352,6 +361,67 @@ class TestWorkerPersistent(unittest.TestCase):
             r2 = w.execute({}, {}, timeout=10)
             self.assertEqual(r1["pid"], r2["pid"])
             self.assertTrue(w.is_alive())
+        finally:
+            w.shutdown()
+
+    def test_module_stays_loaded_across_calls(self):
+        """Persistent worker keeps module state warm between calls.
+
+        A module-level counter increments on each import. If the module
+        were reloaded between calls, the counter would reset to 1.
+        With a warm worker, it stays at 1 for every call because the
+        module is loaded only once.
+        """
+        from engine._worker import Worker
+        path = _temp_step("""
+            _load_count = 0
+
+            def run(pd, **p):
+                global _load_count
+                _load_count += 1
+                pd["load_count"] = _load_count
+                return pd
+        """)
+        w = Worker("local", path, oneshot=False, connect_timeout=10)
+        try:
+            r1 = w.execute({}, {}, timeout=10)
+            r2 = w.execute({}, {}, timeout=10)
+            r3 = w.execute({}, {}, timeout=10)
+            # Module loaded once, counter increments across calls
+            self.assertEqual(r1["load_count"], 1)
+            self.assertEqual(r2["load_count"], 2)
+            self.assertEqual(r3["load_count"], 3)
+        finally:
+            w.shutdown()
+
+    def test_warm_worker_faster_than_cold(self):
+        """Second call on a persistent worker is faster than the first.
+
+        The first call pays startup cost (spawn process, load module).
+        Subsequent calls skip all of that — only the run() call happens.
+        """
+        from engine._worker import Worker
+        path = _temp_step("""
+            import time
+            def run(pd, **p):
+                pd["t"] = time.monotonic()
+                return pd
+        """)
+        w = Worker("local", path, oneshot=False, connect_timeout=10)
+        try:
+            # First call: cold start (spawn + connect + load + run)
+            t0 = time.monotonic()
+            w.execute({}, {}, timeout=10)
+            cold = time.monotonic() - t0
+
+            # Second call: warm (run only)
+            t0 = time.monotonic()
+            w.execute({}, {}, timeout=10)
+            warm = time.monotonic() - t0
+
+            self.assertLess(warm, cold,
+                            f"Warm call ({warm:.3f}s) should be faster "
+                            f"than cold start ({cold:.3f}s)")
         finally:
             w.shutdown()
 

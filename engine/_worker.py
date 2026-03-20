@@ -117,9 +117,16 @@ class Worker:
         logger.debug("Worker spawning: env=%s, step=%s, oneshot=%s, port=%d",
                      self.environment, step_name, self.oneshot, port)
 
+        # On Windows, isolate the worker in its own process group so that
+        # terminating it never sends CTRL_C_EVENT to the parent console.
+        kwargs = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
         try:
             self._process = subprocess.Popen(
                 cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                **kwargs,
             )
         except Exception as e:
             logger.error("Worker spawn failed for env=%s, step=%s: %s",

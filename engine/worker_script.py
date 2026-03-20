@@ -63,7 +63,24 @@ def load_step_module(step_path):
 
 
 def parent_alive(parent_pid):
-    """Check if the parent process is still running."""
+    """Check if the parent process is still running.
+
+    On Unix, os.kill(pid, 0) is the standard check — signal 0 tests
+    process existence without sending a real signal.
+
+    On Windows, signal 0 maps to CTRL_C_EVENT, which would send an
+    actual interrupt to the parent's console group. Instead, use
+    kernel32.OpenProcess to test process existence without side effects.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(
+            SYNCHRONIZE, False, parent_pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
     try:
         os.kill(parent_pid, 0)
         return True
