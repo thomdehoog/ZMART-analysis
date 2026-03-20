@@ -1849,6 +1849,976 @@ class TestStress(unittest.TestCase):
             self.assertIn("idx", r)
 
 
+# ── Performance verification ──────────────────────────────────
+
+
+class TestPerformance(unittest.TestCase):
+    """Verify that concurrency, warm workers, and isolation provide
+    measurable performance characteristics."""
+
+    def test_concurrent_faster_than_sequential(self):
+        """Concurrent submission of independent jobs is faster than serial."""
+        _temp_step("""
+            import time
+            def run(pd, **p):
+                time.sleep(0.2)
+                pd["done"] = True
+                return pd
+        """, name="perf_conc")
+        yaml = _temp_yaml("wf:\n  - perf_conc:")
+
+        from engine import PipelineEngine
+        n = 5
+
+        # Sequential
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            t0 = time.monotonic()
+            for i in range(n):
+                run.submit(f"seq_{i}", {}).result(timeout=30)
+            t_seq = time.monotonic() - t0
+
+        # Concurrent
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            t0 = time.monotonic()
+            futures = [run.submit(f"par_{i}", {}) for i in range(n)]
+            for f in futures:
+                f.result(timeout=30)
+            t_par = time.monotonic() - t0
+
+        self.assertLess(t_par, t_seq * 0.7,
+                        f"Parallel ({t_par:.2f}s) should be significantly "
+                        f"faster than sequential ({t_seq:.2f}s)")
+
+    def test_persistent_worker_warm_start(self):
+        """Second call on a persistent worker is faster than the first."""
+        from engine._worker import Worker
+        path = _temp_step("""
+            import time
+            def run(pd, **p):
+                pd["t"] = time.monotonic()
+                return pd
+        """)
+        w = Worker("local", oneshot=False, connect_timeout=10)
+        try:
+            t0 = time.monotonic()
+            w.execute(path, {}, {}, timeout=10)
+            cold = time.monotonic() - t0
+
+            t0 = time.monotonic()
+            w.execute(path, {}, {}, timeout=10)
+            warm = time.monotonic() - t0
+
+            self.assertLess(warm, cold,
+                            f"Warm ({warm:.3f}s) should be faster "
+                            f"than cold ({cold:.3f}s)")
+        finally:
+            w.shutdown()
+
+    def test_minimal_faster_than_maximal(self):
+        """Minimal isolation avoids subprocess overhead for local steps."""
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="perf_iso")
+
+        current_env = Path(sys.prefix).name
+        functions_dir = Path(_TEMP_DIR).as_posix()
+
+        def make_yaml(isolation):
+            content = (
+                f'metadata:\n'
+                f'  functions_dir: "{functions_dir}"\n'
+                f'  isolation: {isolation}\n'
+                f'  environment: "{current_env}"\n'
+                f'wf:\n'
+                f'  - perf_iso:\n'
+            )
+            p = Path(_TEMP_DIR) / f"perf_{isolation}_{_next_id()}.yaml"
+            p.write_text(content)
+            return str(p)
+
+        yaml_min = make_yaml("minimal")
+        yaml_max = make_yaml("maximal")
+        n = 3
+
+        from engine import PipelineEngine
+
+        # Minimal
+        with PipelineEngine() as e:
+            run = e.create_run(yaml_min)
+            t0 = time.monotonic()
+            for i in range(n):
+                run.submit(f"min_{i}", {}).result(timeout=30)
+            t_min = time.monotonic() - t0
+
+        # Maximal (forces subprocess for every step)
+        with PipelineEngine() as e:
+            run = e.create_run(yaml_max)
+            t0 = time.monotonic()
+            for i in range(n):
+                run.submit(f"max_{i}", {}).result(timeout=30)
+            t_max = time.monotonic() - t0
+
+        self.assertLess(t_min, t_max,
+                        f"Minimal ({t_min:.2f}s) should be faster "
+                        f"than maximal ({t_max:.2f}s)")
+
+
+# ── Concurrency correctness ──────────────────────────────────
+
+
+class TestConcurrencyCorrectness(unittest.TestCase):
+    """Verify data isolation, thread safety, and absence of race conditions."""
+
+    def test_no_data_cross_contamination(self):
+        """Concurrent jobs must not leak data between each other."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["unique"] = pd["input"]["secret"]
+                return pd
+        """, name="cc_iso")
+        yaml = _temp_yaml("wf:\n  - cc_iso:")
+
+        from engine import PipelineEngine
+        n = 20
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            futures = [
+                run.submit(f"j{i}", {"secret": f"value_{i}"})
+                for i in range(n)
+            ]
+            results = [f.result(timeout=30) for f in futures]
+
+        for i, r in enumerate(results):
+            self.assertEqual(r["unique"], f"value_{i}",
+                             f"Job {i} got wrong data: {r['unique']}")
+
+    def test_scope_accumulation_thread_safe(self):
+        """Many concurrent jobs accumulating into the same scope group."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="cc_acc")
+        _temp_step("""
+            def run(pd, **p):
+                pd["values"] = sorted(r["v"] for r in pd["results"])
+                return pd
+        """, name="cc_coll")
+        yaml = _temp_yaml("""
+            wf:
+              - cc_acc:
+              - cc_coll:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        n = 30
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            for i in range(n):
+                run.submit(f"j{i}", {"v": i}, spatial={"r": "G"})
+            r = run.scope_complete(spatial={"r": "G"}).result(timeout=60)
+
+        self.assertEqual(r["values"], list(range(n)))
+
+    def test_submit_and_scope_complete_race(self):
+        """scope_complete waits for jobs still running Phase 0."""
+        _temp_step("""
+            import time
+            def run(pd, **p):
+                time.sleep(0.3)
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="cc_race")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="cc_race_coll")
+        yaml = _temp_yaml("""
+            wf:
+              - cc_race:
+              - cc_race_coll:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {"v": 10}, spatial={"r": "X"})
+            run.submit("j2", {"v": 20}, spatial={"r": "X"})
+            # Call scope_complete immediately — jobs still running
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=30)
+
+        self.assertEqual(r["sum"], 30)
+
+    def test_concurrent_scope_completes_different_groups(self):
+        """Multiple scope_complete calls for different groups simultaneously."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["g"] = pd["input"]["g"]
+                return pd
+        """, name="cc_csc1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["total"] = sum(r["g"] for r in pd["results"])
+                return pd
+        """, name="cc_csc2")
+        yaml = _temp_yaml("""
+            wf:
+              - cc_csc1:
+              - cc_csc2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        n_groups = 10
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+            for g in range(n_groups):
+                for j in range(3):
+                    run.submit(f"g{g}_j{j}", {"g": g},
+                               spatial={"r": str(g)})
+
+            # Fire all scope_completes concurrently
+            scope_futures = [
+                run.scope_complete(spatial={"r": str(g)})
+                for g in range(n_groups)
+            ]
+            results = [f.result(timeout=60) for f in scope_futures]
+
+        for g, r in enumerate(results):
+            self.assertEqual(r["total"], g * 3)
+
+    def test_pipeline_data_not_shared_between_jobs(self):
+        """In-place mutations in one job don't affect another."""
+        _temp_step("""
+            def run(pd, **p):
+                # Mutate input in-place (bad practice, but should be safe)
+                pd["input"]["mutated"] = True
+                pd["saw_mutated"] = pd["input"].get("mutated")
+                return pd
+        """, name="cc_mut")
+        yaml = _temp_yaml("wf:\n  - cc_mut:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            f1 = run.submit("j1", {"key": "a"})
+            f2 = run.submit("j2", {"key": "b"})
+            r1 = f1.result(timeout=10)
+            r2 = f2.result(timeout=10)
+
+        # Each job saw its own mutation, not the other's
+        self.assertEqual(r1["input"]["key"], "a")
+        self.assertEqual(r2["input"]["key"], "b")
+
+
+# ── Scope boundary edge cases ────────────────────────────────
+
+
+class TestScopeBoundaryEdgeCases(unittest.TestCase):
+    """Edge cases at scope boundaries: single jobs, large accumulations,
+    order preservation, degenerate cases."""
+
+    def test_single_job_scope(self):
+        """Scope with only one job — results list has one element."""
+        _temp_step("def run(pd, **p): pd['v'] = 1; return pd",
+                   name="sb_s1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["n"] = len(pd["results"])
+                pd["v"] = pd["results"][0]["v"]
+                return pd
+        """, name="sb_s2")
+        yaml = _temp_yaml("""
+            wf:
+              - sb_s1:
+              - sb_s2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("only", {}, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=10)
+
+        self.assertEqual(r["n"], 1)
+        self.assertEqual(r["v"], 1)
+
+    def test_submission_order_preserved(self):
+        """Results list at scope boundary preserves submission order."""
+        _temp_step("""
+            import time
+            def run(pd, **p):
+                # Varying delays to test that order isn't affected by speed
+                time.sleep(0.05 * (5 - pd["input"]["idx"]))
+                pd["idx"] = pd["input"]["idx"]
+                return pd
+        """, name="sb_ord1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["order"] = [r["idx"] for r in pd["results"]]
+                return pd
+        """, name="sb_ord2")
+        yaml = _temp_yaml("""
+            wf:
+              - sb_ord1:
+              - sb_ord2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for i in range(6):
+                run.submit(f"j{i}", {"idx": i}, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=30)
+
+        self.assertEqual(r["order"], [0, 1, 2, 3, 4, 5])
+
+    def test_large_accumulation(self):
+        """100 jobs accumulated at a scope boundary."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="sb_lg1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["count"] = len(pd["results"])
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="sb_lg2")
+        yaml = _temp_yaml("""
+            wf:
+              - sb_lg1:
+              - sb_lg2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        n = 100
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+            for i in range(n):
+                run.submit(f"j{i}", {"v": i}, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=120)
+
+        self.assertEqual(r["count"], n)
+        self.assertEqual(r["sum"], sum(range(n)))
+
+    def test_scope_with_empty_input(self):
+        """Jobs with empty input accumulate correctly."""
+        _temp_step("def run(pd, **p): pd['x'] = 1; return pd",
+                   name="sb_ei1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["n"] = len(pd["results"])
+                return pd
+        """, name="sb_ei2")
+        yaml = _temp_yaml("""
+            wf:
+              - sb_ei1:
+              - sb_ei2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {}, spatial={"r": "X"})
+            run.submit("j2", None, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=10)
+
+        self.assertEqual(r["n"], 2)
+
+    def test_unequal_scope_groups(self):
+        """Scope groups with different numbers of jobs."""
+        _temp_step("def run(pd, **p): pd['v'] = 1; return pd",
+                   name="sb_ug1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["count"] = len(pd["results"])
+                return pd
+        """, name="sb_ug2")
+        yaml = _temp_yaml("""
+            wf:
+              - sb_ug1:
+              - sb_ug2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            # Group A: 1 job, Group B: 5 jobs
+            run.submit("a1", {}, spatial={"r": "A"})
+            for i in range(5):
+                run.submit(f"b{i}", {}, spatial={"r": "B"})
+
+            ra = run.scope_complete(spatial={"r": "A"}).result(timeout=30)
+            rb = run.scope_complete(spatial={"r": "B"}).result(timeout=30)
+
+        self.assertEqual(ra["count"], 1)
+        self.assertEqual(rb["count"], 5)
+
+
+# ── Error handling under concurrency ─────────────────────────
+
+
+class TestErrorsUnderConcurrency(unittest.TestCase):
+    """Error handling in concurrent and scoped contexts."""
+
+    def test_mid_pipeline_failure(self):
+        """Step 2 of 4 fails — steps 3 and 4 never run."""
+        _temp_step("def run(pd, **p): pd['s1'] = True; return pd",
+                   name="euc_s1")
+        _temp_step('def run(pd, **p): raise ValueError("step2 boom")',
+                   name="euc_s2")
+        _temp_step("def run(pd, **p): pd['s3'] = True; return pd",
+                   name="euc_s3")
+        _temp_step("def run(pd, **p): pd['s4'] = True; return pd",
+                   name="euc_s4")
+        yaml = _temp_yaml("""
+            wf:
+              - euc_s1:
+              - euc_s2:
+              - euc_s3:
+              - euc_s4:
+        """)
+
+        from engine import run_pipeline
+        with self.assertRaises(ValueError) as ctx:
+            run_pipeline(yaml, "t", {})
+        self.assertIn("step2 boom", str(ctx.exception))
+
+    def test_one_job_fails_others_succeed(self):
+        """In concurrent jobs, one failure doesn't affect others."""
+        _temp_step("""
+            def run(pd, **p):
+                if pd["input"].get("fail"):
+                    raise RuntimeError("intentional")
+                pd["ok"] = True
+                return pd
+        """, name="euc_part")
+        yaml = _temp_yaml("wf:\n  - euc_part:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            f_good1 = run.submit("good1", {"fail": False})
+            f_bad = run.submit("bad", {"fail": True})
+            f_good2 = run.submit("good2", {"fail": False})
+
+            self.assertTrue(f_good1.result(timeout=10)["ok"])
+            with self.assertRaises(RuntimeError):
+                f_bad.result(timeout=10)
+            self.assertTrue(f_good2.result(timeout=10)["ok"])
+
+    def test_error_in_scoped_step(self):
+        """Error during scoped phase execution is propagated."""
+        _temp_step("def run(pd, **p): pd['v'] = 1; return pd",
+                   name="euc_es1")
+        _temp_step("""
+            def run(pd, **p):
+                raise ValueError("scoped step failed")
+        """, name="euc_es2")
+        yaml = _temp_yaml("""
+            wf:
+              - euc_es1:
+              - euc_es2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {}, spatial={"r": "X"})
+            with self.assertRaises(ValueError):
+                run.scope_complete(spatial={"r": "X"}).result(timeout=10)
+
+    def test_wrong_return_type_in_scoped_phase(self):
+        """Non-dict return in a scoped step raises TypeError."""
+        _temp_step("def run(pd, **p): pd['v'] = 1; return pd",
+                   name="euc_rt1")
+        _temp_step("def run(pd, **p): return [1, 2, 3]",
+                   name="euc_rt2")
+        yaml = _temp_yaml("""
+            wf:
+              - euc_rt1:
+              - euc_rt2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {}, spatial={"r": "X"})
+            with self.assertRaises(TypeError):
+                run.scope_complete(spatial={"r": "X"}).result(timeout=10)
+
+    def test_scope_complete_after_job_failure(self):
+        """scope_complete propagates failure if a job in the group failed."""
+        _temp_step("""
+            def run(pd, **p):
+                if pd["input"].get("fail"):
+                    raise RuntimeError("job failed")
+                pd["v"] = 1
+                return pd
+        """, name="euc_sf")
+        _temp_step("def run(pd, **p): return pd", name="euc_sf2")
+        yaml = _temp_yaml("""
+            wf:
+              - euc_sf:
+              - euc_sf2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("good", {"fail": False}, spatial={"r": "X"})
+            run.submit("bad", {"fail": True}, spatial={"r": "X"})
+            with self.assertRaises(RuntimeError):
+                run.scope_complete(spatial={"r": "X"}).result(timeout=10)
+
+
+# ── Worker lifecycle under load ───────────────────────────────
+
+
+class TestWorkerLifecycle(unittest.TestCase):
+    """Worker behavior under realistic load patterns."""
+
+    def test_ten_step_pipeline(self):
+        """Pipeline with 10 sequential steps completes correctly."""
+        for i in range(10):
+            _temp_step(f"""
+                def run(pd, **p):
+                    pd["step_{i}"] = pd.get("step_{i-1}", 0) + 1 if {i} > 0 else 1
+                    return pd
+            """, name=f"wl_s{i}")
+        steps = "\n".join(f"  - wl_s{i}:" for i in range(10))
+        yaml = _temp_yaml(f"wf:\n{steps}")
+
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", {})
+        self.assertEqual(r["step_9"], 10)
+
+    def test_large_data_through_pipeline(self):
+        """Large dict flows through multiple steps without corruption."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["big"] = list(range(10000))
+                return pd
+        """, name="wl_big1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(pd["big"])
+                pd["len"] = len(pd["big"])
+                return pd
+        """, name="wl_big2")
+        yaml = _temp_yaml("wf:\n  - wl_big1:\n  - wl_big2:")
+
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", {})
+        self.assertEqual(r["len"], 10000)
+        self.assertEqual(r["sum"], sum(range(10000)))
+
+    def test_worker_crash_recovery_multi_job(self):
+        """Worker recovers from crash and processes subsequent jobs."""
+        from engine._worker import Worker
+        path = _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid"] = os.getpid()
+                return pd
+        """)
+        w = Worker("local", oneshot=False, connect_timeout=10)
+        try:
+            r1 = w.execute(path, {}, {}, timeout=10)
+            pid1 = r1["pid"]
+
+            # Kill the worker
+            w._process.kill()
+            w._process.wait()
+            self.assertFalse(w.is_alive())
+
+            # Should auto-respawn on next call
+            r2 = w.execute(path, {}, {}, timeout=10)
+            self.assertNotEqual(r2["pid"], pid1)
+
+            # Third call should reuse the respawned worker
+            r3 = w.execute(path, {}, {}, timeout=10)
+            self.assertEqual(r3["pid"], r2["pid"])
+        finally:
+            w.shutdown()
+
+    def test_params_vary_per_step(self):
+        """Different params for each step are correctly delivered."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["a_val"] = p.get("x")
+                return pd
+        """, name="wl_pa")
+        _temp_step("""
+            def run(pd, **p):
+                pd["b_val"] = p.get("y")
+                return pd
+        """, name="wl_pb")
+        _temp_step("""
+            def run(pd, **p):
+                pd["c_val"] = p.get("z")
+                return pd
+        """, name="wl_pc")
+        yaml = _temp_yaml("""
+            wf:
+              - wl_pa:
+                  x: 10
+              - wl_pb:
+                  y: 20
+              - wl_pc:
+                  z: 30
+        """)
+
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", {})
+        self.assertEqual(r["a_val"], 10)
+        self.assertEqual(r["b_val"], 20)
+        self.assertEqual(r["c_val"], 30)
+
+
+# ── Real-world pattern simulations ───────────────────────────
+
+
+class TestRealWorldPatterns(unittest.TestCase):
+    """Simulations of real microscopy analysis workflows."""
+
+    def test_tile_grid_stitch(self):
+        """Simulate 3x3 tile grid → segment → stitch."""
+        _temp_step("""
+            def run(pd, **p):
+                row, col = pd["input"]["row"], pd["input"]["col"]
+                pd["mask"] = [[row * 3 + col] * 3] * 3
+                return pd
+        """, name="rw_seg")
+        _temp_step("""
+            def run(pd, **p):
+                tiles = pd["results"]
+                grid = {}
+                for t in tiles:
+                    r, c = t["input"]["row"], t["input"]["col"]
+                    grid[(r, c)] = t["mask"][0][0]
+                pd["stitched"] = grid
+                pd["n_tiles"] = len(tiles)
+                return pd
+        """, name="rw_stitch")
+        yaml = _temp_yaml("""
+            wf:
+              - rw_seg:
+              - rw_stitch:
+                  scope:
+                    spatial: region
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for row in range(3):
+                for col in range(3):
+                    run.submit(f"tile_{row}_{col}",
+                               {"row": row, "col": col},
+                               spatial={"region": "R1"})
+            r = run.scope_complete(
+                spatial={"region": "R1"}).result(timeout=30)
+
+        self.assertEqual(r["n_tiles"], 9)
+        self.assertEqual(r["stitched"][(0, 0)], 0)
+        self.assertEqual(r["stitched"][(2, 2)], 8)
+
+    def test_timepoint_series_tracking(self):
+        """Simulate T timepoints → detect → track across time.
+
+        All timepoints share the same scope key so they accumulate together.
+        """
+        _temp_step("""
+            def run(pd, **p):
+                t = pd["input"]["t"]
+                pd["detections"] = [{"x": t * 10 + i, "y": i}
+                                    for i in range(3)]
+                return pd
+        """, name="rw_det")
+        _temp_step("""
+            def run(pd, **p):
+                all_dets = []
+                for r in pd["results"]:
+                    all_dets.append(r["detections"])
+                pd["tracks"] = {
+                    "n_timepoints": len(all_dets),
+                    "total_detections": sum(len(d) for d in all_dets),
+                }
+                return pd
+        """, name="rw_track")
+        yaml = _temp_yaml("""
+            wf:
+              - rw_det:
+              - rw_track:
+                  scope:
+                    temporal: series
+        """)
+
+        from engine import PipelineEngine
+        n_timepoints = 5
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for t in range(n_timepoints):
+                run.submit(f"t{t}", {"t": t},
+                           temporal={"series": "S1"})
+            r = run.scope_complete(
+                temporal={"series": "S1"}).result(timeout=30)
+
+        self.assertEqual(r["tracks"]["n_timepoints"], n_timepoints)
+        self.assertEqual(r["tracks"]["total_detections"], n_timepoints * 3)
+
+    def test_overview_target_interleaved(self):
+        """Simulate interleaved overview and target analysis runs."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["analyzed"] = {
+                    "type": pd["input"]["type"],
+                    "id": pd["input"]["id"],
+                }
+                return pd
+        """, name="rw_analyze")
+        yaml = _temp_yaml("wf:\n  - rw_analyze:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            ov = e.create_run(yaml, priority="high")
+            tg = e.create_run(yaml)
+
+            # Interleave submissions
+            futures = []
+            for i in range(5):
+                futures.append(("overview",
+                    ov.submit(f"ov_{i}", {"type": "overview", "id": i})))
+                futures.append(("target",
+                    tg.submit(f"tg_{i}", {"type": "target", "id": i})))
+
+            for expected_type, f in futures:
+                r = f.result(timeout=30)
+                self.assertEqual(r["analyzed"]["type"], expected_type)
+
+    def test_overview_target_with_scopes(self):
+        """Interleaved runs where overview has scopes and target doesn't."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="rw_ots1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["total"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="rw_ots2")
+        yaml_ov = _temp_yaml("""
+            wf:
+              - rw_ots1:
+              - rw_ots2:
+                  scope:
+                    spatial: region
+        """)
+
+        _temp_step("""
+            def run(pd, **p):
+                pd["target_result"] = pd["input"]["pos"]
+                return pd
+        """, name="rw_ott")
+        yaml_tg = _temp_yaml("wf:\n  - rw_ott:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            ov = e.create_run(yaml_ov, priority="high")
+            tg = e.create_run(yaml_tg)
+
+            # Submit overview tiles
+            ov.submit("ov1", {"v": 10}, spatial={"region": "R1"})
+            ov.submit("ov2", {"v": 20}, spatial={"region": "R1"})
+
+            # Submit target (no scope)
+            f_tg = tg.submit("tg1", {"pos": "A1"})
+
+            # Complete overview scope
+            f_ov = ov.scope_complete(spatial={"region": "R1"})
+
+            r_ov = f_ov.result(timeout=30)
+            r_tg = f_tg.result(timeout=30)
+
+        self.assertEqual(r_ov["total"], 30)
+        self.assertEqual(r_tg["target_result"], "A1")
+
+    def test_multi_region_multi_timepoint(self):
+        """Multiple regions × multiple timepoints, each with scope completion."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["data"] = {
+                    "region": pd["input"]["region"],
+                    "tile": pd["input"]["tile"],
+                }
+                return pd
+        """, name="rw_mrmt1")
+        _temp_step("""
+            def run(pd, **p):
+                tiles = [r["data"]["tile"] for r in pd["results"]]
+                pd["region_result"] = {
+                    "n_tiles": len(tiles),
+                    "tiles": sorted(tiles),
+                }
+                return pd
+        """, name="rw_mrmt2")
+        yaml = _temp_yaml("""
+            wf:
+              - rw_mrmt1:
+              - rw_mrmt2:
+                  scope:
+                    spatial: region
+        """)
+
+        from engine import PipelineEngine
+        regions = ["R1", "R2", "R3"]
+        tiles_per_region = 4
+
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+
+            for region in regions:
+                for tile in range(tiles_per_region):
+                    run.submit(
+                        f"{region}_t{tile}",
+                        {"region": region, "tile": tile},
+                        spatial={"region": region},
+                    )
+
+            results = {}
+            for region in regions:
+                r = run.scope_complete(
+                    spatial={"region": region}).result(timeout=30)
+                results[region] = r["region_result"]
+
+        for region in regions:
+            self.assertEqual(results[region]["n_tiles"], tiles_per_region)
+            self.assertEqual(results[region]["tiles"],
+                             list(range(tiles_per_region)))
+
+
+# ── Extended stress tests ─────────────────────────────────────
+
+
+class TestStressExtended(unittest.TestCase):
+    """Additional stress tests for edge conditions under high load."""
+
+    def test_100_jobs_scope_complete(self):
+        """100 jobs into a single scope group."""
+        _temp_step("def run(pd, **p): pd['v'] = pd['input']['v']; return pd",
+                   name="sx_100a")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                pd["n"] = len(pd["results"])
+                return pd
+        """, name="sx_100b")
+        yaml = _temp_yaml("""
+            wf:
+              - sx_100a:
+              - sx_100b:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        n = 100
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+            for i in range(n):
+                run.submit(f"j{i}", {"v": i}, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=120)
+
+        self.assertEqual(r["n"], n)
+        self.assertEqual(r["sum"], sum(range(n)))
+
+    def test_many_single_job_scopes(self):
+        """50 scope groups, each with exactly 1 job."""
+        _temp_step("def run(pd, **p): pd['v'] = pd['input']['v']; return pd",
+                   name="sx_single1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["result"] = pd["results"][0]["v"]
+                return pd
+        """, name="sx_single2")
+        yaml = _temp_yaml("""
+            wf:
+              - sx_single1:
+              - sx_single2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        n = 50
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+            for i in range(n):
+                run.submit(f"j{i}", {"v": i}, spatial={"r": str(i)})
+            futures = [
+                run.scope_complete(spatial={"r": str(i)})
+                for i in range(n)
+            ]
+            results = [f.result(timeout=60) for f in futures]
+
+        for i, r in enumerate(results):
+            self.assertEqual(r["result"], i)
+
+    def test_rapid_engine_create_destroy(self):
+        """Create and destroy engines rapidly — no resource leaks."""
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="sx_rapid")
+        yaml = _temp_yaml("wf:\n  - sx_rapid:")
+
+        from engine import PipelineEngine
+        for _ in range(10):
+            with PipelineEngine() as e:
+                r = e.create_run(yaml).submit("t", {}).result(timeout=10)
+                self.assertTrue(r["ok"])
+
+    def test_zero_delay_steps_under_concurrency(self):
+        """Near-instant steps under high concurrency — no race conditions."""
+        _temp_step("def run(pd, **p): pd['i'] = pd['input']['i']; return pd",
+                   name="sx_fast")
+        yaml = _temp_yaml("wf:\n  - sx_fast:")
+
+        from engine import PipelineEngine
+        n = 50
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            futures = [run.submit(f"j{i}", {"i": i}) for i in range(n)]
+            results = [f.result(timeout=30) for f in futures]
+
+        self.assertEqual(sorted(r["i"] for r in results), list(range(n)))
+
+
 # ── Regression ────────────────────────────────────────────────
 
 

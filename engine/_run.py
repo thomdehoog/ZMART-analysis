@@ -215,10 +215,11 @@ class Run:
         self._verbose = self._yaml_meta.get("verbose", 0)
         self._phases = split_phases(steps_config)
 
-        # Job tracking: (future, scope_key)
+        # Job tracking: (future, scope_key, submission_index)
         self._job_entries = []
+        self._submission_counter = 0
 
-        # Phase 0 result accumulation: scope_key -> [pipeline_data, ...]
+        # Phase 0 result accumulation: scope_key -> [(index, pipeline_data), ...]
         self._pending_results = defaultdict(list)
 
         # Phase N>0 result accumulation: phase_idx -> [pipeline_data, ...]
@@ -263,10 +264,15 @@ class Run:
         )
         scope_key = _make_scope_key(job.spatial, job.temporal)
 
-        logger.info("Job submitted: %s (scope_key=%s)", label, scope_key)
+        with self._lock:
+            submission_idx = self._submission_counter
+            self._submission_counter += 1
+
+        logger.info("Job submitted: %s (scope_key=%s, idx=%d)",
+                     label, scope_key, submission_idx)
 
         future = self._engine._executor.submit(
-            self._execute_phase_for_job, 0, job,
+            self._execute_phase_for_job, 0, job, submission_idx,
         )
         with self._lock:
             self._job_entries.append((future, scope_key))
@@ -343,7 +349,10 @@ class Run:
                 f.result()  # blocks until complete; raises on failure
 
             with self._lock:
-                results = self._pending_results.pop(scope_key, [])
+                indexed = self._pending_results.pop(scope_key, [])
+            # Sort by submission index to preserve submission order
+            indexed.sort(key=lambda item: item[0])
+            results = [data for _, data in indexed]
         else:
             # Collect from previous scoped phase: take all results
             with self._lock:
@@ -358,7 +367,7 @@ class Run:
                      triggered, len(results))
         return self._execute_phase_with_results(triggered, results)
 
-    def _execute_phase_for_job(self, phase_idx, job):
+    def _execute_phase_for_job(self, phase_idx, job, submission_idx=0):
         """Execute Phase 0 steps for one job."""
         phase = self._phases[phase_idx]
 
@@ -402,7 +411,8 @@ class Run:
         if next_phase < len(self._phases) and self._phases[next_phase].scope is not None:
             scope_key = _make_scope_key(job.spatial, job.temporal)
             with self._lock:
-                self._pending_results[scope_key].append(pipeline_data)
+                self._pending_results[scope_key].append(
+                    (submission_idx, pipeline_data))
 
         return pipeline_data
 
