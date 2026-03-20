@@ -185,12 +185,14 @@ TEST_ENV = "SMART--basic_test--env_a"
 
 
 def run_pytest():
-    """Run the engine pytest suite, streaming filtered output to console."""
-    test_file = ROOT / "engine" / "test_engine.py"
-    conda = _get_conda_exe()
+    """Run the engine pytest suite, streaming filtered output to console.
 
-    cmd = [conda, "run", "--no-capture-output", "-n", TEST_ENV,
-           "python", "-m", "pytest", str(test_file),
+    Runs from the current Python environment (which has pytest + pyyaml).
+    Isolation tests spawn subprocesses into conda envs as needed.
+    """
+    test_file = ROOT / "engine" / "test_engine.py"
+
+    cmd = [sys.executable, "-m", "pytest", str(test_file),
            "-v", "--tb=short"]
 
     env = os.environ.copy()
@@ -206,8 +208,11 @@ def run_pytest():
     for line in lines_iter(proc):
         lines.append(line)
 
-        # Detect pytest verbose output: "path::Class::test ... STATUS"
-        m = re.match(r".*::(\w+)::(\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)", line)
+        # Detect pytest verbose output lines. Formats:
+        #   "path::Class::test PASSED"        (no -- prefix)
+        #   "path::Class::test_name PASSED"   (with underscores)
+        #   Windows/macOS path separators vary
+        m = re.search(r"::(\w+)::(\w+)\s+(PASSED|FAILED|ERROR|SKIPPED)", line)
         if m:
             cls, test, status = m.group(1), m.group(2), m.group(3)
             if cls != current_class:
