@@ -35,7 +35,7 @@ ENVIRONMENTS = {
     "env_c": {"python": "3.12", "description": "Test environment C"},
 }
 
-PIP_PACKAGES = ["pyyaml"]
+CONDA_PACKAGES = ["pyyaml"]
 
 WIDTH = 70
 
@@ -170,9 +170,9 @@ def main():
             created += 1
             continue
 
-        # Create env
+        # Create env with packages in one step (single solve, faster)
         create_cmd = [conda, "create", "-n", env_name,
-                      f"python={config['python']}", "-y", "-q"]
+                      f"python={config['python']}"] + CONDA_PACKAGES + ["-y", "-q"]
         print(f"  [ RUN]    {' '.join(create_cmd)}")
         if args.dry_run:
             skip("dry run")
@@ -183,21 +183,6 @@ def main():
                 print(result.stderr)
                 continue
             ok(f"Created {env_name}")
-
-        # Install packages
-        if PIP_PACKAGES:
-            pip_cmd = [conda, "run", "--no-capture-output", "-n", env_name,
-                       "pip", "install"] + PIP_PACKAGES + ["-q"]
-            print(f"  [ RUN]    {' '.join(pip_cmd)}")
-            if args.dry_run:
-                skip("dry run")
-            else:
-                result = subprocess.run(pip_cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    fail("Package installation failed")
-                    continue
-                for pkg in PIP_PACKAGES:
-                    ok(pkg)
 
         # Verify
         if not args.dry_run:

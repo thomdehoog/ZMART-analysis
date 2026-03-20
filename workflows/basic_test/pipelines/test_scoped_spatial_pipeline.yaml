@@ -1,0 +1,15 @@
+# Test: Scoped spatial pipeline (tile -> stitch)
+# Phase 0 processes individual tiles, Phase 1 stitches them at scope boundary.
+
+metadata:
+  purpose: "Test spatial scoping with tile simulation and stitching"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+scoped-spatial-test:
+  - step_tile_sim:
+
+  - step_stitch_sim:
+      scope:
+        spatial: region
