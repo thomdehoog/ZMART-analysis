@@ -1,0 +1,18 @@
+# Test: Multi-step scoped pipeline (local -> tile -> stitch)
+# Phase 0 runs step_local then step_tile_sim, Phase 1 stitches at scope boundary.
+
+metadata:
+  purpose: "Test multi-step pipeline with scoped aggregation"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+scoped-multi-step-test:
+  - step_local:
+      note: "Pre-processing step"
+
+  - step_tile_sim:
+
+  - step_stitch_sim:
+      scope:
+        spatial: region

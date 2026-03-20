@@ -1,0 +1,13 @@
+# Test: Metadata tampering resilience
+# First step modifies metadata, second step must still execute.
+
+metadata:
+  purpose: "Test engine survives metadata modification by a step"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+metadata-tamper-test:
+  - step_metadata_tamper:
+
+  - step_local_2:

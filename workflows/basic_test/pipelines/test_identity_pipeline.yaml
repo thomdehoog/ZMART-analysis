@@ -1,0 +1,17 @@
+# Test: Identity passthrough
+# Middle step returns data unmodified; pipeline data flow must not break.
+
+metadata:
+  purpose: "Test passthrough step does not break data flow"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+
+identity-test:
+  - step_local:
+      stage: "before"
+
+  - step_return_input:
+
+  - step_local_2:
+      stage: "after"
