@@ -11,12 +11,14 @@ import sys
 import argparse
 from pathlib import Path
 
+WORKFLOW_DIR = Path(__file__).parent.parent
+
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+sys.path.insert(0, str(WORKFLOW_DIR.parent.parent))
 from engine import run_pipeline
 
 
-YAML_PATH = Path(__file__).parent / "pipelines/rare_event_selection_pipeline.yaml"
+YAML_PATH = WORKFLOW_DIR / "pipelines/rare_event_selection_pipeline.yaml"
 
 
 def main():

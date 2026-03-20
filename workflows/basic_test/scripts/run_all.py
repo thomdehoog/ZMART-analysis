@@ -35,7 +35,8 @@ except ModuleNotFoundError:
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "pyyaml", "-q"])
 
-ROOT = Path(__file__).parent.parent.parent
+WORKFLOW_DIR = Path(__file__).parent.parent
+ROOT = WORKFLOW_DIR.parent.parent
 sys.path.insert(0, str(ROOT))
 from engine import run_pipeline
 
@@ -319,7 +320,7 @@ def main():
     args = parser.parse_args()
 
     log = Log()
-    base = Path(__file__).parent
+    base = WORKFLOW_DIR
     setup_script = base / "environments" / "setup_env.py"
     clean_script = base / "environments" / "clean_env.py"
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")

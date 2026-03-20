@@ -34,7 +34,8 @@ import threading
 import multiprocessing
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent.parent
+WORKFLOW_DIR = Path(__file__).parent.parent
+ROOT = WORKFLOW_DIR.parent.parent
 sys.path.insert(0, str(ROOT))
 
 WIDTH = 70
@@ -86,7 +87,7 @@ def test_metadata_tampering():
     """Step modifies metadata; next step still executes correctly."""
     from engine import run_pipeline
 
-    base = Path(__file__).parent
+    base = WORKFLOW_DIR
     yaml_path = str(base / "pipelines" / "test_metadata_tamper_pipeline.yaml")
 
     r = run_pipeline(yaml_path, "tamper_test", {"original": True})
@@ -110,7 +111,7 @@ def test_identity_passthrough():
     """Identity step returns data unmodified; pipeline continues."""
     from engine import run_pipeline
 
-    base = Path(__file__).parent
+    base = WORKFLOW_DIR
     yaml_path = str(base / "pipelines" / "test_identity_pipeline.yaml")
 
     r = run_pipeline(yaml_path, "identity_test", {"marker": "test_value"})
@@ -473,7 +474,7 @@ def test_scoped_yaml_spatial():
     """Run the scoped spatial YAML pipeline with real scope API."""
     from engine import PipelineEngine
 
-    base = Path(__file__).parent
+    base = WORKFLOW_DIR
     yaml_path = str(base / "pipelines" / "test_scoped_spatial_pipeline.yaml")
 
     with PipelineEngine() as e:
@@ -508,7 +509,7 @@ def test_scoped_yaml_multi_step():
     """Run the multi-step scoped YAML pipeline."""
     from engine import PipelineEngine
 
-    base = Path(__file__).parent
+    base = WORKFLOW_DIR
     yaml_path = str(base / "pipelines" / "test_scoped_multi_step_pipeline.yaml")
 
     with PipelineEngine() as e:
