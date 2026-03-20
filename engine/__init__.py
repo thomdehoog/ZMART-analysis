@@ -1,49 +1,58 @@
 """
-Pipeline Engine — unified orchestrator for sequential Python pipelines.
+Pipeline Engine v3 — Unified orchestrator with scoped execution.
 
 Runs YAML-defined workflows where each step is a Python function that can
-execute locally or in an isolated conda environment via subprocess. Handles
-environment switching, persistent warm workers for ML models, concurrency
-control, and transparent data serialization across process boundaries.
+execute locally or in an isolated conda environment. Supports scoped
+triggering (spatial/temporal), priority scheduling, per-environment workers,
+GPU slot management, and system-wide observability.
 
 Quick start
 -----------
+Simple (one pipeline, no scopes):
+
     from engine import run_pipeline
+    result = run_pipeline("pipeline.yaml", "my_run", {"input": "value"})
 
-    result = run_pipeline("pipeline.yaml", "my_run", {"input_key": "value"})
-
-For persistent engine with concurrent submissions:
+With runs and scopes:
 
     from engine import PipelineEngine
-
-    with PipelineEngine() as engine:
-        future = engine.submit("pipeline.yaml", "run_1", data)
-        result = future.result()
+    engine = PipelineEngine()
+    overview = engine.create_run("overview.yaml", priority="high")
+    overview.submit("tile_1", data, spatial={"region": "R3"})
+    overview.submit("tile_2", data, spatial={"region": "R3"})
+    future = overview.scope_complete(spatial={"region": "R3"})
+    result = future.result()
+    engine.shutdown()
 
 Architecture
 ------------
     _loader.py        AST-based METADATA extraction + exec-based module loading
-    _pipeline.py      PipelineEngine orchestrator (YAML → step dispatch)
-    _pool.py          WorkerPool with per-step semaphores and idle reaper
-    _worker.py        Worker subprocess lifecycle (spawn, connect, execute)
-    worker_script.py  Runs inside target conda env (self-contained, no engine imports)
-    _errors.py        WorkerError hierarchy (spawn, crash, step execution)
+    _run.py           Run with phases, scope tracking, result accumulation
+    _pipeline.py      PipelineEngine orchestrator + step routing
+    _pool.py          WorkerPool with GPU slot + priority queue
+    _worker.py        Per-environment subprocess lifecycle
+    worker_script.py  Runs inside target conda env (self-contained)
+    _errors.py        WorkerError + ScopeError hierarchies
 """
 
 from ._pipeline import PipelineEngine, run_pipeline
+from ._run import Run
 from ._errors import (
     WorkerError,
     WorkerSpawnError,
     WorkerCrashedError,
     StepExecutionError,
+    ScopeError,
 )
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"
 __all__ = [
     "run_pipeline",
     "PipelineEngine",
+    "Run",
     "WorkerError",
     "WorkerSpawnError",
     "WorkerCrashedError",
     "StepExecutionError",
+    "ScopeError",
 ]

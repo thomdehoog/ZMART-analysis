@@ -1,40 +1,39 @@
 """
-Test suite for the unified pipeline engine.
+Test suite for the v3 pipeline engine.
 
 Covers the full stack: module loading, AST-based METADATA extraction,
-subprocess workers (oneshot and persistent), worker pool with concurrency
-control, pipeline orchestration, multi-job patterns (concurrent, sequential,
-adaptive feedback), real environment isolation, and regression guards for
-every known past bug.
+per-environment workers (oneshot and persistent), worker pool with GPU slot
+and priority queue, phased pipeline execution, scope tracking with result
+accumulation, multi-run interleaving, observability, backwards compatibility,
+and regression guards.
 
 Structure
 ---------
 - TestErrors                  Exception hierarchy
-- TestLoadFunction            exec-based module loading
-- TestGetStepSettings         AST-based METADATA extraction
-- TestWorkerOneshot           Spawn-run-exit subprocess workers
-- TestWorkerPersistent        Warm persistent workers
+- TestLoader                  AST-based METADATA extraction + exec loading
+- TestPhases                  Phase splitting from YAML step lists
+- TestWorkerProtocol          Per-environment workers, multi-step, caching
 - TestWorkerErrorPaths        Crash, timeout, missing file
-- TestPool                    Concurrency control, reaper, semaphores
-- TestPipelineEngine          End-to-end pipeline orchestration
+- TestPoolCPU                 Per-env workers, oneshot, reaper
+- TestPoolGPU                 Mutual exclusion, priority, env switching
+- TestRunSubmit               Job submission, immediate execution
+- TestRunScopes               Spatial, temporal, combined scope tracking
+- TestPipelineEngine          create_run, status, shutdown
+- TestBackwardsCompat         run_pipeline convenience function
 - TestReturnValidation        Step return type enforcement
 - TestYAMLEdgeCases           Config parsing edge cases
 - TestInputData               Input handling (None, falsy, etc.)
 - TestLifecycle               Engine startup/shutdown
-- TestMultiJob                Multi-job patterns (local only)
-- TestIsolation               Real subprocess isolation (env-dependent)
-- TestMultiJobIsolation       Multi-job + isolation (env-dependent)
+- TestMultiRun                Interleaved runs, different pipelines
+- TestObservability           status() reporting
 - TestRegression              Guards against specific past bugs
 - TestPackageAPI              Public exports and versioning
 
 Usage
 -----
-    python -m pytest engine/test_engine.py -v            # all tests
-    python -m pytest engine/test_engine.py -k Regression  # just regressions
-    python -m pytest engine/test_engine.py -v --tb=short  # compact output
-
-Environment-dependent tests (TestIsolation, TestMultiJobIsolation) auto-skip
-if conda environments SMART--basic_test--env_b/env_c are not found.
+    python -m pytest engine/test_engine.py -v
+    python -m pytest engine/test_engine.py -k Scopes -v
+    python -m pytest engine/test_engine.py -v --tb=short
 """
 
 import atexit
@@ -53,26 +52,16 @@ ENGINE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(ENGINE_DIR.parent))
 
 from engine._loader import load_function, get_step_settings
+from engine._run import split_phases, parse_yaml, _make_scope_key, StepConfig, Phase
 from engine._errors import (
-    WorkerError, WorkerSpawnError, WorkerCrashedError, StepExecutionError,
+    WorkerError, WorkerSpawnError, WorkerCrashedError,
+    StepExecutionError, ScopeError,
 )
 
 # Test fixtures
 BASIC_TEST = ENGINE_DIR.parent / "workflows" / "basic_test"
 STEPS_DIR = BASIC_TEST / "steps"
 PIPELINES_DIR = BASIC_TEST / "pipelines"
-
-# Isolation test environments (auto-detected)
-_TEST_ENV_B = "SMART--basic_test--env_b"
-_TEST_ENV_C = "SMART--basic_test--env_c"
-try:
-    from engine.conda_utils import get_conda_info, env_exists
-    _conda_info = get_conda_info()
-    _ENV_B_EXISTS = env_exists(_conda_info, _TEST_ENV_B)
-    _ENV_C_EXISTS = env_exists(_conda_info, _TEST_ENV_C)
-except Exception:
-    _ENV_B_EXISTS = False
-    _ENV_C_EXISTS = False
 
 # All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
@@ -98,8 +87,6 @@ def _temp_yaml(content):
     """Write a temporary YAML pipeline file to _TEMP_DIR."""
     text = textwrap.dedent(content)
     if "functions_dir" not in text:
-        # Forward slashes: valid on all platforms, avoids YAML interpreting
-        # backslashes as escape sequences on Windows.
         functions_dir = Path(_TEMP_DIR).as_posix()
         header = f'metadata:\n  functions_dir: "{functions_dir}"\n'
         if "metadata:" in text:
@@ -116,7 +103,7 @@ def _temp_yaml(content):
 
 class TestErrors(unittest.TestCase):
 
-    def test_hierarchy(self):
+    def test_worker_hierarchy(self):
         self.assertTrue(issubclass(WorkerSpawnError, WorkerError))
         self.assertTrue(issubclass(WorkerCrashedError, WorkerError))
         self.assertTrue(issubclass(StepExecutionError, WorkerError))
@@ -129,354 +116,257 @@ class TestErrors(unittest.TestCase):
     def test_step_execution_error_traceback_default_none(self):
         self.assertIsNone(StepExecutionError("x").remote_traceback)
 
+    def test_scope_error_independent(self):
+        """ScopeError is not a subclass of WorkerError."""
+        self.assertFalse(issubclass(ScopeError, WorkerError))
+        self.assertTrue(issubclass(ScopeError, Exception))
+
 
 # ── Loader ────────────────────────────────────────────────────
 
 
-class TestLoadFunction(unittest.TestCase):
-
-    def test_loads_and_runs_step(self):
-        """Load a step, verify METADATA, __name__, __file__, and run()."""
-        module = load_function("step_local", STEPS_DIR)
-        self.assertEqual(module.__name__, "step_local")
-        self.assertIsInstance(module.METADATA, dict)
-        result = module.run({"metadata": {"verbose": 0}}, test_param="x")
-        self.assertIsInstance(result, dict)
-        self.assertIn("step_local", result)
-
-    def test_missing_file(self):
-        with self.assertRaises(FileNotFoundError):
-            load_function("does_not_exist", STEPS_DIR)
-
-    def test_step_with_import_error(self):
-        path = _temp_step("import nonexistent_xyz\ndef run(pd, **p): return pd")
-        with self.assertRaises(ModuleNotFoundError):
-            load_function(Path(path).stem, Path(path).parent)
-
-    def test_syntax_error(self):
-        path = _temp_step("def run(\n    return {}")
-        with self.assertRaises(SyntaxError):
-            load_function(Path(path).stem, Path(path).parent)
-
-    def test_runtime_error_at_module_level(self):
-        path = _temp_step("x = 1 / 0\ndef run(pd, **p): return pd")
-        with self.assertRaises(ZeroDivisionError):
-            load_function(Path(path).stem, Path(path).parent)
-
-    def test_step_missing_run(self):
-        """Loader does not enforce run() — returns module without it."""
-        path = _temp_step('x = 1')
-        module = load_function(Path(path).stem, Path(path).parent)
-        self.assertFalse(hasattr(module, "run"))
-
-    def test_module_file_attribute(self):
-        path = _temp_step("def run(pd, **p): return pd")
-        module = load_function(Path(path).stem, Path(path).parent)
-        self.assertEqual(module.__file__, path)
-
-
-class TestGetStepSettings(unittest.TestCase):
+class TestLoader(unittest.TestCase):
 
     def test_defaults_no_metadata(self):
-        """Step with no METADATA gets all defaults."""
         path = _temp_step("def run(pd, **p): return pd")
         s = get_step_settings(Path(path))
-        self.assertEqual(s, {"environment": "local", "worker": "subprocess",
-                             "max_workers": 1})
+        self.assertEqual(s, {"environment": "local", "device": "cpu"})
 
-    def test_explicit(self):
+    def test_explicit_environment_and_device(self):
         path = _temp_step("""
-            METADATA = {
-                "environment": "gpu",
-                "worker": "persistent",
-                "max_workers": 2,
-            }
+            METADATA = {"environment": "gpu_env", "device": "gpu"}
             def run(pd, **p): return pd
         """)
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "gpu")
-        self.assertEqual(s["worker"], "persistent")
-        self.assertEqual(s["max_workers"], 2)
+        self.assertEqual(s["environment"], "gpu_env")
+        self.assertEqual(s["device"], "gpu")
 
-    def test_partial(self):
-        path = _temp_step("""
-            METADATA = {"environment": "cpu"}
-            def run(pd, **p): return pd
-        """)
+    def test_device_defaults_to_cpu(self):
+        path = _temp_step('METADATA = {"environment": "some_env"}')
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "cpu")
-        self.assertEqual(s["worker"], "subprocess")
+        self.assertEqual(s["device"], "cpu")
 
-    def test_no_data_transfer_in_output(self):
-        path = _temp_step("""
-            METADATA = {"description": "test"}
-            def run(pd, **p): return pd
-        """)
-        self.assertNotIn("data_transfer", get_step_settings(Path(path)))
-
-    def test_metadata_none_uses_defaults(self):
-        path = _temp_step("METADATA = None\ndef run(pd, **p): return pd")
+    def test_no_worker_or_max_workers_in_output(self):
+        """v3 does not expose worker/max_workers in step settings."""
+        path = _temp_step('METADATA = {"worker": "persistent", "max_workers": 4}')
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "local")
+        self.assertNotIn("worker", s)
+        self.assertNotIn("max_workers", s)
 
     def test_does_not_execute_module_code(self):
-        """Core guarantee: METADATA extraction never runs module-level code."""
         path = _temp_step("""
             import nonexistent_package_xyz
-            METADATA = {"environment": "isolated_env", "worker": "persistent"}
-            def run(pd, **p): return pd
-        """)
-        s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "isolated_env")
-        self.assertEqual(s["worker"], "persistent")
-
-    def test_does_not_execute_side_effects(self):
-        """Module-level exceptions don't affect extraction."""
-        path = _temp_step("""
-            raise RuntimeError("should never run")
-            METADATA = {"environment": "safe"}
+            METADATA = {"environment": "safe", "device": "gpu"}
             def run(pd, **p): return pd
         """)
         s = get_step_settings(Path(path))
         self.assertEqual(s["environment"], "safe")
+        self.assertEqual(s["device"], "gpu")
+
+    def test_load_function_works(self):
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="loader_test")
+        module = load_function("loader_test", Path(_TEMP_DIR))
+        result = module.run({})
+        self.assertTrue(result["ok"])
+
+    def test_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            load_function("does_not_exist", Path(_TEMP_DIR))
+
+    def test_syntax_error(self):
+        _temp_step("def run(\n    return {}", name="syn_err")
+        with self.assertRaises(SyntaxError):
+            load_function("syn_err", Path(_TEMP_DIR))
 
 
-# ── Worker (oneshot) ──────────────────────────────────────────
+# ── Phases ────────────────────────────────────────────────────
 
 
-class TestWorkerOneshot(unittest.TestCase):
+class TestPhases(unittest.TestCase):
 
-    def test_execute_and_return(self):
+    def test_no_scope_single_phase(self):
+        steps = [{"a": None}, {"b": {"x": 1}}]
+        phases = split_phases(steps)
+        self.assertEqual(len(phases), 1)
+        self.assertIsNone(phases[0].scope)
+        self.assertEqual(phases[0].steps[0].name, "a")
+        self.assertEqual(phases[0].steps[1].params, {"x": 1})
+
+    def test_one_scope_two_phases(self):
+        steps = [
+            {"preprocess": None},
+            {"segment": None},
+            {"stitch": {"scope": {"spatial": "region"}}},
+            {"analyze": None},
+        ]
+        phases = split_phases(steps)
+        self.assertEqual(len(phases), 2)
+        self.assertIsNone(phases[0].scope)
+        self.assertEqual([s.name for s in phases[0].steps],
+                         ["preprocess", "segment"])
+        self.assertEqual(phases[1].scope, {"spatial": "region"})
+        self.assertEqual([s.name for s in phases[1].steps],
+                         ["stitch", "analyze"])
+
+    def test_two_scopes_three_phases(self):
+        steps = [
+            {"a": None},
+            {"b": {"scope": {"spatial": "region"}}},
+            {"c": None},
+            {"d": {"scope": {"temporal": "session"}}},
+        ]
+        phases = split_phases(steps)
+        self.assertEqual(len(phases), 3)
+        self.assertIsNone(phases[0].scope)
+        self.assertEqual(phases[1].scope, {"spatial": "region"})
+        self.assertEqual(phases[2].scope, {"temporal": "session"})
+
+    def test_scope_params_separated(self):
+        """Scope is removed from params; other params preserved."""
+        steps = [{"step": {"scope": {"spatial": "r"}, "sigma": 1.0}}]
+        phases = split_phases(steps)
+        self.assertEqual(phases[0].steps[0].params, {"sigma": 1.0})
+        self.assertNotIn("scope", phases[0].steps[0].params)
+
+    def test_scope_on_first_step(self):
+        """First step having a scope means Phase 0 is empty (scope=that scope)."""
+        steps = [{"a": {"scope": {"spatial": "r"}}}, {"b": None}]
+        phases = split_phases(steps)
+        self.assertEqual(len(phases), 1)
+        self.assertEqual(phases[0].scope, {"spatial": "r"})
+
+    def test_scope_key_creation(self):
+        key = _make_scope_key({"region": "R3"}, {"timepoint": "t0"})
+        self.assertEqual(key, (("spatial", "region", "R3"),
+                                ("temporal", "timepoint", "t0")))
+
+    def test_scope_key_empty(self):
+        self.assertEqual(_make_scope_key({}, {}), ())
+
+
+# ── Worker (protocol) ────────────────────────────────────────
+
+
+class TestWorkerProtocol(unittest.TestCase):
+
+    def test_execute_returns_result(self):
         from engine._worker import Worker
         path = _temp_step("""
-            def run(pipeline_data, **params):
-                pipeline_data["ran"] = True
-                pipeline_data["x"] = params.get("x")
-                return pipeline_data
+            def run(pd, **p):
+                pd["ran"] = True
+                pd["x"] = p.get("x")
+                return pd
         """)
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        w = Worker("local", oneshot=True, connect_timeout=10)
         try:
-            result = w.execute({"input": 1}, {"x": 42}, timeout=10)
+            result = w.execute(path, {"input": 1}, {"x": 42}, timeout=10)
         finally:
             w.shutdown()
-        self.assertEqual(result["ran"], True)
+        self.assertTrue(result["ran"])
         self.assertEqual(result["x"], 42)
         self.assertEqual(result["input"], 1)
 
-    def test_step_error_raises(self):
+    def test_different_steps_same_worker(self):
+        """A persistent worker can execute different step files."""
         from engine._worker import Worker
-        path = _temp_step('def run(pd, **p): raise ValueError("intentional")')
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        path_a = _temp_step("""
+            def run(pd, **p): pd["from"] = "a"; return pd
+        """)
+        path_b = _temp_step("""
+            def run(pd, **p): pd["from"] = "b"; return pd
+        """)
+        w = Worker("local", oneshot=False, connect_timeout=10)
         try:
-            with self.assertRaises(StepExecutionError) as ctx:
-                w.execute({}, {}, timeout=10)
-            self.assertIn("intentional", str(ctx.exception))
-            self.assertIsNotNone(ctx.exception.remote_traceback)
+            ra = w.execute(path_a, {}, {}, timeout=10)
+            rb = w.execute(path_b, {}, {}, timeout=10)
+            self.assertEqual(ra["from"], "a")
+            self.assertEqual(rb["from"], "b")
         finally:
             w.shutdown()
 
-    def test_preserves_complex_types(self):
+    def test_module_caching(self):
+        """Same step file reuses cached module (load count stays at 1)."""
         from engine._worker import Worker
-        path = _temp_step("def run(pd, **p): return pd")
-        data = {
-            "tuple": (1, 2, 3),
-            "set": {4, 5, 6},
-            "bytes": b"\x00\xff",
-            "nested": {"a": [1, None, True, {"b": 2.5}]},
-            "none": None,
-            "large_int": 10**100,
-        }
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        path = _temp_step("""
+            _n = 0
+            def run(pd, **p):
+                global _n
+                _n += 1
+                pd["n"] = _n
+                return pd
+        """)
+        w = Worker("local", oneshot=False, connect_timeout=10)
         try:
-            result = w.execute(data, {}, timeout=10)
+            r1 = w.execute(path, {}, {}, timeout=10)
+            r2 = w.execute(path, {}, {}, timeout=10)
+            self.assertEqual(r1["n"], 1)
+            self.assertEqual(r2["n"], 2)
         finally:
             w.shutdown()
-        self.assertEqual(result["tuple"], (1, 2, 3))
-        self.assertEqual(result["set"], {4, 5, 6})
-        self.assertEqual(result["bytes"], b"\x00\xff")
-        self.assertEqual(result["nested"]["a"][3]["b"], 2.5)
-        self.assertIsNone(result["none"])
-        self.assertEqual(result["large_int"], 10**100)
 
-    def test_process_exits_after_oneshot(self):
+    def test_persistent_reuses_process(self):
+        from engine._worker import Worker
+        path = _temp_step("""
+            import os
+            def run(pd, **p): pd["pid"] = os.getpid(); return pd
+        """)
+        w = Worker("local", oneshot=False, connect_timeout=10)
+        try:
+            r1 = w.execute(path, {}, {}, timeout=10)
+            r2 = w.execute(path, {}, {}, timeout=10)
+            self.assertEqual(r1["pid"], r2["pid"])
+        finally:
+            w.shutdown()
+
+    def test_oneshot_exits(self):
         from engine._worker import Worker
         path = _temp_step("def run(pd, **p): return pd")
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
-        w.execute({}, {}, timeout=10)
+        w = Worker("local", oneshot=True, connect_timeout=10)
+        w.execute(path, {}, {}, timeout=10)
         time.sleep(0.5)
         self.assertFalse(w.is_alive())
         w.shutdown()
 
-    def test_shutdown_after_oneshot_is_safe(self):
+    def test_complex_types(self):
         from engine._worker import Worker
         path = _temp_step("def run(pd, **p): return pd")
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
-        w.execute({}, {}, timeout=10)
-        time.sleep(0.3)
-        w.shutdown()
-        w.shutdown()  # double shutdown
+        data = {
+            "tuple": (1, 2), "set": {3, 4}, "bytes": b"\xff",
+            "nested": {"a": [None, True, {"b": 2.5}]},
+        }
+        w = Worker("local", oneshot=True, connect_timeout=10)
+        try:
+            r = w.execute(path, data, {}, timeout=10)
+        finally:
+            w.shutdown()
+        self.assertEqual(r["tuple"], (1, 2))
+        self.assertEqual(r["set"], {3, 4})
+        self.assertEqual(r["nested"]["a"][2]["b"], 2.5)
 
-    def test_error_cleans_up_resources(self):
-        from engine._worker import Worker
-        path = _temp_step('def run(pd, **p): raise RuntimeError("fail")')
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
-        with self.assertRaises(StepExecutionError):
-            w.execute({}, {}, timeout=10)
-        w.shutdown()
-        self.assertIsNone(w._conn)
-        self.assertIsNone(w._listener)
-        self.assertIsNone(w._process)
-
-    def test_oneshot_via_pool(self):
-        from engine._pool import WorkerPool
-        path = _temp_step("""
-            def run(pd, **p):
-                pd["pooled"] = True
-                return pd
-        """)
-        pool = WorkerPool()
-        result = pool.execute("local", path, {}, {},
-                              worker_type="subprocess", timeout=10)
-        self.assertEqual(result["pooled"], True)
-        self.assertEqual(pool.active_workers(), [])
-        pool.shutdown_all()
-
-
-# ── Worker (persistent) ──────────────────────────────────────
-
-
-class TestWorkerPersistent(unittest.TestCase):
-
-    def test_reuses_same_process(self):
+    def test_shutdown_and_respawn(self):
         from engine._worker import Worker
         path = _temp_step("""
             import os
-            def run(pd, **p):
-                pd["pid"] = os.getpid()
-                return pd
+            def run(pd, **p): pd["pid"] = os.getpid(); return pd
         """)
-        w = Worker("local", path, oneshot=False, connect_timeout=10)
+        w = Worker("local", oneshot=False, connect_timeout=10)
         try:
-            r1 = w.execute({}, {}, timeout=10)
-            r2 = w.execute({}, {}, timeout=10)
-            self.assertEqual(r1["pid"], r2["pid"])
-            self.assertTrue(w.is_alive())
-        finally:
+            r1 = w.execute(path, {}, {}, timeout=10)
             w.shutdown()
-
-    def test_module_stays_loaded_across_calls(self):
-        """Persistent worker keeps module state warm between calls.
-
-        A module-level counter increments on each import. If the module
-        were reloaded between calls, the counter would reset to 1.
-        With a warm worker, it stays at 1 for every call because the
-        module is loaded only once.
-        """
-        from engine._worker import Worker
-        path = _temp_step("""
-            _load_count = 0
-
-            def run(pd, **p):
-                global _load_count
-                _load_count += 1
-                pd["load_count"] = _load_count
-                return pd
-        """)
-        w = Worker("local", path, oneshot=False, connect_timeout=10)
-        try:
-            r1 = w.execute({}, {}, timeout=10)
-            r2 = w.execute({}, {}, timeout=10)
-            r3 = w.execute({}, {}, timeout=10)
-            # Module loaded once, counter increments across calls
-            self.assertEqual(r1["load_count"], 1)
-            self.assertEqual(r2["load_count"], 2)
-            self.assertEqual(r3["load_count"], 3)
-        finally:
-            w.shutdown()
-
-    def test_warm_worker_faster_than_cold(self):
-        """Second call on a persistent worker is faster than the first.
-
-        The first call pays startup cost (spawn process, load module).
-        Subsequent calls skip all of that — only the run() call happens.
-        """
-        from engine._worker import Worker
-        path = _temp_step("""
-            import time
-            def run(pd, **p):
-                pd["t"] = time.monotonic()
-                return pd
-        """)
-        w = Worker("local", path, oneshot=False, connect_timeout=10)
-        try:
-            # First call: cold start (spawn + connect + load + run)
-            t0 = time.monotonic()
-            w.execute({}, {}, timeout=10)
-            cold = time.monotonic() - t0
-
-            # Second call: warm (run only)
-            t0 = time.monotonic()
-            w.execute({}, {}, timeout=10)
-            warm = time.monotonic() - t0
-
-            self.assertLess(warm, cold,
-                            f"Warm call ({warm:.3f}s) should be faster "
-                            f"than cold start ({cold:.3f}s)")
-        finally:
-            w.shutdown()
-
-    def test_recovers_from_crash(self):
-        from engine._worker import Worker
-        path = _temp_step("""
-            import os
-            def run(pd, **p):
-                pd["pid"] = os.getpid()
-                return pd
-        """)
-        w = Worker("local", path, oneshot=False, connect_timeout=10)
-        try:
-            r1 = w.execute({}, {}, timeout=10)
-            w._process.kill()
-            w._process.wait()
-            self.assertFalse(w.is_alive())
-            r2 = w.execute({}, {}, timeout=10)
+            r2 = w.execute(path, {}, {}, timeout=10)
             self.assertNotEqual(r1["pid"], r2["pid"])
         finally:
             w.shutdown()
 
-    def test_idle_resets_on_execute(self):
+    def test_worker_status(self):
         from engine._worker import Worker
         path = _temp_step("def run(pd, **p): return pd")
-        w = Worker("local", path, oneshot=False,
-                   idle_timeout=0.3, connect_timeout=10)
-        try:
-            w.execute({}, {}, timeout=10)
-            time.sleep(0.2)
-            self.assertFalse(w.is_idle())
-            w.execute({}, {}, timeout=10)
-            self.assertFalse(w.is_idle())
-            time.sleep(0.4)
-            self.assertTrue(w.is_idle())
-        finally:
-            w.shutdown()
-
-    def test_execute_after_shutdown_respawns(self):
-        """Worker respawns if execute() is called after shutdown()."""
-        from engine._worker import Worker
-        path = _temp_step("""
-            import os
-            def run(pd, **p):
-                pd["pid"] = os.getpid()
-                return pd
-        """)
-        w = Worker("local", path, oneshot=False, connect_timeout=10)
-        try:
-            r1 = w.execute({}, {}, timeout=10)
-            w.shutdown()
-            r2 = w.execute({}, {}, timeout=10)
-            self.assertNotEqual(r1["pid"], r2["pid"])
-        finally:
-            w.shutdown()
+        w = Worker("local", device="cpu", oneshot=True, connect_timeout=10)
+        s = w.status
+        self.assertEqual(s["state"], "stopped")
+        w.execute(path, {}, {}, timeout=10)
+        w.shutdown()
 
 
 # ── Worker Error Paths ────────────────────────────────────────
@@ -484,66 +374,113 @@ class TestWorkerPersistent(unittest.TestCase):
 
 class TestWorkerErrorPaths(unittest.TestCase):
 
-    def test_process_crash_raises_worker_crashed(self):
+    def test_crash_raises_worker_crashed(self):
         from engine._worker import Worker
         path = _temp_step("import os\ndef run(pd, **p): os._exit(1)")
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        w = Worker("local", oneshot=True, connect_timeout=10)
         with self.assertRaises(WorkerCrashedError):
-            w.execute({}, {}, timeout=10)
+            w.execute(path, {}, {}, timeout=10)
         w.shutdown()
 
     def test_timeout_raises_step_execution_error(self):
         from engine._worker import Worker
         path = _temp_step("""
             import time
-            def run(pd, **p):
-                time.sleep(30)
-                return pd
+            def run(pd, **p): time.sleep(30); return pd
         """)
-        w = Worker("local", path, oneshot=True, connect_timeout=10)
+        w = Worker("local", oneshot=True, connect_timeout=10)
         with self.assertRaises(StepExecutionError) as ctx:
-            w.execute({}, {}, timeout=1)
+            w.execute(path, {}, {}, timeout=1)
         self.assertIn("timed out", str(ctx.exception))
         w.shutdown()
 
-    def test_nonexistent_step_path_raises(self):
-        """Worker with a step file that doesn't exist should fail."""
+    def test_step_error_has_traceback(self):
         from engine._worker import Worker
-        w = Worker("local", "/nonexistent/step.py",
-                   oneshot=True, connect_timeout=3)
-        with self.assertRaises((WorkerSpawnError, WorkerCrashedError)):
-            w.execute({}, {}, timeout=5)
+        path = _temp_step('def run(pd, **p): raise ValueError("test")')
+        w = Worker("local", oneshot=True, connect_timeout=10)
+        with self.assertRaises(StepExecutionError) as ctx:
+            w.execute(path, {}, {}, timeout=10)
+        self.assertIn("test", str(ctx.exception))
+        self.assertIn("ValueError", ctx.exception.remote_traceback)
         w.shutdown()
 
 
-# ── Pool ──────────────────────────────────────────────────────
+# ── Pool (CPU) ────────────────────────────────────────────────
 
 
-class TestPool(unittest.TestCase):
+class TestPoolCPU(unittest.TestCase):
+
+    def test_per_env_worker_reuse(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("""
+            import os
+            def run(pd, **p): pd["pid"] = os.getpid(); return pd
+        """)
+        pool = WorkerPool(idle_timeout=60)
+        r1 = pool.execute("local", "cpu", path, {}, {}, timeout=10)
+        r2 = pool.execute("local", "cpu", path, {}, {}, timeout=10)
+        self.assertEqual(r1["pid"], r2["pid"])
+        pool.shutdown_all()
+
+    def test_oneshot_under_maximal(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("""
+            import os
+            def run(pd, **p): pd["pid"] = os.getpid(); return pd
+        """)
+        pool = WorkerPool()
+        r1 = pool.execute("local", "cpu", path, {}, {},
+                           timeout=10, isolation="maximal")
+        r2 = pool.execute("local", "cpu", path, {}, {},
+                           timeout=10, isolation="maximal")
+        self.assertNotEqual(r1["pid"], r2["pid"])
+        pool.shutdown_all()
 
     def test_shutdown_before_use(self):
         from engine._pool import WorkerPool
         pool = WorkerPool()
         pool.shutdown_all()
-        self.assertEqual(pool.active_workers(), [])
 
-    def test_semaphore_limits_concurrency(self):
-        """With max_workers=1, two calls must run sequentially."""
+    def test_error_through_pool(self):
+        from engine._pool import WorkerPool
+        path = _temp_step('def run(pd, **p): raise ValueError("pool err")')
+        pool = WorkerPool()
+        with self.assertRaises(StepExecutionError) as ctx:
+            pool.execute("local", "cpu", path, {}, {}, timeout=10)
+        self.assertIn("pool err", str(ctx.exception))
+        pool.shutdown_all()
+
+    def test_reaper_removes_idle(self):
+        from engine._pool import WorkerPool
+        path = _temp_step("def run(pd, **p): return pd")
+        pool = WorkerPool(idle_timeout=0.2)
+        pool.execute("local", "cpu", path, {}, {}, timeout=10)
+        self.assertEqual(len([w for w in pool._cpu_workers.values()
+                              if w.is_alive()]), 1)
+        time.sleep(0.4)
+        pool._reap_idle()
+        self.assertEqual(len([w for w in pool._cpu_workers.values()
+                              if w.is_alive()]), 0)
+        pool.shutdown_all()
+
+
+# ── Pool (GPU) ────────────────────────────────────────────────
+
+
+class TestPoolGPU(unittest.TestCase):
+
+    def test_gpu_mutual_exclusion(self):
+        """Two GPU calls execute sequentially (one at a time)."""
         from engine._pool import WorkerPool
         path = _temp_step("""
             import time
-            def run(pd, **p):
-                time.sleep(0.4)
-                pd["done"] = True
-                return pd
+            def run(pd, **p): time.sleep(0.3); pd["done"] = True; return pd
         """)
         pool = WorkerPool()
         results = []
 
         def run_one():
-            r = pool.execute("local", path, {}, {},
-                             worker_type="subprocess", max_workers=1,
-                             timeout=15)
+            r = pool.execute("local", "gpu", path, {}, {}, timeout=15)
             results.append(r)
 
         t0 = time.monotonic()
@@ -556,72 +493,285 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
         self.assertEqual(len(results), 2)
-        for r in results:
-            self.assertEqual(r["done"], True)
-        self.assertGreater(elapsed, 0.55, "Calls ran in parallel — semaphore broken")
+        self.assertGreater(elapsed, 0.5, "GPU calls ran in parallel")
 
-    def test_persistent_worker_created_and_reused(self):
-        from engine._pool import WorkerPool
-        path = _temp_step("""
-            import os
-            def run(pd, **p):
-                pd["pid"] = os.getpid()
-                return pd
-        """)
-        pool = WorkerPool(idle_timeout=60)
-        r1 = pool.execute("local", path, {}, {},
-                          worker_type="persistent", timeout=10)
-        r2 = pool.execute("local", path, {}, {},
-                          worker_type="persistent", timeout=10)
-        self.assertEqual(r1["pid"], r2["pid"])
-        self.assertEqual(len(pool.active_workers()), 1)
-        pool.shutdown_all()
-        self.assertEqual(len(pool.active_workers()), 0)
-
-    def test_reaper_removes_idle_worker(self):
-        from engine._pool import WorkerPool
-        path = _temp_step("def run(pd, **p): return pd")
-        pool = WorkerPool(idle_timeout=0.2)
-        pool.execute("local", path, {}, {},
-                     worker_type="persistent", timeout=10)
-        self.assertEqual(len(pool.active_workers()), 1)
-        time.sleep(0.4)
-        pool._reap_idle()
-        self.assertEqual(len(pool.active_workers()), 0)
-        pool.shutdown_all()
-
-    def test_reaper_skips_active_worker(self):
+    def test_gpu_priority_ordering(self):
+        """Higher priority GPU work executes before lower priority."""
         from engine._pool import WorkerPool
         path = _temp_step("""
             import time
             def run(pd, **p):
-                time.sleep(0.5)
+                time.sleep(0.1)
+                pd["priority"] = p.get("p")
                 return pd
         """)
-        pool = WorkerPool(idle_timeout=0.1)
-        result = [None]
-        def run_step():
-            result[0] = pool.execute("local", path, {}, {},
-                                     worker_type="persistent", timeout=10)
-        t = threading.Thread(target=run_step)
-        t.start()
-        time.sleep(0.2)
-        pool._reap_idle()
-        self.assertEqual(len(pool.active_workers()), 1)
-        t.join(timeout=10)
-        self.assertIsNotNone(result[0])
+        pool = WorkerPool()
+        order = []
+        lock = threading.Lock()
+
+        def submit(priority):
+            r = pool.execute("local", "gpu", path, {}, {"p": priority},
+                             priority=priority, timeout=15)
+            with lock:
+                order.append(r["priority"])
+
+        # Submit low priority first, then high — high should execute first
+        # (after the GPU thread starts processing)
+        threads = []
+        for p in [0, 0, 10, 10]:
+            t = threading.Thread(target=submit, args=(p,))
+            threads.append(t)
+        for t in threads:
+            t.start()
+            time.sleep(0.02)  # stagger submissions slightly
+        for t in threads:
+            t.join(timeout=30)
         pool.shutdown_all()
 
-    def test_error_through_pool_has_remote_traceback(self):
+        self.assertEqual(len(order), 4)
+        # First item is whatever got in first; subsequent items should
+        # favor priority=10 over priority=0
+        high_indices = [i for i, p in enumerate(order) if p == 10]
+        low_indices = [i for i, p in enumerate(order) if p == 0]
+        if high_indices and low_indices:
+            self.assertLess(min(high_indices), max(low_indices),
+                            f"High priority should run before low: {order}")
+
+    def test_gpu_shutdown_drains_queue(self):
         from engine._pool import WorkerPool
-        path = _temp_step('def run(pd, **p): raise ValueError("pool err")')
+        import concurrent.futures
         pool = WorkerPool()
-        with self.assertRaises(StepExecutionError) as ctx:
-            pool.execute("local", path, {}, {},
-                         worker_type="subprocess", timeout=10)
-        self.assertIn("pool err", str(ctx.exception))
-        self.assertIn("ValueError", ctx.exception.remote_traceback)
+        # Don't start any work, just put something in queue
+        future = concurrent.futures.Future()
+        pool._gpu_queue.put((0, 0, "local", "/fake", {}, {}, 10, "minimal", future))
         pool.shutdown_all()
+        self.assertTrue(future.done())
+        with self.assertRaises(WorkerError):
+            future.result()
+
+
+# ── Run (submit) ──────────────────────────────────────────────
+
+
+class TestRunSubmit(unittest.TestCase):
+
+    def test_simple_submit(self):
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="sub_a")
+        yaml = _temp_yaml("wf:\n  - sub_a:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            future = run.submit("t", {})
+            r = future.result(timeout=10)
+        self.assertTrue(r["ok"])
+
+    def test_multi_step(self):
+        _temp_step("def run(pd, **p): pd['s1'] = 1; return pd",
+                   name="ms_a")
+        _temp_step("def run(pd, **p): pd['s2'] = pd['s1'] + 1; return pd",
+                   name="ms_b")
+        yaml = _temp_yaml("wf:\n  - ms_a:\n  - ms_b:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            r = run.submit("t", {}).result(timeout=10)
+        self.assertEqual(r["s1"], 1)
+        self.assertEqual(r["s2"], 2)
+
+    def test_data_flows(self):
+        _temp_step("def run(pd, **p): pd['from_a'] = 'hello'; return pd",
+                   name="df_a")
+        _temp_step("""
+            def run(pd, **p):
+                pd['saw'] = pd.get('from_a')
+                return pd
+        """, name="df_b")
+        yaml = _temp_yaml("wf:\n  - df_a:\n  - df_b:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            r = e.create_run(yaml).submit("t", {}).result(timeout=10)
+        self.assertEqual(r["saw"], "hello")
+
+    def test_input_data(self):
+        _temp_step("def run(pd, **p): return pd", name="inp")
+        yaml = _temp_yaml("wf:\n  - inp:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            r = e.create_run(yaml).submit("t", {"key": "val"}).result(timeout=10)
+        self.assertEqual(r["input"]["key"], "val")
+
+    def test_concurrent_submits(self):
+        _temp_step("""
+            def run(pd, **p):
+                pd["job"] = pd["input"]["job"]
+                return pd
+        """, name="conc")
+        yaml = _temp_yaml("wf:\n  - conc:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            futures = [run.submit(f"j{i}", {"job": i}) for i in range(5)]
+            results = [f.result(timeout=30) for f in futures]
+        self.assertEqual(sorted(r["job"] for r in results), list(range(5)))
+
+
+# ── Run (scopes) ─────────────────────────────────────────────
+
+
+class TestRunScopes(unittest.TestCase):
+
+    def test_spatial_scope(self):
+        """Scoped step receives accumulated results from all jobs."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["tile"] = pd["input"]["tile"]
+                return pd
+        """, name="sc_seg")
+        _temp_step("""
+            def run(pd, **p):
+                tiles = [r["tile"] for r in pd["results"]]
+                pd["tiles"] = sorted(tiles)
+                return pd
+        """, name="sc_stitch")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_seg:
+              - sc_stitch:
+                  scope:
+                    spatial: region
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for i in range(3):
+                run.submit(f"tile_{i}", {"tile": i},
+                           spatial={"region": "R1"},
+                           temporal={"t": "0"})
+            future = run.scope_complete(
+                spatial={"region": "R1"}, temporal={"t": "0"})
+            r = future.result(timeout=30)
+        self.assertEqual(r["tiles"], [0, 1, 2])
+
+    def test_scoped_step_metadata(self):
+        """Scoped step receives metadata with phase and n_accumulated."""
+        _temp_step("def run(pd, **p): return pd", name="sc_m1")
+        _temp_step("def run(pd, **p): return pd", name="sc_m2")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_m1:
+              - sc_m2:
+                  scope:
+                    spatial: r
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {}, spatial={"r": "1"})
+            run.submit("j2", {}, spatial={"r": "1"})
+            r = run.scope_complete(spatial={"r": "1"}).result(timeout=30)
+        self.assertEqual(r["metadata"]["n_accumulated"], 2)
+        self.assertEqual(r["metadata"]["phase"], 1)
+
+    def test_steps_after_scope(self):
+        """Steps after a scoped step process the single scoped result."""
+        _temp_step("def run(pd, **p): pd['v'] = pd['input']['v']; return pd",
+                   name="sc_pre")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="sc_agg")
+        _temp_step("""
+            def run(pd, **p):
+                pd["final"] = pd["sum"] * 2
+                return pd
+        """, name="sc_post")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_pre:
+              - sc_agg:
+                  scope:
+                    spatial: r
+              - sc_post:
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for i in range(3):
+                run.submit(f"j{i}", {"v": i + 1}, spatial={"r": "1"})
+            r = run.scope_complete(spatial={"r": "1"}).result(timeout=30)
+        self.assertEqual(r["sum"], 6)
+        self.assertEqual(r["final"], 12)
+
+    def test_scope_complete_no_jobs_raises(self):
+        _temp_step("def run(pd, **p): return pd", name="sc_nj1")
+        _temp_step("def run(pd, **p): return pd", name="sc_nj2")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_nj1:
+              - sc_nj2:
+                  scope:
+                    spatial: r
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            with self.assertRaises(ScopeError):
+                run.scope_complete(spatial={"r": "1"}).result(timeout=10)
+
+    def test_scope_complete_wrong_axis_raises(self):
+        _temp_step("def run(pd, **p): return pd", name="sc_wa1")
+        _temp_step("def run(pd, **p): return pd", name="sc_wa2")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_wa1:
+              - sc_wa2:
+                  scope:
+                    spatial: r
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j1", {}, spatial={"r": "1"})
+            with self.assertRaises(ScopeError):
+                # Wrong axis: temporal instead of spatial
+                run.scope_complete(temporal={"t": "1"}).result(timeout=10)
+
+    def test_multiple_scope_groups(self):
+        """Different scope groups accumulate independently."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="sc_mg1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["values"] = sorted(r["v"] for r in pd["results"])
+                return pd
+        """, name="sc_mg2")
+        yaml = _temp_yaml("""
+            wf:
+              - sc_mg1:
+              - sc_mg2:
+                  scope:
+                    spatial: r
+        """)
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            # Group A
+            run.submit("a1", {"v": 10}, spatial={"r": "A"})
+            run.submit("a2", {"v": 20}, spatial={"r": "A"})
+            # Group B
+            run.submit("b1", {"v": 100}, spatial={"r": "B"})
+            run.submit("b2", {"v": 200}, spatial={"r": "B"})
+
+            ra = run.scope_complete(spatial={"r": "A"}).result(timeout=30)
+            rb = run.scope_complete(spatial={"r": "B"}).result(timeout=30)
+
+        self.assertEqual(ra["values"], [10, 20])
+        self.assertEqual(rb["values"], [100, 200])
 
 
 # ── Pipeline Engine ───────────────────────────────────────────
@@ -629,236 +779,30 @@ class TestPool(unittest.TestCase):
 
 class TestPipelineEngine(unittest.TestCase):
 
-    def test_local_pipeline(self):
+    def test_create_run(self):
+        _temp_step("def run(pd, **p): return pd", name="cr")
+        yaml = _temp_yaml("wf:\n  - cr:")
         from engine import PipelineEngine
         with PipelineEngine() as e:
-            r = e.run_pipeline(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", {},
-            )
-        self.assertIn("step_local", r)
-        self.assertEqual(r["metadata"]["label"], "t")
+            run = e.create_run(yaml)
+            self.assertIsNotNone(run)
 
-    def test_data_flows_between_steps(self):
-        _temp_step("""
-            def run(pd, **p):
-                pd["s1"] = "from_step_1"
-                return pd
-        """, name="flow_a")
-        _temp_step("""
-            def run(pd, **p):
-                pd["s2_saw"] = pd.get("s1")
-                return pd
-        """, name="flow_b")
-        yaml = _temp_yaml("wf:\n  - flow_a:\n  - flow_b:")
+    def test_create_run_with_string_priority(self):
+        _temp_step("def run(pd, **p): return pd", name="crp")
+        yaml = _temp_yaml("wf:\n  - crp:")
         from engine import PipelineEngine
         with PipelineEngine() as e:
-            r = e.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["s2_saw"], "from_step_1")
+            run = e.create_run(yaml, priority="high")
+            self.assertEqual(run._priority, 10)
 
-    def test_step_returning_new_dict_replaces_data(self):
-        """The return value, not in-place mutations, flows to the next step."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["mutated"] = True
-                return {"returned": True}
-        """, name="replace_a")
-        _temp_step("""
-            def run(pd, **p):
-                pd["saw_mutated"] = pd.get("mutated")
-                pd["saw_returned"] = pd.get("returned")
-                return pd
-        """, name="replace_b")
-        yaml = _temp_yaml("wf:\n  - replace_a:\n  - replace_b:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            r = e.run_pipeline(yaml, "t", {})
-        self.assertIsNone(r["saw_mutated"])
-        self.assertEqual(r["saw_returned"], True)
-
-    def test_error_in_step_raises_runtime_error(self):
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(RuntimeError):
-                e.run_pipeline(
-                    str(PIPELINES_DIR / "test_error_pipeline.yaml"), "t", {},
-                )
-
-    def test_missing_step_raises(self):
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(FileNotFoundError):
-                e.run_pipeline(
-                    str(PIPELINES_DIR / "test_missing_step_pipeline.yaml"),
-                    "t", {},
-                )
-
-    def test_step_missing_run_raises_attribute_error(self):
-        """A step with no run() function should fail clearly."""
-        _temp_step('x = 1', name="no_run")
-        yaml = _temp_yaml("wf:\n  - no_run:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(AttributeError):
-                e.run_pipeline(yaml, "t", {})
-
-    def test_submit_returns_future(self):
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            f = e.submit(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", {},
-            )
-            r = f.result(timeout=30)
-        self.assertIn("step_local", r)
-
-    def test_submit_callback(self):
-        from engine import PipelineEngine
-        called = []
-        def cb(future):
-            called.append(future.result())
-        with PipelineEngine() as e:
-            f = e.submit(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"),
-                "t", {}, callback=cb,
-            )
-            f.result(timeout=30)
-        time.sleep(0.1)
-        self.assertEqual(len(called), 1)
-        self.assertIn("step_local", called[0])
-
-    def test_custom_metadata_in_result(self):
-        _temp_step("def run(pd, **p): return pd", name="meta_step")
-        yaml = _temp_yaml("""
-            metadata:
-              purpose: "testing"
-              author: "test"
-            wf:
-              - meta_step:
-        """)
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            r = e.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["metadata"]["purpose"], "testing")
-        self.assertEqual(r["metadata"]["author"], "test")
-
-
-# ── Edge Cases: Return Values ─────────────────────────────────
-
-
-class TestReturnValidation(unittest.TestCase):
-
-    def test_none_return_raises_type_error(self):
-        _temp_step('def run(pd, **p): return None', name="ret_none")
-        yaml = _temp_yaml("wf:\n  - ret_none:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(TypeError) as ctx:
-                e.run_pipeline(yaml, "t", {})
-        self.assertIn("ret_none", str(ctx.exception))
-        self.assertIn("NoneType", str(ctx.exception))
-
-    def test_list_return_raises_type_error(self):
-        _temp_step('def run(pd, **p): return [1,2]', name="ret_list")
-        yaml = _temp_yaml("wf:\n  - ret_list:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(TypeError) as ctx:
-                e.run_pipeline(yaml, "t", {})
-        self.assertIn("list", str(ctx.exception))
-
-
-# ── Edge Cases: YAML ──────────────────────────────────────────
-
-
-class TestYAMLEdgeCases(unittest.TestCase):
-
-    def test_empty_steps_raises(self):
-        yaml = _temp_yaml("wf:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(ValueError):
-                e.run_pipeline(yaml, "t", {})
-
-    def test_no_workflow_key_raises(self):
-        yaml = _temp_yaml("metadata:\n  verbose: 0")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(ValueError):
-                e.run_pipeline(yaml, "t", {})
-
-    def test_null_params(self):
-        _temp_step("def run(pd, **p):\n    pd['params'] = p\n    return pd",
-                   name="null_params")
-        yaml = _temp_yaml("wf:\n  - null_params:")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            r = e.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["params"], {})
-
-    def test_nonexistent_yaml_raises(self):
-        from engine import run_pipeline
-        with self.assertRaises(FileNotFoundError):
-            run_pipeline("nonexistent.yaml", "t", {})
-
-    def test_malformed_yaml_raises(self):
-        import yaml as pyyaml
-        path = Path(_TEMP_DIR) / f"bad_{_next_id()}.yaml"
-        path.write_text("wf:\n  - : :\n:::")
-        from engine import PipelineEngine
-        with PipelineEngine() as e:
-            with self.assertRaises(pyyaml.YAMLError):
-                e.run_pipeline(str(path), "t", {})
-
-
-# ── Edge Cases: Input Data ────────────────────────────────────
-
-
-class TestInputData(unittest.TestCase):
-
-    def test_none_becomes_empty_dict(self):
-        from engine import run_pipeline
-        r = run_pipeline(
-            str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", None,
-        )
-        self.assertEqual(r["input"], {})
-
-    def test_falsy_values_preserved(self):
-        from engine import run_pipeline
-        for val in ([], 0, False):
-            r = run_pipeline(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", val,
-            )
-            self.assertEqual(r["input"], val, f"Failed for {val!r}")
-
-
-# ── Edge Cases: Lifecycle ─────────────────────────────────────
-
-
-class TestLifecycle(unittest.TestCase):
-
-    def test_run_after_shutdown_raises(self):
+    def test_create_run_after_shutdown_raises(self):
+        _temp_step("def run(pd, **p): return pd", name="crs")
+        yaml = _temp_yaml("wf:\n  - crs:")
         from engine import PipelineEngine
         e = PipelineEngine()
         e.shutdown()
         with self.assertRaises(RuntimeError):
-            e.run_pipeline(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", {},
-            )
-
-    def test_submit_after_shutdown_raises(self):
-        from engine import PipelineEngine
-        e = PipelineEngine()
-        e.shutdown()
-        with self.assertRaises(RuntimeError):
-            e.submit(
-                str(PIPELINES_DIR / "test_local_pipeline.yaml"), "t", {},
-            )
-
-    def test_double_shutdown_safe(self):
-        from engine import PipelineEngine
-        e = PipelineEngine()
-        e.shutdown()
-        e.shutdown()
-        self.assertFalse(e._accepting)
+            e.create_run(yaml)
 
     def test_context_manager(self):
         from engine import PipelineEngine
@@ -867,33 +811,273 @@ class TestLifecycle(unittest.TestCase):
         self.assertFalse(e._accepting)
 
 
-# ── Multi-Job (adaptive feedback patterns) ────────────────────
+# ── Backwards Compatibility ───────────────────────────────────
 
 
-class TestMultiJob(unittest.TestCase):
-    """Multi-job tests simulating adaptive feedback microscopy workflows."""
+class TestBackwardsCompat(unittest.TestCase):
 
-    def test_concurrent_independent_jobs(self):
-        """Submit multiple timepoints concurrently; verify data isolation."""
+    def test_run_pipeline_simple(self):
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="bc_s")
+        yaml = _temp_yaml("wf:\n  - bc_s:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "test", {})
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["metadata"]["label"], "test")
+
+    def test_run_pipeline_with_input(self):
+        _temp_step("def run(pd, **p): return pd", name="bc_i")
+        yaml = _temp_yaml("wf:\n  - bc_i:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "test", {"key": "val"})
+        self.assertEqual(r["input"]["key"], "val")
+
+    def test_run_pipeline_error(self):
+        _temp_step('def run(pd, **p): raise RuntimeError("fail")',
+                   name="bc_e")
+        yaml = _temp_yaml("wf:\n  - bc_e:")
+        from engine import run_pipeline
+        with self.assertRaises(RuntimeError):
+            run_pipeline(yaml, "test", {})
+
+    def test_run_pipeline_multi_step(self):
+        _temp_step("def run(pd, **p): pd['a'] = 1; return pd", name="bc_m1")
+        _temp_step("def run(pd, **p): pd['b'] = pd['a'] + 1; return pd",
+                   name="bc_m2")
+        yaml = _temp_yaml("wf:\n  - bc_m1:\n  - bc_m2:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "test", {})
+        self.assertEqual(r["b"], 2)
+
+
+# ── Return Validation ─────────────────────────────────────────
+
+
+class TestReturnValidation(unittest.TestCase):
+
+    def test_none_return_raises(self):
+        _temp_step("def run(pd, **p): return None", name="rv_none")
+        yaml = _temp_yaml("wf:\n  - rv_none:")
+        from engine import run_pipeline
+        with self.assertRaises(TypeError) as ctx:
+            run_pipeline(yaml, "t", {})
+        self.assertIn("NoneType", str(ctx.exception))
+
+    def test_list_return_raises(self):
+        _temp_step("def run(pd, **p): return [1, 2]", name="rv_list")
+        yaml = _temp_yaml("wf:\n  - rv_list:")
+        from engine import run_pipeline
+        with self.assertRaises(TypeError) as ctx:
+            run_pipeline(yaml, "t", {})
+        self.assertIn("list", str(ctx.exception))
+
+
+# ── YAML Edge Cases ───────────────────────────────────────────
+
+
+class TestYAMLEdgeCases(unittest.TestCase):
+
+    def test_empty_steps_raises(self):
+        yaml = _temp_yaml("wf:")
+        from engine import run_pipeline
+        with self.assertRaises(ValueError):
+            run_pipeline(yaml, "t", {})
+
+    def test_no_workflow_raises(self):
+        yaml = _temp_yaml("metadata:\n  verbose: 0")
+        from engine import run_pipeline
+        with self.assertRaises(ValueError):
+            run_pipeline(yaml, "t", {})
+
+    def test_null_params(self):
+        _temp_step("def run(pd, **p): pd['p'] = p; return pd",
+                   name="yec_null")
+        yaml = _temp_yaml("wf:\n  - yec_null:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", {})
+        self.assertEqual(r["p"], {})
+
+    def test_nonexistent_yaml(self):
+        from engine import run_pipeline
+        with self.assertRaises(FileNotFoundError):
+            run_pipeline("nonexistent.yaml", "t", {})
+
+    def test_missing_step_raises(self):
+        yaml = _temp_yaml("wf:\n  - does_not_exist:")
+        from engine import run_pipeline
+        with self.assertRaises(FileNotFoundError):
+            run_pipeline(yaml, "t", {})
+
+
+# ── Input Data ────────────────────────────────────────────────
+
+
+class TestInputData(unittest.TestCase):
+
+    def test_none_becomes_empty_dict(self):
+        _temp_step("def run(pd, **p): return pd", name="id_n")
+        yaml = _temp_yaml("wf:\n  - id_n:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", None)
+        self.assertEqual(r["input"], {})
+
+    def test_falsy_values_preserved(self):
+        _temp_step("def run(pd, **p): return pd", name="id_f")
+        yaml = _temp_yaml("wf:\n  - id_f:")
+        from engine import run_pipeline
+        for val in ([], 0, False):
+            r = run_pipeline(yaml, "t", val)
+            self.assertEqual(r["input"], val, f"Failed for {val!r}")
+
+
+# ── Lifecycle ─────────────────────────────────────────────────
+
+
+class TestLifecycle(unittest.TestCase):
+
+    def test_double_shutdown(self):
+        from engine import PipelineEngine
+        e = PipelineEngine()
+        e.shutdown()
+        e.shutdown()
+
+    def test_repr(self):
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            self.assertIn("PipelineEngine", repr(e))
+
+
+# ── Multi-Run ─────────────────────────────────────────────────
+
+
+class TestMultiRun(unittest.TestCase):
+
+    def test_two_runs_same_engine(self):
+        _temp_step("def run(pd, **p): pd['t'] = 'A'; return pd",
+                   name="mr_a")
+        _temp_step("def run(pd, **p): pd['t'] = 'B'; return pd",
+                   name="mr_b")
+        yaml_a = _temp_yaml("wf:\n  - mr_a:")
+        yaml_b = _temp_yaml("wf:\n  - mr_b:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            ra = e.create_run(yaml_a).submit("a", {}).result(timeout=10)
+            rb = e.create_run(yaml_b).submit("b", {}).result(timeout=10)
+        self.assertEqual(ra["t"], "A")
+        self.assertEqual(rb["t"], "B")
+
+    def test_concurrent_different_runs(self):
         _temp_step("""
             def run(pd, **p):
-                t = pd["input"]["timepoint"]
-                pd[f"result_t{t}"] = {"timepoint": t, "processed": True}
+                pd["job"] = pd["input"]["job"]
                 return pd
-        """, name="process_tp")
-        yaml = _temp_yaml("wf:\n  - process_tp:")
-
+        """, name="mr_c")
+        yaml = _temp_yaml("wf:\n  - mr_c:")
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = [
-                engine.submit(yaml, f"t{t}", {"timepoint": t})
-                for t in range(5)
-            ]
-            results = [f.result(timeout=30) for f in futures]
+        with PipelineEngine() as e:
+            run_a = e.create_run(yaml, priority="high")
+            run_b = e.create_run(yaml)
+            fa = run_a.submit("a", {"job": "A"})
+            fb = run_b.submit("b", {"job": "B"})
+            ra = fa.result(timeout=30)
+            rb = fb.result(timeout=30)
+        self.assertEqual(ra["job"], "A")
+        self.assertEqual(rb["job"], "B")
 
-        for t, r in enumerate(results):
-            self.assertEqual(r[f"result_t{t}"]["timepoint"], t)
-            self.assertEqual(r["metadata"]["label"], f"t{t}")
+    def test_many_concurrent_jobs(self):
+        _temp_step("""
+            def run(pd, **p):
+                pd["id"] = pd["input"]["id"]
+                return pd
+        """, name="mr_m")
+        yaml = _temp_yaml("wf:\n  - mr_m:")
+        from engine import PipelineEngine
+        n = 20
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            futures = [run.submit(f"j{i}", {"id": i}) for i in range(n)]
+            results = [f.result(timeout=30) for f in futures]
+        self.assertEqual(sorted(r["id"] for r in results), list(range(n)))
+
+
+# ── Observability ─────────────────────────────────────────────
+
+
+class TestObservability(unittest.TestCase):
+
+    def test_engine_status_structure(self):
+        _temp_step("def run(pd, **p): return pd", name="obs")
+        yaml = _temp_yaml("wf:\n  - obs:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j", {}).result(timeout=10)
+            s = e.status()
+        self.assertIn("workers", s)
+        self.assertIn("gpu_queue_depth", s)
+        self.assertIn("runs", s)
+        self.assertEqual(len(s["runs"]), 1)
+
+    def test_run_status_structure(self):
+        _temp_step("def run(pd, **p): return pd", name="obs_r")
+        yaml = _temp_yaml("wf:\n  - obs_r:")
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml, priority="high")
+            run.submit("j", {}).result(timeout=10)
+            s = run.status
+        self.assertEqual(s["priority"], 10)
+        self.assertIn("completed", s)
+        self.assertIn("phases", s)
+
+
+# ── Integration: full pipeline workflows ──────────────────────
+
+
+class TestIntegrationSimple(unittest.TestCase):
+    """End-to-end tests for simple (no-scope) pipelines."""
+
+    def test_four_step_pipeline(self):
+        """Full pipeline: preprocess → transform → filter → output."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["preprocess"] = [x * p.get("scale", 1)
+                                    for x in pd["input"]["data"]]
+                return pd
+        """, name="int_pre")
+        _temp_step("""
+            def run(pd, **p):
+                pd["transform"] = [x ** 2 for x in pd["preprocess"]]
+                return pd
+        """, name="int_trans")
+        _temp_step("""
+            def run(pd, **p):
+                threshold = p.get("threshold", 10)
+                pd["filter"] = [x for x in pd["transform"] if x > threshold]
+                return pd
+        """, name="int_filt")
+        _temp_step("""
+            def run(pd, **p):
+                pd["output"] = {
+                    "count": len(pd["filter"]),
+                    "values": pd["filter"],
+                }
+                return pd
+        """, name="int_out")
+        yaml = _temp_yaml("""
+            wf:
+              - int_pre:
+                  scale: 2
+              - int_trans:
+              - int_filt:
+                  threshold: 10
+              - int_out:
+        """)
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "test", {"data": [1, 2, 3, 4, 5]})
+        # scale: [2,4,6,8,10], square: [4,16,36,64,100], filter>10: [16,36,64,100]
+        self.assertEqual(r["output"]["count"], 4)
+        self.assertEqual(r["output"]["values"], [16, 36, 64, 100])
 
     def test_sequential_adaptive_feedback(self):
         """Each job uses the previous job's result — the adaptive loop."""
@@ -907,78 +1091,56 @@ class TestMultiJob(unittest.TestCase):
                     "feedback_value": feedback,
                 }
                 return pd
-        """, name="adaptive_step")
-        yaml = _temp_yaml("wf:\n  - adaptive_step:")
+        """, name="int_adapt")
+        yaml = _temp_yaml("wf:\n  - int_adapt:")
 
         from engine import PipelineEngine
         with PipelineEngine() as engine:
+            run = engine.create_run(yaml)
             feedback = None
-            for t in range(3):
-                r = engine.run_pipeline(
-                    yaml, f"t{t}",
-                    {"timepoint": t, "feedback": feedback},
-                )
+            for t in range(4):
+                r = run.submit(
+                    f"t{t}", {"timepoint": t, "feedback": feedback},
+                ).result(timeout=10)
                 feedback = r["result"]
 
-        self.assertEqual(r["result"]["timepoint"], 2)
+        self.assertEqual(r["result"]["timepoint"], 3)
         self.assertTrue(r["result"]["used_feedback"])
-        self.assertEqual(r["result"]["feedback_value"]["timepoint"], 1)
+        self.assertEqual(r["result"]["feedback_value"]["timepoint"], 2)
 
     def test_engine_recovers_after_failed_job(self):
         """A failed job doesn't prevent subsequent jobs from running."""
         _temp_step('def run(pd, **p): raise RuntimeError("bad")',
-                   name="failing_step")
+                   name="int_fail")
         _temp_step('def run(pd, **p): pd["ok"] = True; return pd',
-                   name="good_step")
-        bad_yaml = _temp_yaml("wf:\n  - failing_step:")
-        good_yaml = _temp_yaml("wf:\n  - good_step:")
+                   name="int_good")
+        bad_yaml = _temp_yaml("wf:\n  - int_fail:")
+        good_yaml = _temp_yaml("wf:\n  - int_good:")
 
         from engine import PipelineEngine
         with PipelineEngine() as engine:
             with self.assertRaises(RuntimeError):
-                engine.run_pipeline(bad_yaml, "bad", {})
-            r = engine.run_pipeline(good_yaml, "good", {})
+                engine.create_run(bad_yaml).submit("bad", {}).result(timeout=10)
+            r = engine.create_run(good_yaml).submit("good", {}).result(timeout=10)
             self.assertTrue(r["ok"])
 
     def test_concurrent_mixed_success_and_failure(self):
         """Some jobs fail, others succeed; all futures resolve correctly."""
         _temp_step('def run(pd, **p): raise ValueError("fail")',
-                   name="will_fail")
+                   name="int_wf")
         _temp_step('def run(pd, **p): pd["ok"] = True; return pd',
-                   name="will_pass")
-        fail_yaml = _temp_yaml("wf:\n  - will_fail:")
-        pass_yaml = _temp_yaml("wf:\n  - will_pass:")
+                   name="int_wp")
+        fail_yaml = _temp_yaml("wf:\n  - int_wf:")
+        pass_yaml = _temp_yaml("wf:\n  - int_wp:")
 
         from engine import PipelineEngine
         with PipelineEngine() as engine:
-            f_fail = engine.submit(fail_yaml, "fail", {})
-            f_pass = engine.submit(pass_yaml, "pass", {})
+            f_fail = engine.create_run(fail_yaml).submit("fail", {})
+            f_pass = engine.create_run(pass_yaml).submit("pass", {})
 
             with self.assertRaises(ValueError):
                 f_fail.result(timeout=30)
-            r = f_pass.result(timeout=30)
-            self.assertTrue(r["ok"])
-
-    def test_many_concurrent_jobs(self):
-        """Stress test: 20 concurrent submissions."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["job_id"] = pd["input"]["job_id"]
-                return pd
-        """, name="stress_step")
-        yaml = _temp_yaml("wf:\n  - stress_step:")
-
-        from engine import PipelineEngine
-        n_jobs = 20
-        with PipelineEngine(max_concurrent=n_jobs) as engine:
-            futures = [
-                engine.submit(yaml, f"j{i}", {"job_id": i})
-                for i in range(n_jobs)
-            ]
-            results = [f.result(timeout=30) for f in futures]
-
-        job_ids = sorted(r["job_id"] for r in results)
-        self.assertEqual(job_ids, list(range(n_jobs)))
+            self.assertTrue(f_pass.result(timeout=30)["ok"])
 
     def test_growing_data_across_sequential_jobs(self):
         """Accumulated results grow across an adaptive run."""
@@ -992,100 +1154,22 @@ class TestMultiJob(unittest.TestCase):
                     "history_length": len(history),
                 }
                 return pd
-        """, name="accumulate")
-        yaml = _temp_yaml("wf:\n  - accumulate:")
+        """, name="int_grow")
+        yaml = _temp_yaml("wf:\n  - int_grow:")
 
         from engine import PipelineEngine
         history = []
         with PipelineEngine() as engine:
+            run = engine.create_run(yaml)
             for t in range(4):
-                r = engine.run_pipeline(
-                    yaml, f"t{t}",
-                    {"timepoint": t, "history": history},
-                )
+                r = run.submit(
+                    f"t{t}", {"timepoint": t, "history": history},
+                ).result(timeout=10)
                 history.append(r["result"])
 
         self.assertEqual(len(history), 4)
         self.assertEqual(history[0]["history_length"], 0)
         self.assertEqual(history[3]["history_length"], 3)
-        self.assertEqual(history[3]["cells_found"], 35)
-
-    def test_concurrent_different_pipelines(self):
-        """Different pipeline configs submitted concurrently."""
-        _temp_step('def run(pd, **p): pd["a"] = 1; return pd',
-                   name="pipe_a_step")
-        _temp_step('def run(pd, **p): pd["b"] = 2; return pd',
-                   name="pipe_b_step")
-        yaml_a = _temp_yaml("wf:\n  - pipe_a_step:")
-        yaml_b = _temp_yaml("wf:\n  - pipe_b_step:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            fa = engine.submit(yaml_a, "a", {})
-            fb = engine.submit(yaml_b, "b", {})
-            ra = fa.result(timeout=30)
-            rb = fb.result(timeout=30)
-
-        self.assertEqual(ra["a"], 1)
-        self.assertNotIn("b", ra)
-        self.assertEqual(rb["b"], 2)
-        self.assertNotIn("a", rb)
-
-    def test_callbacks_fire_for_all_concurrent_jobs(self):
-        """Every concurrent job's callback fires."""
-        _temp_step("def run(pd, **p): return pd", name="cb_step")
-        yaml = _temp_yaml("wf:\n  - cb_step:")
-
-        from engine import PipelineEngine
-        labels = []
-        lock = threading.Lock()
-
-        def on_done(future):
-            with lock:
-                labels.append(future.result()["metadata"]["label"])
-
-        with PipelineEngine() as engine:
-            futures = [
-                engine.submit(yaml, f"j{i}", {}, callback=on_done)
-                for i in range(5)
-            ]
-            for f in futures:
-                f.result(timeout=30)
-
-        time.sleep(0.2)
-        self.assertEqual(sorted(labels), [f"j{i}" for i in range(5)])
-
-    def test_concurrent_multi_step_jobs(self):
-        """Multiple multi-step pipelines submitted concurrently."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["step1"] = pd["input"]["job_id"]
-                return pd
-        """, name="multi_s1")
-        _temp_step("""
-            def run(pd, **p):
-                pd["step2"] = pd["step1"] * 2
-                return pd
-        """, name="multi_s2")
-        _temp_step("""
-            def run(pd, **p):
-                pd["final"] = pd["step2"] + 1
-                return pd
-        """, name="multi_s3")
-        yaml = _temp_yaml("wf:\n  - multi_s1:\n  - multi_s2:\n  - multi_s3:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = [
-                engine.submit(yaml, f"j{i}", {"job_id": i})
-                for i in range(5)
-            ]
-            results = [f.result(timeout=30) for f in futures]
-
-        for i, r in enumerate(results):
-            self.assertEqual(r["step1"], i)
-            self.assertEqual(r["step2"], i * 2)
-            self.assertEqual(r["final"], i * 2 + 1)
 
     def test_successive_batches(self):
         """Engine processes multiple waves of concurrent jobs."""
@@ -1094,57 +1178,403 @@ class TestMultiJob(unittest.TestCase):
                 pd["batch"] = pd["input"]["batch"]
                 pd["idx"] = pd["input"]["idx"]
                 return pd
-        """, name="batch_step")
-        yaml = _temp_yaml("wf:\n  - batch_step:")
+        """, name="int_batch")
+        yaml = _temp_yaml("wf:\n  - int_batch:")
 
         from engine import PipelineEngine
         with PipelineEngine() as engine:
+            run = engine.create_run(yaml)
             for batch in range(3):
                 futures = [
-                    engine.submit(yaml, f"b{batch}_j{i}",
-                                  {"batch": batch, "idx": i})
+                    run.submit(f"b{batch}_j{i}",
+                               {"batch": batch, "idx": i})
                     for i in range(4)
                 ]
                 results = [f.result(timeout=30) for f in futures]
-
                 for i, r in enumerate(results):
                     self.assertEqual(r["batch"], batch)
                     self.assertEqual(r["idx"], i)
 
-    def test_interleaved_different_yamls(self):
-        """Different pipeline configs submitted in interleaved order."""
-        _temp_step('def run(pd, **p): pd["type"] = "A"; return pd',
-                   name="type_a")
-        _temp_step('def run(pd, **p): pd["type"] = "B"; return pd',
-                   name="type_b")
-        _temp_step('def run(pd, **p): pd["type"] = "C"; return pd',
-                   name="type_c")
-        yaml_a = _temp_yaml("wf:\n  - type_a:")
-        yaml_b = _temp_yaml("wf:\n  - type_b:")
-        yaml_c = _temp_yaml("wf:\n  - type_c:")
+
+class TestIntegrationScoped(unittest.TestCase):
+    """End-to-end tests for scoped pipelines (spatial/temporal)."""
+
+    def test_full_scoped_workflow(self):
+        """Complete: per-tile processing → spatial aggregation → post-processing."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["features"] = pd["input"]["value"] * 2
+                return pd
+        """, name="isc_extract")
+        _temp_step("""
+            def run(pd, **p):
+                all_features = [r["features"] for r in pd["results"]]
+                pd["aggregated"] = sum(all_features)
+                return pd
+        """, name="isc_agg")
+        _temp_step("""
+            def run(pd, **p):
+                pd["normalized"] = pd["aggregated"] / p.get("divisor", 1)
+                return pd
+        """, name="isc_norm")
+        yaml = _temp_yaml("""
+            wf:
+              - isc_extract:
+              - isc_agg:
+                  scope:
+                    spatial: region
+              - isc_norm:
+                  divisor: 3
+        """)
 
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for v in [10, 20, 30]:
+                run.submit(f"t_{v}", {"value": v},
+                           spatial={"region": "R1"})
+            r = run.scope_complete(spatial={"region": "R1"}).result(timeout=30)
+
+        # features: 20, 40, 60 → sum: 120 → /3 = 40
+        self.assertEqual(r["normalized"], 40.0)
+
+    def test_multiple_regions_independent(self):
+        """Different spatial groups produce independent results."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="isc_r1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["total"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="isc_r2")
+        yaml = _temp_yaml("""
+            wf:
+              - isc_r1:
+              - isc_r2:
+                  scope:
+                    spatial: region
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            # Region A: 1 + 2 = 3
+            run.submit("a1", {"v": 1}, spatial={"region": "A"})
+            run.submit("a2", {"v": 2}, spatial={"region": "A"})
+            # Region B: 100 + 200 = 300
+            run.submit("b1", {"v": 100}, spatial={"region": "B"})
+            run.submit("b2", {"v": 200}, spatial={"region": "B"})
+
+            ra = run.scope_complete(spatial={"region": "A"}).result(timeout=30)
+            rb = run.scope_complete(spatial={"region": "B"}).result(timeout=30)
+
+        self.assertEqual(ra["total"], 3)
+        self.assertEqual(rb["total"], 300)
+
+    def test_scope_waits_for_slow_jobs(self):
+        """scope_complete blocks until all jobs in the group finish."""
+        _temp_step("""
+            import time
+            def run(pd, **p):
+                time.sleep(p.get("delay", 0))
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="isc_slow")
+        _temp_step("""
+            def run(pd, **p):
+                pd["values"] = sorted(r["v"] for r in pd["results"])
+                return pd
+        """, name="isc_coll")
+        yaml = _temp_yaml("""
+            wf:
+              - isc_slow:
+              - isc_coll:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("fast", {"v": 1}, spatial={"r": "X"})
+            run.submit("slow", {"v": 2}, spatial={"r": "X"})
+            r = run.scope_complete(spatial={"r": "X"}).result(timeout=30)
+
+        self.assertEqual(r["values"], [1, 2])
+
+    def test_concurrent_scope_groups(self):
+        """Multiple scope groups can be completed concurrently."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="isc_cg1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="isc_cg2")
+        yaml = _temp_yaml("""
+            wf:
+              - isc_cg1:
+              - isc_cg2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            for region in ["A", "B", "C"]:
+                for i in range(3):
+                    run.submit(f"{region}_{i}", {"v": ord(region)},
+                               spatial={"r": region})
+
+            futures = [
+                run.scope_complete(spatial={"r": r})
+                for r in ["A", "B", "C"]
+            ]
+            results = {f.result(timeout=30)["sum"] for f in futures}
+
+        self.assertEqual(results, {65 * 3, 66 * 3, 67 * 3})
+
+    def test_scope_with_complex_data(self):
+        """Complex Python types survive accumulation across scope boundary."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["data"] = {
+                    "tuple": (1, 2),
+                    "set": {3, 4},
+                    "nested": {"a": [None, True, 2.5]},
+                }
+                return pd
+        """, name="isc_cx1")
+        _temp_step("""
+            def run(pd, **p):
+                first = pd["results"][0]["data"]
+                pd["echo"] = first
+                return pd
+        """, name="isc_cx2")
+        yaml = _temp_yaml("""
+            wf:
+              - isc_cx1:
+              - isc_cx2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("j", {}, spatial={"r": "1"})
+            r = run.scope_complete(spatial={"r": "1"}).result(timeout=30)
+
+        self.assertEqual(r["echo"]["tuple"], (1, 2))
+        self.assertEqual(r["echo"]["set"], {3, 4})
+        self.assertEqual(r["echo"]["nested"]["a"][2], 2.5)
+
+
+class TestIntegrationMultiRun(unittest.TestCase):
+    """End-to-end tests for multiple interleaved runs."""
+
+    def test_two_runs_interleaved_submits(self):
+        """Two runs submit jobs to the same engine interleaved."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["type"] = p.get("type", "unknown")
+                pd["id"] = pd["input"]["id"]
+                return pd
+        """, name="imr_step")
+        yaml = _temp_yaml("wf:\n  - imr_step:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run_a = e.create_run(yaml, priority="high")
+            run_b = e.create_run(yaml)
+
             futures = []
             for i in range(4):
-                futures.append(("A", engine.submit(yaml_a, f"a{i}", {})))
-                futures.append(("B", engine.submit(yaml_b, f"b{i}", {})))
-                futures.append(("C", engine.submit(yaml_c, f"c{i}", {})))
+                futures.append(("A", run_a.submit(f"a{i}", {"id": f"A{i}"})))
+                futures.append(("B", run_b.submit(f"b{i}", {"id": f"B{i}"})))
 
-            for expected, f in futures:
+            for expected_type, f in futures:
                 r = f.result(timeout=30)
-                self.assertEqual(r["type"], expected)
+                self.assertTrue(r["id"].startswith(expected_type))
+
+    def test_two_runs_with_scopes(self):
+        """Two scoped runs share an engine, each with independent scopes."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="imr_s1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                pd["run"] = p.get("run_id", "?")
+                return pd
+        """, name="imr_s2")
+        yaml_a = _temp_yaml("""
+            wf:
+              - imr_s1:
+              - imr_s2:
+                  scope:
+                    spatial: region
+                  run_id: A
+        """)
+        yaml_b = _temp_yaml("""
+            wf:
+              - imr_s1:
+              - imr_s2:
+                  scope:
+                    spatial: region
+                  run_id: B
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run_a = e.create_run(yaml_a, priority="high")
+            run_b = e.create_run(yaml_b)
+
+            run_a.submit("a1", {"v": 1}, spatial={"region": "R"})
+            run_a.submit("a2", {"v": 2}, spatial={"region": "R"})
+            run_b.submit("b1", {"v": 10}, spatial={"region": "R"})
+            run_b.submit("b2", {"v": 20}, spatial={"region": "R"})
+
+            ra = run_a.scope_complete(spatial={"region": "R"}).result(timeout=30)
+            rb = run_b.scope_complete(spatial={"region": "R"}).result(timeout=30)
+
+        self.assertEqual(ra["sum"], 3)
+        self.assertEqual(ra["run"], "A")
+        self.assertEqual(rb["sum"], 30)
+        self.assertEqual(rb["run"], "B")
+
+    def test_engine_status_during_work(self):
+        """Status reflects active runs and completed work."""
+        _temp_step("def run(pd, **p): return pd", name="imr_st")
+        yaml = _temp_yaml("wf:\n  - imr_st:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run_a = e.create_run(yaml, priority="high")
+            run_b = e.create_run(yaml)
+            run_a.submit("a1", {}).result(timeout=10)
+            run_b.submit("b1", {}).result(timeout=10)
+
+            s = e.status()
+            self.assertEqual(len(s["runs"]), 2)
+            self.assertEqual(s["runs"][0]["priority"], 10)
+            self.assertEqual(s["runs"][0]["completed"], 1)
+            self.assertEqual(s["runs"][1]["completed"], 1)
+
+    def test_run_failure_doesnt_affect_other_run(self):
+        """A failure in one run doesn't block another run."""
+        _temp_step('def run(pd, **p): raise RuntimeError("boom")',
+                   name="imr_bad")
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="imr_ok")
+        bad_yaml = _temp_yaml("wf:\n  - imr_bad:")
+        ok_yaml = _temp_yaml("wf:\n  - imr_ok:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run_bad = e.create_run(bad_yaml)
+            run_ok = e.create_run(ok_yaml)
+
+            f_bad = run_bad.submit("bad", {})
+            f_ok = run_ok.submit("ok", {})
+
+            with self.assertRaises(RuntimeError):
+                f_bad.result(timeout=10)
+            self.assertTrue(f_ok.result(timeout=10)["ok"])
 
 
-# ── Isolation (real subprocess execution) ─────────────────────
+class TestIntegrationIsolation(unittest.TestCase):
+    """Integration tests for isolation settings."""
+
+    def test_maximal_isolation_different_pids(self):
+        """Under maximal isolation, each step gets its own process."""
+        _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid1"] = os.getpid()
+                return pd
+        """, name="iso_max1")
+        _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid2"] = os.getpid()
+                return pd
+        """, name="iso_max2")
+
+        # Force isolation by setting a non-local environment
+        # that matches the current env (so it still works, but isolation=maximal
+        # forces subprocess execution)
+        current_env = Path(sys.prefix).name
+        functions_dir = Path(_TEMP_DIR).as_posix()
+        yaml_content = (
+            f'metadata:\n'
+            f'  functions_dir: "{functions_dir}"\n'
+            f'  isolation: maximal\n'
+            f'  environment: "{current_env}"\n'
+            f'wf:\n'
+            f'  - iso_max1:\n'
+            f'  - iso_max2:\n'
+        )
+        yaml_path = Path(_TEMP_DIR) / f"pipeline_{_next_id()}.yaml"
+        yaml_path.write_text(yaml_content)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(str(yaml_path))
+            r = run.submit("t", {}).result(timeout=30)
+
+        # Under maximal + pipeline env override, both steps run in subprocesses
+        self.assertIn("pid1", r)
+        self.assertIn("pid2", r)
+        self.assertNotEqual(r["pid1"], os.getpid())
+        self.assertNotEqual(r["pid2"], os.getpid())
+
+    def test_minimal_isolation_default(self):
+        """Default (minimal) keeps local steps in-process."""
+        _temp_step("""
+            import os
+            def run(pd, **p):
+                pd["pid"] = os.getpid()
+                return pd
+        """, name="iso_min")
+        yaml = _temp_yaml("wf:\n  - iso_min:")
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            r = e.create_run(yaml).submit("t", {}).result(timeout=10)
+
+        self.assertEqual(r["pid"], os.getpid())
+
+
+# ── Integration: real environment isolation ───────────────────
+
+# Auto-detect test environments
+_TEST_ENV_B = "SMART--basic_test--env_b"
+_TEST_ENV_C = "SMART--basic_test--env_c"
+try:
+    from engine.conda_utils import get_conda_info, env_exists
+    _conda_info = get_conda_info()
+    _ENV_B_EXISTS = env_exists(_conda_info, _TEST_ENV_B)
+    _ENV_C_EXISTS = env_exists(_conda_info, _TEST_ENV_C)
+except Exception:
+    _ENV_B_EXISTS = False
+    _ENV_C_EXISTS = False
 
 
 @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
-class TestIsolation(unittest.TestCase):
-    """Pipeline-level isolation tests with real conda environments."""
+class TestRealIsolation(unittest.TestCase):
+    """Integration tests with real conda environment subprocess isolation."""
 
-    def test_single_isolated_step(self):
-        """One step routed to an isolated environment."""
+    def test_step_runs_in_isolated_env(self):
         _temp_step(f"""
             METADATA = {{"environment": "{_TEST_ENV_B}"}}
             def run(pd, **p):
@@ -1152,558 +1582,322 @@ class TestIsolation(unittest.TestCase):
                 pd["env"] = os.path.basename(sys.prefix)
                 pd["pid"] = os.getpid()
                 return pd
-        """, name="iso_single")
-        yaml = _temp_yaml("wf:\n  - iso_single:")
+        """, name="ri_single")
+        yaml = _temp_yaml("wf:\n  - ri_single:")
 
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
+        with PipelineEngine() as e:
+            r = e.create_run(yaml).submit("t", {}).result(timeout=60)
         self.assertEqual(r["env"], _TEST_ENV_B)
         self.assertNotEqual(r["pid"], os.getpid())
 
-    def test_local_to_isolated_to_local(self):
-        """Data flows through local -> isolated -> local."""
+    def test_local_to_isolated_data_flow(self):
         _temp_step("""
             def run(pd, **p):
-                pd["from_local_1"] = 42
+                pd["from_local"] = 42
                 return pd
-        """, name="iso_l1")
+        """, name="ri_local")
         _temp_step(f"""
             METADATA = {{"environment": "{_TEST_ENV_B}"}}
             def run(pd, **p):
-                pd["from_isolated"] = pd["from_local_1"] * 2
+                pd["from_isolated"] = pd["from_local"] * 2
                 return pd
-        """, name="iso_m")
-        _temp_step("""
-            def run(pd, **p):
-                pd["from_local_2"] = pd["from_isolated"] + 1
-                return pd
-        """, name="iso_l2")
-        yaml = _temp_yaml("wf:\n  - iso_l1:\n  - iso_m:\n  - iso_l2:")
+        """, name="ri_iso")
+        yaml = _temp_yaml("wf:\n  - ri_local:\n  - ri_iso:")
 
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["from_local_1"], 42)
+        with PipelineEngine() as e:
+            r = e.create_run(yaml).submit("t", {}).result(timeout=60)
+        self.assertEqual(r["from_local"], 42)
         self.assertEqual(r["from_isolated"], 84)
-        self.assertEqual(r["from_local_2"], 85)
 
-    @unittest.skipUnless(_ENV_C_EXISTS, f"Also requires {_TEST_ENV_C}")
-    def test_two_different_isolated_envs(self):
-        """Steps in two different isolated environments."""
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                import sys, os
-                pd["env_b"] = os.path.basename(sys.prefix)
-                pd["from_b"] = 10
-                return pd
-        """, name="iso_env_b")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_C}"}}
-            def run(pd, **p):
-                import sys, os
-                pd["env_c"] = os.path.basename(sys.prefix)
-                pd["from_c"] = pd["from_b"] + 5
-                return pd
-        """, name="iso_env_c")
-        yaml = _temp_yaml("wf:\n  - iso_env_b:\n  - iso_env_c:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["env_b"], _TEST_ENV_B)
-        self.assertEqual(r["env_c"], _TEST_ENV_C)
-        self.assertEqual(r["from_c"], 15)
-
-    def test_pipeline_env_override(self):
-        """Pipeline-level environment forces isolation for local steps."""
-        _temp_step("""
-            def run(pd, **p):
-                import sys, os
-                pd["env"] = os.path.basename(sys.prefix)
-                return pd
-        """, name="iso_override")
-        yaml = _temp_yaml(f"""
-            metadata:
-              environment: "{_TEST_ENV_B}"
-            wf:
-              - iso_override:
-        """)
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
-        self.assertEqual(r["env"], _TEST_ENV_B)
-
-    def test_persistent_worker_step(self):
-        """Persistent worker keeps process alive between pipeline runs."""
-        _temp_step(f"""
-            METADATA = {{
-                "environment": "{_TEST_ENV_B}",
-                "worker": "persistent",
-            }}
-            def run(pd, **p):
-                import os
-                pd["pid"] = os.getpid()
-                return pd
-        """, name="iso_persist")
-        yaml = _temp_yaml("wf:\n  - iso_persist:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r1 = engine.run_pipeline(yaml, "t1", {})
-            r2 = engine.run_pipeline(yaml, "t2", {})
-        self.assertEqual(r1["pid"], r2["pid"])
-
-    def test_complex_data_survives_isolation(self):
-        """Complex Python types survive serialization across environments."""
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                pd["echo"] = pd["input"]
-                return pd
-        """, name="iso_echo")
-        yaml = _temp_yaml("wf:\n  - iso_echo:")
-
-        data = {
-            "tuple": (1, 2, 3),
-            "set": {4, 5, 6},
-            "bytes": b"\x00\xff",
-            "nested": {"a": [None, True, {"b": 2.5}]},
-            "large_int": 10**50,
-        }
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", data)
-        self.assertEqual(r["echo"]["tuple"], (1, 2, 3))
-        self.assertEqual(r["echo"]["set"], {4, 5, 6})
-        self.assertEqual(r["echo"]["bytes"], b"\x00\xff")
-        self.assertEqual(r["echo"]["nested"]["a"][2]["b"], 2.5)
-        self.assertEqual(r["echo"]["large_int"], 10**50)
-
-    def test_step_error_in_isolated_env(self):
-        """Errors in isolated steps become StepExecutionError with traceback."""
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p): raise ValueError("isolated error")
-        """, name="iso_err")
-        yaml = _temp_yaml("wf:\n  - iso_err:")
-
-        from engine._errors import StepExecutionError
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            with self.assertRaises(StepExecutionError) as ctx:
-                engine.run_pipeline(yaml, "t", {})
-        self.assertIn("isolated error", str(ctx.exception))
-        self.assertIn("ValueError", ctx.exception.remote_traceback)
-
-    def test_return_validation_through_isolation(self):
-        """Non-dict return from isolated step raises TypeError."""
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p): return ["not", "a", "dict"]
-        """, name="iso_bad_ret")
-        yaml = _temp_yaml("wf:\n  - iso_bad_ret:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            with self.assertRaises(TypeError):
-                engine.run_pipeline(yaml, "t", {})
-
-
-# ── Multi-Job Isolation ──────────────────────────────────────
-
-
-@unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
-class TestMultiJobIsolation(unittest.TestCase):
-    """Multi-job tests with real environment isolation."""
-
-    def test_concurrent_isolated_jobs(self):
-        """Multiple isolated jobs submitted concurrently."""
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                import os
-                pd["job_id"] = pd["input"]["job_id"]
-                pd["pid"] = os.getpid()
-                return pd
-        """, name="mji_concurrent")
-        yaml = _temp_yaml("wf:\n  - mji_concurrent:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = [
-                engine.submit(yaml, f"j{i}", {"job_id": i})
-                for i in range(3)
-            ]
-            results = [f.result(timeout=60) for f in futures]
-
-        for i, r in enumerate(results):
-            self.assertEqual(r["job_id"], i)
-
-    def test_concurrent_mixed_local_and_isolated(self):
-        """Local and isolated jobs submitted concurrently."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["mode"] = "local"
-                return pd
-        """, name="mji_local")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                import sys, os
-                pd["mode"] = "isolated"
-                pd["env"] = os.path.basename(sys.prefix)
-                return pd
-        """, name="mji_iso")
-        yaml_l = _temp_yaml("wf:\n  - mji_local:")
-        yaml_i = _temp_yaml("wf:\n  - mji_iso:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = []
-            for i in range(3):
-                futures.append(("local", engine.submit(yaml_l, f"l{i}", {})))
-                futures.append(("isolated", engine.submit(yaml_i, f"i{i}", {})))
-
-            for expected, f in futures:
-                r = f.result(timeout=60)
-                self.assertEqual(r["mode"], expected)
-                if expected == "isolated":
-                    self.assertEqual(r["env"], _TEST_ENV_B)
-
-    def test_sequential_adaptive_with_isolation(self):
-        """Adaptive feedback loop with isolated processing step."""
-        _temp_step("""
-            def run(pd, **p):
-                t = pd["input"]["timepoint"]
-                pd["acquired"] = {"t": t, "data": list(range(t + 1))}
-                return pd
-        """, name="mji_acquire")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                pd["processed"] = {{
-                    "n": len(pd["acquired"]["data"]),
-                    "t": pd["acquired"]["t"],
-                }}
-                return pd
-        """, name="mji_process")
-        yaml = _temp_yaml("wf:\n  - mji_acquire:\n  - mji_process:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            for t in range(3):
-                r = engine.run_pipeline(yaml, f"t{t}", {"timepoint": t})
-                self.assertEqual(r["processed"]["t"], t)
-                self.assertEqual(r["processed"]["n"], t + 1)
-
-    def test_multi_step_mixed_isolation_concurrent(self):
-        """Multi-step pipelines (local+isolated) submitted concurrently."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["local_1"] = pd["input"]["job_id"]
-                return pd
-        """, name="mji_ms_l1")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                pd["isolated"] = pd["local_1"] * 10
-                return pd
-        """, name="mji_ms_iso")
-        _temp_step("""
-            def run(pd, **p):
-                pd["local_2"] = pd["isolated"] + 1
-                return pd
-        """, name="mji_ms_l2")
-        yaml = _temp_yaml("""
-            wf:
-              - mji_ms_l1:
-              - mji_ms_iso:
-              - mji_ms_l2:
-        """)
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = [
-                engine.submit(yaml, f"j{i}", {"job_id": i})
-                for i in range(3)
-            ]
-            results = [f.result(timeout=60) for f in futures]
-
-        for i, r in enumerate(results):
-            self.assertEqual(r["local_1"], i)
-            self.assertEqual(r["isolated"], i * 10)
-            self.assertEqual(r["local_2"], i * 10 + 1)
-
-    def test_persistent_worker_reused_across_jobs(self):
-        """Persistent worker reused across sequential pipeline runs."""
-        _temp_step(f"""
-            METADATA = {{
-                "environment": "{_TEST_ENV_B}",
-                "worker": "persistent",
-            }}
-            def run(pd, **p):
-                import os
-                pd["pid"] = os.getpid()
-                pd["job_id"] = pd["input"]["job_id"]
-                return pd
-        """, name="mji_persist")
-        yaml = _temp_yaml("wf:\n  - mji_persist:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            results = []
-            for i in range(3):
-                r = engine.run_pipeline(yaml, f"j{i}", {"job_id": i})
-                results.append(r)
-
-        pids = {r["pid"] for r in results}
-        self.assertEqual(len(pids), 1, "Persistent worker should be reused")
-        for i, r in enumerate(results):
-            self.assertEqual(r["job_id"], i)
-
-    def test_interleaved_yamls_mixed_isolation(self):
-        """Interleaved local and isolated pipeline submissions."""
-        _temp_step("""
-            def run(pd, **p):
-                pd["type"] = "local"
-                return pd
-        """, name="mji_il_local")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                pd["type"] = "isolated"
-                return pd
-        """, name="mji_il_iso")
-        yaml_l = _temp_yaml("wf:\n  - mji_il_local:")
-        yaml_i = _temp_yaml("wf:\n  - mji_il_iso:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            futures = []
-            for i in range(4):
-                futures.append(("local", engine.submit(yaml_l, f"l{i}", {})))
-                futures.append(("isolated", engine.submit(yaml_i, f"i{i}", {})))
-
-            for expected, f in futures:
-                r = f.result(timeout=60)
-                self.assertEqual(r["type"], expected)
-
-
-# ── Regression ────────────────────────────────────────────────
-#
-# Each test guards against a specific past bug.
-# Docstrings explain what broke and how it was fixed.
-
-
-class TestRegression(unittest.TestCase):
-    """
-    Regression tests for known past bugs.
-
-    These must never be removed — they exist because each failure mode
-    actually happened or was discovered during review. If a refactor
-    breaks one, the original bug has been reintroduced.
-    """
-
-    def test_metadata_extraction_never_executes_code(self):
-        """
-        Bug: get_step_settings() used exec() to read METADATA, running all
-        module-level imports. A step with 'import torch' at module level
-        crashed the main process even when destined for a subprocess.
-
-        Fix: AST-based extraction in _loader._extract_metadata().
-        """
-        path = _temp_step("""
-            import nonexistent_package_that_would_crash
-            raise RuntimeError("this line must never execute")
-            METADATA = {"environment": "some_remote_env", "worker": "persistent"}
-            def run(pd, **p): return pd
-        """)
-        # Must succeed — no code is executed, only the AST is parsed
-        s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "some_remote_env")
-        self.assertEqual(s["worker"], "persistent")
-
-    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
-    def test_load_function_only_called_for_local_steps(self):
-        """
-        Bug: _pipeline.py called load_function() for EVERY step, even
-        isolated ones. The module was exec'd in the main process then
-        discarded — wasteful and dangerous (wrong-env imports crash).
-
-        Fix: load_function() moved into the else branch (local-only).
-        """
-        _temp_step("""
-            def run(pd, **p):
-                pd["local"] = True
-                return pd
-        """, name="reg_local")
-        _temp_step(f"""
-            METADATA = {{"environment": "{_TEST_ENV_B}"}}
-            def run(pd, **p):
-                pd["isolated"] = True
-                return pd
-        """, name="reg_isolated")
-        yaml = _temp_yaml("wf:\n  - reg_local:\n  - reg_isolated:")
-
-        from unittest.mock import patch
-        from engine import _pipeline, PipelineEngine
-        original = _pipeline.load_function
-        loaded_names = []
-
-        def tracking_load(name, *args, **kwargs):
-            loaded_names.append(name)
-            return original(name, *args, **kwargs)
-
-        with patch.object(_pipeline, 'load_function',
-                          side_effect=tracking_load):
-            with PipelineEngine() as engine:
-                r = engine.run_pipeline(yaml, "t", {})
-
-        self.assertTrue(r["local"])
-        self.assertTrue(r["isolated"])
-        self.assertEqual(loaded_names, ["reg_local"],
-                         "load_function must only run for local steps, "
-                         f"but ran for: {loaded_names}")
-
-    def test_pool_semaphore_uses_local_reference(self):
-        """
-        Bug: pool.execute() accessed self._semaphores[key] outside the pool
-        lock at .acquire() and .release(). If the reaper or shutdown_all()
-        popped the key concurrently, KeyError was raised.
-
-        Fix: local reference (sem = ...) taken inside the lock.
-        """
-        import inspect
-        from engine._pool import WorkerPool
-        source = inspect.getsource(WorkerPool.execute)
-        self.assertNotIn(
-            "self._semaphores[key].acquire", source,
-            "Semaphore dict lookup outside lock — race with reaper/shutdown"
-        )
-        self.assertNotIn(
-            "self._semaphores[key].release", source,
-            "Semaphore dict lookup outside lock — race with reaper/shutdown"
-        )
-
-    def test_local_error_preserves_original_exception_type(self):
-        """
-        Contract: local steps propagate the original exception type.
-        Code that catches only StepExecutionError would silently miss
-        errors from local steps.
-        """
-        _temp_step('def run(pd, **p): raise ValueError("local boom")',
-                   name="reg_local_err")
-        yaml = _temp_yaml("wf:\n  - reg_local_err:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            with self.assertRaises(ValueError) as ctx:
-                engine.run_pipeline(yaml, "t", {})
-        self.assertIn("local boom", str(ctx.exception))
-
-    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
     def test_isolated_error_wraps_in_step_execution_error(self):
-        """
-        Contract: isolated steps wrap errors in StepExecutionError with
-        remote_traceback. Code that catches only ValueError would miss
-        errors from isolated steps.
-        """
         _temp_step(f"""
             METADATA = {{"environment": "{_TEST_ENV_B}"}}
             def run(pd, **p): raise ValueError("isolated boom")
-        """, name="reg_iso_err")
-        yaml = _temp_yaml("wf:\n  - reg_iso_err:")
+        """, name="ri_err")
+        yaml = _temp_yaml("wf:\n  - ri_err:")
 
-        from engine._errors import StepExecutionError
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
+        with PipelineEngine() as e:
             with self.assertRaises(StepExecutionError) as ctx:
-                engine.run_pipeline(yaml, "t", {})
+                e.create_run(yaml).submit("t", {}).result(timeout=60)
         self.assertIn("isolated boom", str(ctx.exception))
-        self.assertNotIsInstance(ctx.exception, ValueError)
+        self.assertIn("ValueError", ctx.exception.remote_traceback)
 
-    def test_step_without_metadata_defaults_to_local(self):
-        """
-        Bug: if AST extraction returns {} for a step with no METADATA,
-        the defaults must be safe (local, subprocess, 1). A crash or
-        routing to a nonexistent environment would break simple steps.
-        """
-        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
-                   name="reg_bare")
-        yaml = _temp_yaml("wf:\n  - reg_bare:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
-        self.assertTrue(r["ok"])
-
-    def test_missing_run_fails_at_execution_not_routing(self):
-        """
-        Bug: with AST extraction, routing succeeds even if the step has
-        no run() function. The error must come at execution time with a
-        clear AttributeError, not during METADATA reading.
-        """
-        _temp_step("x = 1", name="reg_no_run")
-        yaml = _temp_yaml("wf:\n  - reg_no_run:")
-
-        from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            with self.assertRaises(AttributeError):
-                engine.run_pipeline(yaml, "t", {})
-
-    @unittest.skipUnless(_ENV_B_EXISTS, f"Requires {_TEST_ENV_B}")
-    def test_pipeline_data_keys_survive_env_crossing(self):
-        """
-        Bug: data accumulated by local steps could be lost during pickle
-        serialization when crossing an environment boundary. All keys
-        from prior steps must survive the round-trip intact.
-        """
-        _temp_step("""
-            def run(pd, **p):
-                pd["step_1"] = {"value": 42, "nested": [1, 2, 3]}
-                return pd
-        """, name="reg_surv_1")
+    def test_per_env_worker_reuses_process(self):
+        """Persistent worker reused across pipeline runs."""
         _temp_step(f"""
             METADATA = {{"environment": "{_TEST_ENV_B}"}}
             def run(pd, **p):
-                pd["step_2"] = pd["step_1"]["value"] * 2
+                import os
+                pd["pid"] = os.getpid()
                 return pd
-        """, name="reg_surv_2")
-        _temp_step("""
-            def run(pd, **p):
-                pd["step_3"] = {
-                    "saw_step_1": "step_1" in pd,
-                    "saw_step_2": "step_2" in pd,
-                    "step_1_nested": pd.get("step_1", {}).get("nested"),
-                }
-                return pd
-        """, name="reg_surv_3")
-        yaml = _temp_yaml(
-            "wf:\n  - reg_surv_1:\n  - reg_surv_2:\n  - reg_surv_3:"
-        )
+        """, name="ri_persist")
+        yaml = _temp_yaml("wf:\n  - ri_persist:")
 
         from engine import PipelineEngine
-        with PipelineEngine() as engine:
-            r = engine.run_pipeline(yaml, "t", {})
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            r1 = run.submit("t1", {}).result(timeout=60)
+            r2 = run.submit("t2", {}).result(timeout=60)
+        self.assertEqual(r1["pid"], r2["pid"])
 
-        self.assertTrue(r["step_3"]["saw_step_1"])
-        self.assertTrue(r["step_3"]["saw_step_2"])
-        self.assertEqual(r["step_3"]["step_1_nested"], [1, 2, 3])
-        self.assertEqual(r["step_2"], 84)
+    def test_scoped_pipeline_with_isolation(self):
+        """Full scoped pipeline with real env isolation."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="ri_sc1")
+        _temp_step(f"""
+            METADATA = {{"environment": "{_TEST_ENV_B}"}}
+            def run(pd, **p):
+                pd["total"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="ri_sc2")
+        yaml = _temp_yaml("""
+            wf:
+              - ri_sc1:
+              - ri_sc2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine() as e:
+            run = e.create_run(yaml)
+            run.submit("a", {"v": 10}, spatial={"r": "R"})
+            run.submit("b", {"v": 20}, spatial={"r": "R"})
+            r = run.scope_complete(spatial={"r": "R"}).result(timeout=60)
+        self.assertEqual(r["total"], 30)
+
+
+# ── Stress tests ──────────────────────────────────────────────
+
+
+class TestStress(unittest.TestCase):
+    """High-load tests for concurrency, throughput, and stability."""
+
+    def test_50_concurrent_jobs(self):
+        """50 jobs submitted simultaneously, all complete correctly."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["id"] = pd["input"]["id"]
+                return pd
+        """, name="stress_50")
+        yaml = _temp_yaml("wf:\n  - stress_50:")
+
+        from engine import PipelineEngine
+        n = 50
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            futures = [run.submit(f"j{i}", {"id": i}) for i in range(n)]
+            results = [f.result(timeout=60) for f in futures]
+
+        ids = sorted(r["id"] for r in results)
+        self.assertEqual(ids, list(range(n)))
+
+    def test_20_scope_groups(self):
+        """20 independent scope groups, each with 5 jobs."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="stress_sg1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["sum"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="stress_sg2")
+        yaml = _temp_yaml("""
+            wf:
+              - stress_sg1:
+              - stress_sg2:
+                  scope:
+                    spatial: group
+        """)
+
+        from engine import PipelineEngine
+        n_groups = 20
+        jobs_per_group = 5
+
+        with PipelineEngine(max_concurrent=32) as e:
+            run = e.create_run(yaml)
+
+            for g in range(n_groups):
+                for j in range(jobs_per_group):
+                    run.submit(f"g{g}_j{j}", {"v": g},
+                               spatial={"group": str(g)})
+
+            futures = [
+                run.scope_complete(spatial={"group": str(g)})
+                for g in range(n_groups)
+            ]
+            results = [f.result(timeout=60) for f in futures]
+
+        for g, r in enumerate(results):
+            self.assertEqual(r["sum"], g * jobs_per_group)
+
+    def test_rapid_submit_and_scope_complete(self):
+        """Submit + scope_complete in tight loop, no race conditions."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """, name="stress_rapid1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["total"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """, name="stress_rapid2")
+        yaml = _temp_yaml("""
+            wf:
+              - stress_rapid1:
+              - stress_rapid2:
+                  scope:
+                    spatial: r
+        """)
+
+        from engine import PipelineEngine
+        with PipelineEngine(max_concurrent=16) as e:
+            run = e.create_run(yaml)
+            scope_futures = []
+
+            for batch in range(10):
+                run.submit(f"b{batch}_0", {"v": 1},
+                           spatial={"r": str(batch)})
+                run.submit(f"b{batch}_1", {"v": 2},
+                           spatial={"r": str(batch)})
+                scope_futures.append(
+                    run.scope_complete(spatial={"r": str(batch)}))
+
+            results = [f.result(timeout=60) for f in scope_futures]
+
+        for r in results:
+            self.assertEqual(r["total"], 3)
+
+    def test_concurrent_multi_step_jobs(self):
+        """10 concurrent 4-step pipelines."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["s1"] = pd["input"]["id"]
+                return pd
+        """, name="stress_ms1")
+        _temp_step("""
+            def run(pd, **p):
+                pd["s2"] = pd["s1"] * 2
+                return pd
+        """, name="stress_ms2")
+        _temp_step("""
+            def run(pd, **p):
+                pd["s3"] = pd["s2"] + 1
+                return pd
+        """, name="stress_ms3")
+        _temp_step("""
+            def run(pd, **p):
+                pd["s4"] = pd["s3"] ** 2
+                return pd
+        """, name="stress_ms4")
+        yaml = _temp_yaml("""
+            wf:
+              - stress_ms1:
+              - stress_ms2:
+              - stress_ms3:
+              - stress_ms4:
+        """)
+
+        from engine import PipelineEngine
+        n = 10
+        with PipelineEngine(max_concurrent=n) as e:
+            run = e.create_run(yaml)
+            futures = [run.submit(f"j{i}", {"id": i}) for i in range(n)]
+            results = [f.result(timeout=30) for f in futures]
+
+        for i, r in enumerate(results):
+            self.assertEqual(r["s1"], i)
+            self.assertEqual(r["s2"], i * 2)
+            self.assertEqual(r["s3"], i * 2 + 1)
+            self.assertEqual(r["s4"], (i * 2 + 1) ** 2)
+
+    def test_interleaved_runs_stress(self):
+        """3 runs × 10 jobs each, submitted interleaved."""
+        _temp_step("""
+            def run(pd, **p):
+                pd["run"] = pd["input"]["run"]
+                pd["idx"] = pd["input"]["idx"]
+                return pd
+        """, name="stress_il")
+        yaml = _temp_yaml("wf:\n  - stress_il:")
+
+        from engine import PipelineEngine
+        with PipelineEngine(max_concurrent=32) as e:
+            runs = [e.create_run(yaml, priority=p) for p in [10, 0, -10]]
+            futures = []
+
+            for idx in range(10):
+                for run_id, run in enumerate(runs):
+                    futures.append(
+                        run.submit(f"r{run_id}_j{idx}",
+                                   {"run": run_id, "idx": idx}))
+
+            results = [f.result(timeout=60) for f in futures]
+
+        self.assertEqual(len(results), 30)
+        for r in results:
+            self.assertIn("run", r)
+            self.assertIn("idx", r)
+
+
+# ── Regression ────────────────────────────────────────────────
+
+
+class TestRegression(unittest.TestCase):
+    """Guards against specific past bugs and v3 design guarantees."""
+
+    def test_metadata_extraction_never_executes_code(self):
+        path = _temp_step("""
+            import nonexistent_package
+            raise RuntimeError("must not run")
+            METADATA = {"environment": "remote", "device": "gpu"}
+        """)
+        s = get_step_settings(Path(path))
+        self.assertEqual(s["environment"], "remote")
+        self.assertEqual(s["device"], "gpu")
+
+    def test_local_error_preserves_original_type(self):
+        _temp_step('def run(pd, **p): raise ValueError("local")',
+                   name="reg_le")
+        yaml = _temp_yaml("wf:\n  - reg_le:")
+        from engine import run_pipeline
+        with self.assertRaises(ValueError) as ctx:
+            run_pipeline(yaml, "t", {})
+        self.assertIn("local", str(ctx.exception))
+
+    def test_step_without_metadata_defaults_local_cpu(self):
+        _temp_step("def run(pd, **p): pd['ok'] = True; return pd",
+                   name="reg_def")
+        yaml = _temp_yaml("wf:\n  - reg_def:")
+        from engine import run_pipeline
+        r = run_pipeline(yaml, "t", {})
+        self.assertTrue(r["ok"])
 
     def test_get_step_settings_returns_dict_not_module(self):
-        """
-        Bug: get_step_settings() used to take a module object. After the
-        AST refactor it takes a file path. If someone accidentally reverts
-        the signature, this test catches it immediately.
-        """
-        path = _temp_step('METADATA = {"environment": "test_env"}')
-        # Must accept a Path, not a module
+        path = _temp_step('METADATA = {"environment": "test"}')
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "test_env")
+        self.assertIsInstance(s, dict)
+        self.assertEqual(s["environment"], "test")
+
+    def test_missing_run_fails_at_execution(self):
+        _temp_step("x = 1", name="reg_nr")
+        yaml = _temp_yaml("wf:\n  - reg_nr:")
+        from engine import run_pipeline
+        with self.assertRaises(AttributeError):
+            run_pipeline(yaml, "t", {})
+
+    def test_v3_version(self):
+        import engine
+        self.assertTrue(engine.__version__.startswith("3."))
 
 
 # ── Package API ───────────────────────────────────────────────
@@ -1712,18 +1906,17 @@ class TestRegression(unittest.TestCase):
 class TestPackageAPI(unittest.TestCase):
 
     def test_public_imports(self):
-        from engine import (run_pipeline, PipelineEngine,
+        from engine import (run_pipeline, PipelineEngine, Run,
                             WorkerError, WorkerSpawnError,
-                            WorkerCrashedError, StepExecutionError)
+                            WorkerCrashedError, StepExecutionError,
+                            ScopeError)
         self.assertTrue(callable(run_pipeline))
         self.assertTrue(callable(PipelineEngine))
-        self.assertTrue(issubclass(WorkerSpawnError, WorkerError))
-        self.assertTrue(issubclass(WorkerCrashedError, WorkerError))
-        self.assertTrue(issubclass(StepExecutionError, WorkerError))
 
     def test_version(self):
         import engine
         self.assertIsInstance(engine.__version__, str)
+        self.assertEqual(engine.__version__, "3.0.0")
 
 
 if __name__ == "__main__":

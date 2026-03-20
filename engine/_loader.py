@@ -4,8 +4,8 @@ Step loading and METADATA extraction.
 Two independent operations for the pipeline engine:
 
 1. get_step_settings(step_path) — Reads a step file's METADATA dict via AST
-   parsing. No code is executed. Used by the pipeline to decide WHERE to run
-   a step (local vs subprocess, which environment, worker type).
+   parsing. No code is executed. Used by the engine to decide WHERE to run
+   a step (which environment, which device).
 
 2. load_function(func_name, functions_dir) — Loads a step module via exec()
    for in-process execution. Only called for steps that run locally
@@ -39,19 +39,15 @@ def get_step_settings(step_path: Path) -> dict:
     -------
     dict
         - environment: "local" or conda environment name
-        - worker: "persistent" or "subprocess"
-        - max_workers: max concurrent workers (int, default 1)
+        - device: "gpu" or "cpu"
     """
     metadata = _extract_metadata(step_path) or {}
-
     settings = {
         "environment": metadata.get("environment", "local"),
-        "worker": metadata.get("worker", "subprocess"),
-        "max_workers": metadata.get("max_workers", 1),
+        "device": metadata.get("device", "cpu"),
     }
-    logger.debug("Step settings for %s: environment=%s, worker=%s, max_workers=%d",
-                 step_path.name, settings["environment"],
-                 settings["worker"], settings["max_workers"])
+    logger.debug("Step settings for %s: environment=%s, device=%s",
+                 step_path.name, settings["environment"], settings["device"])
     return settings
 
 

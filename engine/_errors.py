@@ -1,27 +1,30 @@
 """
 Exception hierarchy for the pipeline engine.
 
-All worker-related exceptions inherit from WorkerError, so callers can
-catch the base class for any subprocess issue, or catch specific types:
+Two independent hierarchies cover all error cases:
 
-    WorkerError (base)
+    WorkerError (base for all subprocess issues)
     ├── WorkerSpawnError      — subprocess failed to start or connect
     ├── WorkerCrashedError    — subprocess died during execution
     └── StepExecutionError    — step's run() raised an exception
                                 (includes .remote_traceback from subprocess)
 
-Note: local (in-process) steps propagate their original exception type
-directly — they do NOT wrap in StepExecutionError. This is an important
-behavioral difference when writing error handling code.
+    ScopeError                — invalid scope configuration or completion
+
+Important behavioral note: local (in-process) steps propagate their original
+exception type directly — they do NOT wrap in StepExecutionError. This means
+catching StepExecutionError only covers isolated steps. Callers that need to
+handle both local and isolated errors should catch the original type OR
+StepExecutionError, or catch Exception as a catch-all.
 """
 
 
 class WorkerError(Exception):
-    """Base exception for worker errors."""
+    """Base exception for all worker subprocess errors."""
 
 
 class WorkerSpawnError(WorkerError):
-    """Worker subprocess failed to start or connect."""
+    """Worker subprocess failed to start or connect back."""
 
 
 class WorkerCrashedError(WorkerError):
@@ -29,8 +32,12 @@ class WorkerCrashedError(WorkerError):
 
 
 class StepExecutionError(WorkerError):
-    """Step's run() raised an exception inside the worker."""
+    """Step's run() raised an exception inside the worker subprocess."""
 
     def __init__(self, message, remote_traceback=None):
         super().__init__(message)
         self.remote_traceback = remote_traceback
+
+
+class ScopeError(Exception):
+    """Invalid scope configuration, missing results, or bad completion signal."""

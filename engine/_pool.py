@@ -1,51 +1,63 @@
 """
-WorkerPool — Per-step dispatch with concurrency control.
+WorkerPool — Resource management with GPU slot and priority scheduling.
 
-Routes step execution to either persistent or oneshot workers based on the
-step's METADATA. Enforces per-step concurrency limits via semaphores.
+Routes step execution to the appropriate worker based on device type and
+isolation setting. Two resource classes are managed independently:
 
-Worker types
-------------
-- Persistent (worker="persistent"): Subprocess stays alive between calls.
-  Keeps imported modules and ML models warm in memory. Reused for repeated
-  invocations of the same step. Reaped after idle_timeout seconds.
+CPU workers
+-----------
+Under minimal isolation: one persistent worker per environment. Multiple
+steps in the same environment share a worker (no serialization). A lock
+per worker prevents concurrent execute() calls.
 
-- Oneshot (worker="subprocess", the default): Subprocess spawned for each
-  call, exits after one execution. No memory overhead between calls.
+Under maximal isolation: oneshot workers — spawn, run, exit. Every step
+gets its own subprocess regardless of environment sharing.
 
-Concurrency control
--------------------
-Each (environment, step_path) pair gets a Semaphore(max_workers).
-If max_workers=1 (default), calls to the same step serialize.
-If max_workers>1, up to N concurrent executions are allowed.
+GPU slot
+--------
+Only one GPU worker can be alive at a time (VRAM constraint). All GPU work
+goes through a PriorityQueue serviced by a dedicated background thread.
+Priority ordering ensures high-priority runs get GPU access first. Same-
+environment work is batched naturally — the GPU worker stays alive as long
+as the next item in the queue uses the same environment.
+
+Under maximal isolation, each GPU step spawns a fresh worker (shutdown +
+respawn per step). Under minimal, the GPU worker persists across calls and
+only switches when the environment changes.
+
+Reaper
+------
+A daemon thread runs every 30s and shuts down CPU workers that have been
+idle longer than idle_timeout. GPU workers are not reaped — they are managed
+exclusively by the GPU executor thread.
 
 Thread safety
 -------------
-- _pool_lock protects the worker/lock/semaphore dicts during creation.
-- _worker_locks[key] protects individual persistent workers from concurrent
-  execute() calls.
-- Semaphores are accessed via local reference (not dict lookup) to avoid
-  a race condition with the reaper thread or shutdown_all().
-- Reaper runs every 30s as a daemon thread, shuts down idle workers.
+- _cpu_pool_lock protects the CPU worker/lock dicts during creation.
+- _cpu_locks[env] protects individual workers from concurrent execute().
+- GPU work is serialized through the single GPU executor thread.
 """
 
+import concurrent.futures
 import logging
+import queue
 import threading
 import time
 
 from ._worker import Worker
+from ._errors import WorkerError
 
 logger = logging.getLogger(__name__)
 
 
 class WorkerPool:
     """
-    Pool of workers with per-step concurrency control.
+    Pool of workers with GPU slot management and priority scheduling.
 
     Parameters
     ----------
     idle_timeout : float
-        Seconds before idle persistent workers are shut down (default: 300).
+        Seconds before idle CPU workers are shut down (default: 300).
     connect_timeout : float
         Seconds to wait for a new worker to connect (default: 60).
     """
@@ -54,142 +66,295 @@ class WorkerPool:
         self.idle_timeout = idle_timeout
         self.connect_timeout = connect_timeout
 
-        self._workers = {}          # (env, step_path) -> Worker
-        self._worker_locks = {}     # (env, step_path) -> Lock
-        self._semaphores = {}       # (env, step_path) -> Semaphore
-        self._pool_lock = threading.Lock()
+        # CPU workers: env -> Worker, env -> Lock
+        self._cpu_workers = {}
+        self._cpu_locks = {}
+        self._cpu_pool_lock = threading.Lock()
+
+        # GPU: single worker + priority queue + executor thread
+        self._gpu_worker = None
+        self._gpu_queue = queue.PriorityQueue()
+        self._gpu_thread = None
+        self._gpu_thread_lock = threading.Lock()
+
+        # Shared state
         self._shutdown_event = threading.Event()
+        self._submission_counter = 0
+        self._counter_lock = threading.Lock()
         self._reaper = None
 
-    def execute(self, environment, step_path, pipeline_data, params,
-                worker_type="subprocess", max_workers=1, timeout=300.0):
+    def execute(self, environment, device, step_path, pipeline_data, params,
+                priority=0, timeout=300.0, isolation="minimal"):
         """
-        Execute a step. Dispatches to persistent or oneshot worker
-        based on worker_type. Blocks if max_workers concurrency is reached.
+        Execute a step. Routes to CPU or GPU based on device type.
+
+        Parameters
+        ----------
+        environment : str
+            Conda environment for the worker.
+        device : str
+            "gpu" or "cpu".
+        step_path : str
+            Path to the step .py file.
+        pipeline_data : dict
+            Data to pass to the step.
+        params : dict
+            Step parameters from YAML.
+        priority : int
+            Priority level (higher = more urgent). Default 0.
+        timeout : float
+            Seconds to wait for step completion.
+        isolation : str
+            "minimal" or "maximal".
         """
-        key = (environment, str(step_path))
+        if device == "gpu":
+            return self._execute_gpu(
+                environment, step_path, pipeline_data, params,
+                priority, timeout, isolation,
+            )
+        elif isolation == "maximal":
+            return self._execute_oneshot(
+                environment, step_path, pipeline_data, params, timeout,
+            )
+        else:
+            self._ensure_reaper()
+            return self._execute_cpu(
+                environment, step_path, pipeline_data, params, timeout,
+            )
 
-        with self._pool_lock:
-            if key not in self._semaphores:
-                self._semaphores[key] = threading.Semaphore(max_workers)
-                logger.debug("Pool: created semaphore for %s (max_workers=%d)",
-                             key, max_workers)
-            sem = self._semaphores[key]
+    # ── CPU (minimal isolation) ──────────────────────────────────
 
-        logger.debug("Pool: acquiring semaphore for %s (type=%s)",
-                     key, worker_type)
-        sem.acquire()
-        logger.debug("Pool: semaphore acquired for %s", key)
-        try:
-            if worker_type == "persistent":
-                self._ensure_reaper()
-                return self._execute_persistent(
-                    key, environment, step_path,
-                    pipeline_data, params, timeout,
-                )
-            else:
-                return self._execute_oneshot(
-                    environment, step_path,
-                    pipeline_data, params, timeout,
-                )
-        finally:
-            sem.release()
-            logger.debug("Pool: semaphore released for %s", key)
-
-    def _execute_persistent(self, key, environment, step_path,
-                            pipeline_data, params, timeout):
-        """Execute via a persistent warm worker."""
-        with self._pool_lock:
-            if key not in self._workers:
-                logger.info("Pool: creating persistent worker for env=%s, "
-                            "step=%s", environment, step_path)
-                self._workers[key] = Worker(
+    def _execute_cpu(self, environment, step_path, pipeline_data,
+                     params, timeout):
+        """Execute via a persistent per-environment CPU worker."""
+        with self._cpu_pool_lock:
+            if environment not in self._cpu_workers:
+                logger.info("Pool: creating CPU worker for env=%s", environment)
+                self._cpu_workers[environment] = Worker(
                     environment=environment,
-                    step_path=step_path,
+                    device="cpu",
                     idle_timeout=self.idle_timeout,
                     connect_timeout=self.connect_timeout,
                 )
-                self._worker_locks[key] = threading.Lock()
-            else:
-                logger.debug("Pool: reusing persistent worker for %s", key)
-
-            worker = self._workers[key]
-            lock = self._worker_locks[key]
+                self._cpu_locks[environment] = threading.Lock()
+            worker = self._cpu_workers[environment]
+            lock = self._cpu_locks[environment]
 
         with lock:
-            return worker.execute(pipeline_data, params, timeout=timeout)
+            return worker.execute(step_path, pipeline_data, params,
+                                  timeout=timeout)
 
-    def _execute_oneshot(self, environment, step_path,
-                         pipeline_data, params, timeout):
+    # ── CPU (maximal isolation) ──────────────────────────────────
+
+    def _execute_oneshot(self, environment, step_path, pipeline_data,
+                         params, timeout):
         """Execute via a oneshot worker (spawn, run, exit)."""
-        logger.debug("Pool: creating oneshot worker for env=%s, step=%s",
+        logger.debug("Pool: oneshot worker for env=%s, step=%s",
                      environment, step_path)
         worker = Worker(
             environment=environment,
-            step_path=step_path,
+            device="cpu",
             oneshot=True,
             connect_timeout=self.connect_timeout,
         )
         try:
-            return worker.execute(pipeline_data, params, timeout=timeout)
+            return worker.execute(step_path, pipeline_data, params,
+                                  timeout=timeout)
         finally:
             worker.shutdown()
 
+    # ── GPU ──────────────────────────────────────────────────────
+
+    def _execute_gpu(self, environment, step_path, pipeline_data,
+                     params, priority, timeout, isolation):
+        """Submit GPU work to the priority queue and wait for result."""
+        self._ensure_gpu_thread()
+
+        future = concurrent.futures.Future()
+        with self._counter_lock:
+            order = self._submission_counter
+            self._submission_counter += 1
+
+        # Negate priority so higher values are dequeued first
+        self._gpu_queue.put((
+            -priority, order, environment, step_path,
+            pipeline_data, params, timeout, isolation, future,
+        ))
+        logger.debug("Pool: GPU work queued (priority=%d, order=%d, env=%s)",
+                     priority, order, environment)
+
+        try:
+            return future.result(timeout=timeout + 60)
+        except concurrent.futures.TimeoutError:
+            raise WorkerError(
+                f"GPU step timed out waiting in queue + execution "
+                f"(timeout={timeout}s + 60s margin)"
+            )
+
+    def _ensure_gpu_thread(self):
+        """Start the GPU executor thread on first GPU use."""
+        with self._gpu_thread_lock:
+            if self._gpu_thread is None or not self._gpu_thread.is_alive():
+                logger.debug("Pool: starting GPU executor thread")
+                self._gpu_thread = threading.Thread(
+                    target=self._gpu_executor_loop, daemon=True,
+                )
+                self._gpu_thread.start()
+
+    def _gpu_executor_loop(self):
+        """Background thread: drain GPU queue, one item at a time."""
+        while not self._shutdown_event.is_set():
+            try:
+                item = self._gpu_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            (neg_priority, order, env, step_path, pipeline_data,
+             params, timeout, isolation, future) = item
+
+            try:
+                if isolation == "maximal":
+                    result = self._gpu_execute_oneshot(
+                        env, step_path, pipeline_data, params, timeout,
+                    )
+                else:
+                    result = self._gpu_execute_persistent(
+                        env, step_path, pipeline_data, params, timeout,
+                    )
+                future.set_result(result)
+            except Exception as e:
+                future.set_exception(e)
+
+    def _gpu_execute_persistent(self, environment, step_path,
+                                pipeline_data, params, timeout):
+        """Execute on the persistent GPU worker, switching env if needed."""
+        if (self._gpu_worker is None
+                or self._gpu_worker.environment != environment
+                or not self._gpu_worker.is_alive()):
+            if self._gpu_worker is not None:
+                logger.info("Pool: GPU switching %s -> %s",
+                            self._gpu_worker.environment, environment)
+                self._gpu_worker.shutdown()
+            self._gpu_worker = Worker(
+                environment=environment,
+                device="gpu",
+                idle_timeout=self.idle_timeout,
+                connect_timeout=self.connect_timeout,
+            )
+
+        return self._gpu_worker.execute(step_path, pipeline_data, params,
+                                        timeout=timeout)
+
+    def _gpu_execute_oneshot(self, environment, step_path,
+                             pipeline_data, params, timeout):
+        """Execute on a fresh GPU worker (maximal isolation)."""
+        if self._gpu_worker is not None:
+            self._gpu_worker.shutdown()
+            self._gpu_worker = None
+
+        worker = Worker(
+            environment=environment,
+            device="gpu",
+            oneshot=True,
+            connect_timeout=self.connect_timeout,
+        )
+        try:
+            return worker.execute(step_path, pipeline_data, params,
+                                  timeout=timeout)
+        finally:
+            worker.shutdown()
+
+    # ── Reaper ───────────────────────────────────────────────────
+
     def _ensure_reaper(self):
-        """Start the reaper thread on first persistent worker use."""
-        with self._pool_lock:
+        """Start the reaper thread on first persistent CPU worker use."""
+        with self._cpu_pool_lock:
             if self._reaper is None:
-                logger.debug("Pool: starting reaper thread "
-                             "(idle_timeout=%.0fs)", self.idle_timeout)
+                logger.debug("Pool: starting reaper (idle_timeout=%.0fs)",
+                             self.idle_timeout)
                 self._reaper = threading.Thread(
                     target=self._reaper_loop, daemon=True,
                 )
                 self._reaper.start()
 
-    def active_workers(self):
-        """Return list of (env, step) keys for alive persistent workers."""
-        with self._pool_lock:
-            return [k for k, w in self._workers.items() if w.is_alive()]
-
-    def shutdown_all(self):
-        """Shut down all persistent workers and stop the reaper."""
-        self._shutdown_event.set()
-        with self._pool_lock:
-            n = len(self._workers)
-            if n:
-                logger.info("Pool: shutting down %d persistent worker(s)", n)
-            for worker in self._workers.values():
-                worker.shutdown()
-            self._workers.clear()
-            self._worker_locks.clear()
-            self._semaphores.clear()
-        logger.debug("Pool: shutdown complete, all dictionaries cleared")
-
     def _reaper_loop(self):
-        """Background thread that shuts down idle persistent workers."""
+        """Background thread: shut down idle CPU workers every 30s."""
         while not self._shutdown_event.wait(timeout=30.0):
             self._reap_idle()
 
     def _reap_idle(self):
-        """Shut down persistent workers that exceed idle_timeout."""
+        """Shut down CPU workers that exceed idle_timeout."""
         now = time.monotonic()
         to_shutdown = []
 
-        with self._pool_lock:
-            for key, worker in list(self._workers.items()):
-                if worker.is_idle(now) and not self._worker_locks[key].locked():
-                    to_shutdown.append(self._workers.pop(key))
-                    self._worker_locks.pop(key)
-                    self._semaphores.pop(key, None)
+        with self._cpu_pool_lock:
+            for env, worker in list(self._cpu_workers.items()):
+                if (worker.is_idle(now)
+                        and not self._cpu_locks[env].locked()):
+                    to_shutdown.append(self._cpu_workers.pop(env))
+                    self._cpu_locks.pop(env)
 
         if to_shutdown:
-            logger.info("Pool: reaping %d idle worker(s)", len(to_shutdown))
+            logger.info("Pool: reaping %d idle CPU worker(s)",
+                        len(to_shutdown))
         for worker in to_shutdown:
-            logger.debug("Pool: reaping %r", worker)
             worker.shutdown()
 
+    # ── Status & shutdown ────────────────────────────────────────
+
+    @property
+    def status(self):
+        """Current pool state for observability."""
+        workers = []
+        with self._cpu_pool_lock:
+            for worker in self._cpu_workers.values():
+                if worker.is_alive():
+                    workers.append(worker.status)
+        if self._gpu_worker and self._gpu_worker.is_alive():
+            workers.append(self._gpu_worker.status)
+
+        return {
+            "workers": workers,
+            "gpu_queue_depth": self._gpu_queue.qsize(),
+        }
+
+    def shutdown_all(self):
+        """Shut down all workers and stop background threads."""
+        self._shutdown_event.set()
+
+        # CPU workers
+        with self._cpu_pool_lock:
+            n = len(self._cpu_workers)
+            if n:
+                logger.info("Pool: shutting down %d CPU worker(s)", n)
+            for worker in self._cpu_workers.values():
+                worker.shutdown()
+            self._cpu_workers.clear()
+            self._cpu_locks.clear()
+
+        # GPU worker
+        if self._gpu_worker is not None:
+            logger.info("Pool: shutting down GPU worker")
+            self._gpu_worker.shutdown()
+            self._gpu_worker = None
+
+        # Drain GPU queue, cancel pending futures
+        while not self._gpu_queue.empty():
+            try:
+                item = self._gpu_queue.get_nowait()
+                future = item[-1]
+                future.set_exception(
+                    WorkerError("Pool shut down while GPU work was pending"))
+            except queue.Empty:
+                break
+
+        logger.debug("Pool: shutdown complete")
+
     def __repr__(self):
-        with self._pool_lock:
-            alive = sum(1 for w in self._workers.values() if w.is_alive())
-            total = len(self._workers)
-        return f"WorkerPool(persistent={alive}/{total})"
+        with self._cpu_pool_lock:
+            cpu_alive = sum(1 for w in self._cpu_workers.values()
+                            if w.is_alive())
+        gpu_alive = (self._gpu_worker is not None
+                     and self._gpu_worker.is_alive())
+        return (f"WorkerPool(cpu={cpu_alive}, gpu={'alive' if gpu_alive else 'none'}, "
+                f"gpu_queue={self._gpu_queue.qsize()})")
