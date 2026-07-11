@@ -160,12 +160,13 @@ class PipelineState:
         # Completed results queue (drained by engine.results())
         self._results_queue = queue.Queue()
 
-        # Status counters
+        # Status counters. The failed count is always derived from
+        # _failures so the two cannot drift apart when scope collection
+        # drains consumed failures.
         self._n_submitted = 0
         self._n_pending = 0
         self._n_running = 0
         self._n_completed = 0
-        self._n_failed = 0
         self._failures = []
 
     def next_submission_idx(self):
@@ -215,7 +216,6 @@ class PipelineState:
         """Record a job failure."""
         with self._lock:
             self._n_running = max(0, self._n_running - 1)
-            self._n_failed += 1
             self._failures.append({
                 "scope": scope,
                 "step": step_name,
@@ -226,7 +226,6 @@ class PipelineState:
         """Record a queued submission cancelled during engine shutdown."""
         with self._lock:
             self._n_pending = max(0, self._n_pending - 1)
-            self._n_failed += 1
             self._failures.append({
                 "scope": scope,
                 "step": "engine",
@@ -341,6 +340,6 @@ class PipelineState:
                 "pending": self._n_pending,
                 "running": self._n_running,
                 "completed": self._n_completed,
-                "failed": self._n_failed,
+                "failed": len(self._failures),
                 "failures": list(self._failures),
             }

@@ -204,6 +204,11 @@ class Engine:
         state.workflow_name = workflow_name
 
         with self._lock:
+            # Re-check under the same lock hold as the insert: the early
+            # check above released the lock during YAML parsing, so a
+            # concurrent register() may have won the race since then.
+            if name in self._pipelines:
+                raise ValueError(f"Pipeline '{name}' is already registered")
             self._pipelines[name] = state
 
         logger.info("Registered pipeline '%s': workflow=%s, %d phases, "

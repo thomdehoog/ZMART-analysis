@@ -31,12 +31,17 @@ steps in the same environment load fresh but share the process.
 
 Orphan detection
 ----------------
-Persistent workers periodically check if the parent process is alive.
-If the parent dies, the worker exits cleanly rather than becoming an orphan.
+Persistent workers periodically check if the engine process is alive.
+If the engine dies, the worker exits cleanly rather than becoming an orphan.
+The engine passes its own PID via --parent-pid: os.getppid() cannot be
+used because conda-env workers are spawned through a `conda run` wrapper
+process, so the worker's direct parent is the wrapper, not the engine.
+The wrapper stays alive waiting on the worker even after the engine dies,
+which would defeat the check.
 
 Usage (called by Worker, not directly)
 --------------------------------------
-    python worker_script.py --port PORT --authkey HEX
+    python worker_script.py --port PORT --authkey HEX --parent-pid PID
 """
 
 import argparse
@@ -87,6 +92,8 @@ def main():
     parser = argparse.ArgumentParser(description="Pipeline engine worker")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--authkey", required=True)
+    parser.add_argument("--parent-pid", type=int, default=None,
+                        help="Engine PID to watch; defaults to os.getppid()")
     args = parser.parse_args()
 
     log_level = os.environ.get("SMART_LOG_LEVEL", "WARNING")
@@ -97,7 +104,8 @@ def main():
     )
     logger = logging.getLogger("engine.worker")
 
-    parent_pid = os.getppid()
+    parent_pid = (args.parent_pid if args.parent_pid is not None
+                  else os.getppid())
     logger.info("Worker starting: pid=%d, port=%d, parent=%d",
                 os.getpid(), args.port, parent_pid)
 

@@ -4,14 +4,17 @@ Exception hierarchy for the pipeline engine.
     WorkerError (base for all subprocess issues)
     +-- WorkerSpawnError      subprocess failed to start or connect
     +-- WorkerCrashedError    subprocess died during execution
+    +-- WorkerTimeoutError    step exceeded its execution timeout and the
+                              worker was killed by the engine
     +-- StepExecutionError    step's run() raised an exception
                               (includes .remote_traceback from subprocess)
 
     ScopeError                invalid scope configuration or completion
 
 All step execution goes through worker subprocesses. StepExecutionError
-covers any step failure. WorkerSpawnError and WorkerCrashedError cover
-infrastructure issues with the subprocess itself.
+covers step failures raised by user code. WorkerSpawnError,
+WorkerCrashedError, and WorkerTimeoutError cover infrastructure issues
+with the subprocess itself.
 """
 
 
@@ -25,6 +28,10 @@ class WorkerSpawnError(WorkerError):
 
 class WorkerCrashedError(WorkerError):
     """Worker process died unexpectedly during execution."""
+
+
+class WorkerTimeoutError(WorkerError):
+    """Step exceeded its execution timeout; the worker was killed."""
 
 
 class StepExecutionError(WorkerError):

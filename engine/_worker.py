@@ -37,7 +37,12 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 
 from .conda_utils import CONDA_CMD
-from ._errors import WorkerSpawnError, WorkerCrashedError, StepExecutionError
+from ._errors import (
+    WorkerSpawnError,
+    WorkerCrashedError,
+    WorkerTimeoutError,
+    StepExecutionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +136,11 @@ class Worker:
             cmd = [CONDA_CMD, "run", "-n", self.environment,
                    "python", str(WORKER_SCRIPT)]
 
-        cmd.extend(["--port", str(port), "--authkey", authkey.hex()])
+        # Pass the engine's own PID for orphan detection. The worker cannot
+        # rely on os.getppid(): under `conda run` its direct parent is the
+        # wrapper process, which outlives a crashed engine.
+        cmd.extend(["--port", str(port), "--authkey", authkey.hex(),
+                    "--parent-pid", str(os.getpid())])
 
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
@@ -198,6 +207,8 @@ class Worker:
         ------
         StepExecutionError
             If the step's run() raised an exception.
+        WorkerTimeoutError
+            If the step exceeded `timeout` and the worker was killed.
         WorkerCrashedError
             If the worker process died during execution.
         """
@@ -228,7 +239,7 @@ class Worker:
                              "timeout=%.0fs", pid, step_name, timeout)
                 self._cleanup()
                 env_label = self.environment or "orchestrator"
-                raise StepExecutionError(
+                raise WorkerTimeoutError(
                     f"Worker for '{env_label}' timed out after {timeout}s"
                 )
             raw = self._conn.recv_bytes()

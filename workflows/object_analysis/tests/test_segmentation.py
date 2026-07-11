@@ -96,6 +96,51 @@ def test_four_dimensional_input_raises():
         select_channels(img)
 
 
+def test_equal_end_axes_are_ambiguous_and_rejected():
+    # (C, H, W) and (H, W, C) are indistinguishable when the two end axes
+    # are equal, so inference must refuse rather than silently guess.
+    img = np.zeros((3, 10, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="infer channel axis"):
+        select_channels(img)
+
+
+def test_explicit_channel_axis_resolves_ambiguous_shape():
+    # With equal end axes, an explicit orientation disambiguates. Probe two
+    # points that live in channel 0 under exactly one orientation each.
+    img = np.zeros((3, 10, 3), dtype=np.uint8)
+    img[0, 5, 1] = 5   # in the first-axis plane 0, not the last-axis plane 0
+    img[1, 5, 0] = 7   # in the last-axis plane 0, not the first-axis plane 0
+
+    first = select_channels(img, channels=[0], channel_axis=0)
+    last = select_channels(img, channels=[0], channel_axis=-1)
+    assert first.shape == (10, 3)   # channel-first (C, H, W) -> (H, W)
+    assert last.shape == (3, 10)    # channel-last (H, W, C) -> (H, W)
+    assert int(first[5, 1]) == 5
+    assert int(last[1, 5]) == 7
+
+
+def test_explicit_channel_axis_first_matches_inference():
+    img = np.zeros((3, 10, 20), dtype=np.uint8)
+    img[2] = 9
+    explicit = select_channels(img, channel_axis=0)
+    inferred = select_channels(img)
+    assert explicit.shape == inferred.shape == (10, 20, 3)
+    assert int(explicit[0, 0, 2]) == int(inferred[0, 0, 2]) == 9
+
+
+def test_explicit_channel_axis_last_keeps_orientation():
+    img = np.zeros((10, 20, 3), dtype=np.uint8)
+    for axis_value in (2, -1):
+        out = select_channels(img, channel_axis=axis_value)
+        assert out.shape == (10, 20, 3)
+
+
+def test_invalid_channel_axis_raises():
+    img = np.zeros((3, 10, 20), dtype=np.uint8)
+    with pytest.raises(ValueError, match="channel_axis must be"):
+        select_channels(img, channel_axis=1)
+
+
 def test_immunohistochemistry_keeps_three_channels():
     from skimage.data import immunohistochemistry
 

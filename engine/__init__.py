@@ -32,6 +32,7 @@ from ._errors import (
     WorkerError,
     WorkerSpawnError,
     WorkerCrashedError,
+    WorkerTimeoutError,
     StepExecutionError,
     ScopeError,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "WorkerError",
     "WorkerSpawnError",
     "WorkerCrashedError",
+    "WorkerTimeoutError",
     "StepExecutionError",
     "ScopeError",
 ]

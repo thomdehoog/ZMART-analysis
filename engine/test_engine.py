@@ -53,7 +53,7 @@ from engine._loader import get_step_settings
 from engine._run import split_phases, parse_yaml, StepConfig, Phase
 from engine._errors import (
     WorkerError, WorkerSpawnError, WorkerCrashedError,
-    StepExecutionError, ScopeError,
+    WorkerTimeoutError, StepExecutionError, ScopeError,
 )
 
 # Test fixtures
@@ -135,7 +135,14 @@ class TestErrors(unittest.TestCase):
     def test_worker_hierarchy(self):
         self.assertTrue(issubclass(WorkerSpawnError, WorkerError))
         self.assertTrue(issubclass(WorkerCrashedError, WorkerError))
+        self.assertTrue(issubclass(WorkerTimeoutError, WorkerError))
         self.assertTrue(issubclass(StepExecutionError, WorkerError))
+
+    def test_timeout_error_is_not_step_execution_error(self):
+        # A killed-on-timeout worker is an infrastructure failure, not a
+        # user-code exception, so the two types must stay distinct.
+        self.assertFalse(issubclass(WorkerTimeoutError, StepExecutionError))
+        self.assertFalse(issubclass(StepExecutionError, WorkerTimeoutError))
 
     def test_step_execution_error_stores_traceback(self):
         err = StepExecutionError("boom", remote_traceback="tb")
@@ -426,16 +433,18 @@ class TestWorkerErrorPaths(unittest.TestCase):
             w.execute(path, {}, {}, timeout=10)
         w.shutdown()
 
-    def test_timeout_raises_step_execution_error(self):
+    def test_timeout_raises_worker_timeout_error(self):
         from engine._worker import Worker
         path = _temp_step("""
             import time
             def run(pd, state, **p): time.sleep(30); return pd
         """)
         w = Worker(environment=None, connect_timeout=10)
-        with self.assertRaises(StepExecutionError) as ctx:
+        with self.assertRaises(WorkerTimeoutError) as ctx:
             w.execute(path, {}, {}, timeout=1)
         self.assertIn("timed out", str(ctx.exception))
+        # A slow step is not a user-code exception; keep the types distinct.
+        self.assertNotIsInstance(ctx.exception, StepExecutionError)
         w.shutdown()
 
     def test_step_error_has_traceback(self):
@@ -449,6 +458,81 @@ class TestWorkerErrorPaths(unittest.TestCase):
         self.assertIn("test", str(ctx.exception))
         self.assertIn("ValueError", ctx.exception.remote_traceback)
         w.shutdown()
+
+    def test_spawn_command_passes_engine_pid_as_parent_pid(self):
+        # Orphan detection must watch the engine PID explicitly, because a
+        # conda-env worker's real parent is the `conda run` wrapper.
+        import subprocess as _sp
+        from engine import _worker
+
+        captured = {}
+        real_popen = _sp.Popen
+
+        def fake_popen(cmd, *a, **k):
+            captured["cmd"] = list(cmd)
+            # Fail the spawn immediately so no real subprocess is created;
+            # we only care about the command that would have been run.
+            raise OSError("blocked for test")
+
+        w = _worker.Worker(environment=None, connect_timeout=1)
+        _worker.subprocess.Popen = fake_popen
+        try:
+            with self.assertRaises(WorkerSpawnError):
+                w.ensure_running()
+        finally:
+            _worker.subprocess.Popen = real_popen
+            w.shutdown()
+
+        cmd = captured["cmd"]
+        self.assertIn("--parent-pid", cmd)
+        pid_arg = cmd[cmd.index("--parent-pid") + 1]
+        self.assertEqual(pid_arg, str(os.getpid()))
+
+    def test_worker_exits_when_watched_parent_pid_dies(self):
+        # End-to-end: the worker watches the --parent-pid it is given, not
+        # its real parent. Here the worker's real parent is this test process
+        # (alive throughout); its watched parent is a throwaway process we
+        # kill. The worker must exit anyway -- proving it does not rely on
+        # os.getppid(), which is the conda-wrapper failure mode.
+        import subprocess as _sp
+        from multiprocessing.connection import Listener
+        from engine._worker import WORKER_SCRIPT
+
+        authkey = os.urandom(16)
+        listener = Listener(("localhost", 0), authkey=authkey)
+        port = listener.address[1]
+        listener._listener._socket.settimeout(15)
+
+        fake_parent = _sp.Popen(
+            [sys.executable, "-c", "import time; time.sleep(300)"]
+        )
+        worker = _sp.Popen([
+            sys.executable, str(WORKER_SCRIPT),
+            "--port", str(port),
+            "--authkey", authkey.hex(),
+            "--parent-pid", str(fake_parent.pid),
+        ], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+
+        try:
+            conn = listener.accept()  # worker connected -> it is running
+            self.assertIsNone(worker.poll(), "worker exited before parent died")
+
+            fake_parent.terminate()
+            fake_parent.wait(timeout=10)
+
+            # Worker polls parent liveness on a <=5s cycle; allow margin.
+            worker.wait(timeout=20)
+            self.assertIsNotNone(
+                worker.poll(),
+                "worker did not exit after its watched parent died",
+            )
+            conn.close()
+        finally:
+            for proc in (worker, fake_parent):
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait(timeout=10)
+            listener.close()
 
 
 # ---- Pool ------------------------------------------------------------
@@ -591,6 +675,37 @@ class TestEngineRegister(unittest.TestCase):
         with Engine() as e:
             with self.assertRaises(ValueError):
                 e.register("bad", str(path))
+
+    def test_concurrent_register_same_name_raises_once(self):
+        # The duplicate check and the insert must be atomic: with the check
+        # and insert split across two lock holds, two threads racing on the
+        # same name both passed and the second silently clobbered the first.
+        _temp_step("def run(pd, state, **p): return pd", name="reg_race")
+        yaml = _temp_yaml("wf:\n  - reg_race:")
+        from engine import Engine
+
+        with Engine() as e:
+            start = threading.Barrier(8)
+            errors = []
+            lock = threading.Lock()
+
+            def worker():
+                start.wait()
+                try:
+                    e.register("dup", yaml)
+                except ValueError:
+                    with lock:
+                        errors.append(1)
+
+            threads = [threading.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Exactly one registration wins; every other thread sees ValueError.
+            self.assertEqual(sum(errors), 7)
+            self.assertIn("dup", e._pipelines)
 
 
 # ---- Engine (submit) -------------------------------------------------
@@ -1237,6 +1352,57 @@ class TestEngineStatus(unittest.TestCase):
         with Engine() as e:
             with self.assertRaises(KeyError):
                 e.status("ghost")
+
+    def test_status_failed_count_matches_failures_after_scope_completion(self):
+        # Regression: scope collection drains the consumed failure records out
+        # of the failures list. The failed COUNT must be derived from that
+        # list, not held in a separate counter that keeps the stale failure
+        # and desyncs status() -- which also made the documented poll pattern
+        # `status["failures"][0] if status["failed"]` raise IndexError.
+        _temp_step("""
+            def run(pd, state, **p):
+                if pd["input"]["tile"] == 1:
+                    raise ValueError("bad tile")
+                pd["tile"] = pd["input"]["tile"]
+                return pd
+        """, name="drift_seg")
+        _temp_step("""
+            def run(pd, state, **p):
+                pd["tiles"] = sorted(r["tile"] for r in pd["results"])
+                return pd
+        """, name="drift_stitch")
+        yaml = _temp_yaml("""
+            wf:
+              - drift_seg:
+              - drift_stitch:
+                  scope: group
+        """)
+        from engine import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            for i in range(3):
+                complete = "group" if i == 2 else None
+                e.submit("test", {"tile": i},
+                         scope={"group": "R1"}, complete=complete)
+
+            # 2 surviving Phase-0 results + 1 scoped result (the failed tile
+            # produces no Phase-0 result).
+            results = _wait_for_results(e, "test", 3, timeout=15)
+
+            # Let scope collection drain the consumed failure.
+            deadline = time.monotonic() + 5
+            status = e.status("test")
+            while time.monotonic() < deadline and status["failures"]:
+                time.sleep(0.02)
+                status = e.status("test")
+
+        self.assertEqual(len(results), 3)
+        # The invariant: failed count always equals the failure-record count.
+        self.assertEqual(status["failed"], len(status["failures"]))
+        # The poll pattern used by run_pipeline.py must never IndexError.
+        if status["failed"]:
+            _ = status["failures"][0]
 
     def test_status_tracks_pending_and_running_jobs(self):
         _temp_step("""

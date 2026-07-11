@@ -11,6 +11,7 @@ def segment_tiff(
     state: dict,
     *,
     channels=None,
+    channel_axis=None,
     min_area_px=None,
     max_area_px=None,
     cellprob_threshold=None,
@@ -29,14 +30,14 @@ def segment_tiff(
     ``image_2d`` is the primary channel for code paths that require a plane.
     """
     image = tifffile.imread(image_path)
-    seg_input = select_channels(image, channels)
+    seg_input = select_channels(image, channels, channel_axis=channel_axis)
     ny, nx = seg_input.shape[:2]
     seg_eval, scale = _downsample_for_segmentation(
         seg_input,
         binning=segmentation_binning,
     )
 
-    channel_axis = -1 if seg_eval.ndim == 3 else None
+    cellpose_channel_axis = -1 if seg_eval.ndim == 3 else None
     eval_kwargs = _cellpose_eval_kwargs(
         cellprob_threshold=cellprob_threshold,
         flow_threshold=flow_threshold,
@@ -52,7 +53,7 @@ def segment_tiff(
     try:
         masks, flows, styles = model.eval(
             seg_eval,
-            channel_axis=channel_axis,
+            channel_axis=cellpose_channel_axis,
             **eval_kwargs,
         )
     except Exception:
@@ -71,7 +72,7 @@ def segment_tiff(
         )
         masks, flows, styles = model.eval(
             seg_eval,
-            channel_axis=channel_axis,
+            channel_axis=cellpose_channel_axis,
             **eval_kwargs,
         )
     if scale != 1.0:
@@ -182,12 +183,18 @@ def _instantiate_cellpose_model(models, kwargs):
         return models.CellposeModel(gpu=bool(kwargs.get("gpu", False)))
 
 
-def select_channels(image, channels=None):
+def select_channels(image, channels=None, channel_axis=None):
     """Return up to three channels for Cellpose as ``(H, W)`` or ``(H, W, k)``.
 
     ``channels`` chooses which channels to keep; ``None`` uses the first up to
-    three. Channel-first ``(C, H, W)`` input is normalized to channel-last, and a
-    single selected channel is returned as a 2D plane.
+    three. A single selected channel is returned as a 2D plane.
+
+    ``channel_axis`` declares the orientation of a 3D input explicitly: ``0``
+    for channel-first ``(C, H, W)`` or ``-1``/``2`` for channel-last
+    ``(H, W, C)``. When it is ``None`` the orientation is inferred by treating
+    the smaller end axis as the channel axis. Inference is refused when the two
+    end axes are equal, because channel-first and channel-last are then
+    indistinguishable; pass ``channel_axis`` in that case.
     """
     if image.ndim == 2:
         if channels is not None:
@@ -201,13 +208,7 @@ def select_channels(image, channels=None):
             f"Expected 2D (H, W) or 2D plus channels: (C, H, W) / (H, W, C)."
         )
 
-    # The channel axis is the smaller end (channels are fewer than spatial
-    # dims); channel-first (C, H, W) is normalized to channel-last (H, W, C).
-    if image.shape[0] <= image.shape[-1]:
-        stack = np.moveaxis(image, 0, -1)
-    else:
-        stack = image
-
+    stack = _to_channel_last(image, channel_axis)
     n_channels = stack.shape[-1]
     if channels is None:
         indices = list(range(min(n_channels, 3)))
@@ -226,6 +227,38 @@ def select_channels(image, channels=None):
     if selected.shape[-1] == 1:
         return selected[..., 0]
     return selected
+
+
+def _to_channel_last(image, channel_axis):
+    """Normalize a 3D array to channel-last ``(H, W, C)``.
+
+    With ``channel_axis`` given, the orientation is taken as declared. With
+    ``channel_axis=None`` it is inferred from axis sizes: the smaller end axis
+    is the channel axis. Equal end axes are ambiguous and raise ``ValueError``.
+    """
+    if channel_axis is not None:
+        if channel_axis in (-1, 2):
+            return image
+        if channel_axis == 0:
+            return np.moveaxis(image, 0, -1)
+        raise ValueError(
+            f"channel_axis must be 0, 2, -1, or None; got {channel_axis}."
+        )
+
+    first, last = image.shape[0], image.shape[-1]
+    if first == last:
+        raise ValueError(
+            f"Cannot infer channel axis for image with shape {image.shape}: "
+            f"the first and last axes are equal, so channel-first (C, H, W) "
+            f"and channel-last (H, W, C) are indistinguishable. Pass "
+            f"channel_axis explicitly (0 for channel-first, -1 for "
+            f"channel-last)."
+        )
+    # Channels are fewer than spatial pixels, so the smaller end is the
+    # channel axis; channel-first is normalized to channel-last.
+    if first < last:
+        return np.moveaxis(image, 0, -1)
+    return image
 
 
 def _channel_indices(channels) -> list[int]:
