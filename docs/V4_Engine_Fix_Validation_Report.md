@@ -130,3 +130,40 @@ fix should add an explicit channel-axis contract or reject ambiguous shapes.
 5. Run the CI-equivalent command and verify all selected tests pass.
 6. Confirm `git diff <base>..HEAD -- workflows` contains only the test-file
    portability change and no production workflow or step change.
+
+## Fable verification results
+
+Date: 2026-07-11
+
+Verified commit: `f10baa1` against base `5b98c65`. Validation used a
+disposable Python 3.11.15 venv installed from `.[test]` (`pip check` clean)
+on Linux.
+
+1. Confirmed. `Engine` creates a dedicated `ThreadPoolExecutor`
+   (`_scope_executor`, `engine/_pipeline.py`) for scope-completion work,
+   separate from the phase-0 `_PriorityThreadPool`. `Engine.shutdown()`
+   closes the priority executor, then the scope executor (with
+   `cancel_futures=not wait`), then the worker pool.
+2. Confirmed. `_PriorityThreadPool.shutdown(wait=False)` drains the heap
+   under the lock and cancels every queued future; canceled submissions are
+   reflected in status via a done-callback that decrements the pending
+   counter (`engine/_run.py`).
+3. Confirmed. Both `WorkerPool` and `_EnvPool` set a closed flag on
+   shutdown; `_EnvPool.acquire()` and `WorkerPool._get_env_pool()` raise
+   `RuntimeError` after close, and `_EnvPool.release()` no longer returns
+   workers to the idle list once closed.
+4. Passed. All four focused regressions plus the mock-Cellpose pathsep test
+   passed (5 passed).
+5. Passed with an environment caveat. The CI-equivalent command selected
+   345 tests and deselected 11, matching the report. 332 passed; the 13
+   failures were all in `engine/test_conda_utils.py` with
+   `FileNotFoundError: Could not run 'conda info'` — conda is not installed
+   in the verification container. CI provisions Miniconda via
+   `setup-miniconda`, so these are environment-availability failures, not
+   code defects. No non-conda test failed.
+6. Confirmed. `git diff 5b98c65..f10baa1 -- workflows` contains only the
+   `os.pathsep` portability change in
+   `workflows/object_analysis/tests/test_object_analysis.py`. The full
+   change set touches exactly the files listed under "Files intentionally
+   changed". `python -m compileall engine workflows` and
+   `git diff 5b98c65..f10baa1 --check` both passed.
