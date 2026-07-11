@@ -73,19 +73,50 @@ def _parent_alive(parent_pid):
     parent, so we use kernel32.OpenProcess instead.
     """
     if sys.platform == "win32":
-        import ctypes
-        SYNCHRONIZE = 0x00100000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            SYNCHRONIZE, False, parent_pid)
-        if handle:
-            ctypes.windll.kernel32.CloseHandle(handle)
-            return True
-        return False
+        return _windows_process_alive(parent_pid)
     try:
         os.kill(parent_pid, 0)
         return True
     except (OSError, ProcessLookupError):
         return False
+
+
+def _windows_process_alive(parent_pid, kernel32=None):
+    """Return whether a Windows process exists and has not terminated.
+
+    ``OpenProcess`` can succeed for a terminated process while another handle
+    still keeps its kernel object alive. Query the process handle's signaled
+    state as well: process handles become signaled when the process exits.
+    ``kernel32`` is injectable so this behavior is testable on every CI OS.
+    """
+    if kernel32 is None:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = (
+            wintypes.DWORD,
+            wintypes.BOOL,
+            wintypes.DWORD,
+        )
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.WaitForSingleObject.argtypes = (
+            wintypes.HANDLE,
+            wintypes.DWORD,
+        )
+        kernel32.WaitForSingleObject.restype = wintypes.DWORD
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+
+    synchronize = 0x00100000
+    wait_timeout = 0x00000102
+    handle = kernel32.OpenProcess(synchronize, False, parent_pid)
+    if not handle:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def main():

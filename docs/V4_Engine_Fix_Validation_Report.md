@@ -55,8 +55,8 @@ The test PYTHONPATH uses `os.pathsep`, making it valid on Windows and POSIX.
 
 ## Claude changes reviewed
 
-Claude's `79648b6` change correctly addressed these defects, and the behavior
-was retained:
+Claude's `79648b6` change addressed these defects, and the behavior was
+retained with the Windows heartbeat correction described below:
 
 1. `WorkerTimeoutError` is distinct from `StepExecutionError`.
 2. Conda workers receive an explicit engine PID for parent-heartbeat cleanup.
@@ -65,7 +65,7 @@ was retained:
 5. Ambiguous equal-end TIFF shapes are rejected unless `channel_axis` is
    explicit.
 
-The review found three remaining implementation gaps and one reporting gap.
+The review found four remaining implementation gaps and one reporting gap.
 They are fixed below.
 
 ## Follow-up fixes
@@ -133,7 +133,25 @@ checkpoint round-trip, checkpoint tampering, hash separation, alias
 normalization, invalid values, CLI geometry, and property-style selection for
 1, 2, 3, 5, and 8 channels.
 
-### 4. Handoff report correction
+### 4. Windows parent-heartbeat process state
+
+Problem: the explicit engine PID fixed conda-wrapper parent selection, but the
+Windows liveness check treated any successful `OpenProcess` call as proof that
+the process was still running. Windows can retain a terminated process object
+while another handle remains open, so workers did not exit after the watched
+process terminated. This failed consistently on all three Windows CI versions.
+
+Fix: after opening the process with `SYNCHRONIZE`, the worker now calls
+`WaitForSingleObject(handle, 0)`. Only `WAIT_TIMEOUT` means the process is still
+running; a signaled handle or failed wait means it is no longer safe to keep
+the worker alive. The ctypes signatures use Windows handle-width types, and
+the handle is closed on every successful-open path.
+
+Cross-platform fake-kernel unit tests cover running, terminated, failed-wait,
+and unavailable-process results. The existing subprocess test supplies the
+Windows end-to-end coverage in GitHub Actions.
+
+### 5. Handoff report correction
 
 The earlier report described only `f10baa1` and claimed production workflow
 code had not changed even after Claude changed `_segmentation.py`. This report
@@ -181,6 +199,8 @@ test-data scope.
 | Full adversarial suite, including slow tests | 65 passed, 338 deselected |
 | Registration/submit race set repeated 10 times | 40 passed |
 | CI-equivalent suite | 392 passed, 11 deselected |
+| Windows heartbeat focused tests | 3 passed |
+| Full engine suite after Windows correction | 83 passed, 1 skipped |
 | Python compilation | passed |
 | dependency compatibility (`uv pip check`) | passed |
 | `git diff --check` | passed |
@@ -235,5 +255,7 @@ Documentation:
 6. Run the targeted, adversarial, and CI-equivalent commands above.
 7. Confirm test inputs are temporary/synthetic and no production dataset is
    referenced.
-8. Inspect the final GitHub Actions matrix and require every supported
+8. Inspect `_windows_process_alive` and confirm only `WAIT_TIMEOUT` is treated
+   as a live Windows process, with the handle always closed.
+9. Inspect the final GitHub Actions matrix and require every supported
    OS/Python job to pass.

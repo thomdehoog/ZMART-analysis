@@ -543,6 +543,47 @@ class TestWorkerErrorPaths(unittest.TestCase):
                     proc.wait(timeout=10)
             listener.close()
 
+    def test_windows_parent_check_distinguishes_running_and_terminated(self):
+        from engine.worker_script import _windows_process_alive
+
+        class FakeKernel32:
+            def __init__(self, wait_result, handle=123):
+                self.wait_result = wait_result
+                self.handle = handle
+                self.closed = []
+
+            def OpenProcess(self, access, inherit, process_id):
+                self.open_args = (access, inherit, process_id)
+                return self.handle
+
+            def WaitForSingleObject(self, handle, timeout_ms):
+                self.wait_args = (handle, timeout_ms)
+                return self.wait_result
+
+            def CloseHandle(self, handle):
+                self.closed.append(handle)
+
+        cases = (
+            (0x00000102, True),   # WAIT_TIMEOUT: process still running
+            (0x00000000, False),  # WAIT_OBJECT_0: process terminated
+            (0xFFFFFFFF, False),  # WAIT_FAILED: do not claim it is alive
+        )
+        for wait_result, expected in cases:
+            with self.subTest(wait_result=wait_result):
+                kernel32 = FakeKernel32(wait_result)
+                self.assertEqual(
+                    _windows_process_alive(4321, kernel32), expected
+                )
+                self.assertEqual(
+                    kernel32.open_args, (0x00100000, False, 4321)
+                )
+                self.assertEqual(kernel32.wait_args, (123, 0))
+                self.assertEqual(kernel32.closed, [123])
+
+        unavailable = FakeKernel32(0x00000102, handle=0)
+        self.assertFalse(_windows_process_alive(4321, unavailable))
+        self.assertEqual(unavailable.closed, [])
+
 
 # ---- Pool ------------------------------------------------------------
 
