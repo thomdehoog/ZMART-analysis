@@ -9,7 +9,11 @@ from pathlib import Path
 import tifffile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _detection_checkpoint import area_filter_params, file_sha256  # noqa: E402
+from _detection_checkpoint import (  # noqa: E402
+    area_filter_params,
+    file_sha256,
+    segmentation_params_hash,
+)
 from _segmentation import filter_masks_by_area, select_channels  # noqa: E402
 
 
@@ -39,6 +43,17 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         params.get("segmentation_params_hash", None),
     )
     actual_hash = checkpoint.get("segmentation_params_hash")
+    checkpoint_segmentation_params = checkpoint.get("segmentation_params", {})
+    # Checkpoints written before channel_axis became part of the identity do
+    # not carry that key and retain their legacy hash. New checkpoints can be
+    # checked for internal consistency before their parameters are trusted.
+    if "channel_axis" in checkpoint_segmentation_params:
+        computed_hash = segmentation_params_hash(checkpoint_segmentation_params)
+        if actual_hash != computed_hash:
+            raise ValueError(
+                "Detection checkpoint segmentation parameter hash does not "
+                "match its stored parameters. The checkpoint may be corrupt."
+            )
     if expected_hash is not None and expected_hash != actual_hash:
         raise ValueError(
             "Detection checkpoint does not match the requested segmentation "
@@ -64,7 +79,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     raw_masks = tifffile.imread(masks_path).astype("int32")
     image = select_channels(
         tifffile.imread(image_path),
-        checkpoint.get("segmentation_params", {}).get("channels", None),
+        checkpoint_segmentation_params.get("channels", None),
+        channel_axis=checkpoint_segmentation_params.get("channel_axis", None),
     )
     image_2d = image if image.ndim == 2 else image[..., 0]
     if raw_masks.shape != image.shape[:2]:

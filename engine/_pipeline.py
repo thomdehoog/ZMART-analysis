@@ -134,6 +134,7 @@ class Engine:
             thread_name_prefix="engine-scope",
         )
         self._pipelines = {}
+        self._registering = set()
         self._accepting = True
         self._lock = threading.Lock()
 
@@ -163,53 +164,54 @@ class Engine:
         yaml_path : str or Path
             Path to the pipeline YAML file.
         """
-        if not self._accepting:
-            raise RuntimeError("Engine has been shut down")
-
         with self._lock:
-            if name in self._pipelines:
+            if not self._accepting:
+                raise RuntimeError("Engine has been shut down")
+            if name in self._pipelines or name in self._registering:
                 raise ValueError(f"Pipeline '{name}' is already registered")
+            self._registering.add(name)
 
-        yaml_path = Path(yaml_path)
-        workflow_name, steps_config, metadata = parse_yaml(yaml_path)
+        try:
+            yaml_path = Path(yaml_path)
+            workflow_name, steps_config, metadata = parse_yaml(yaml_path)
 
-        functions_dir_str = metadata.get("functions_dir", "../steps")
-        functions_dir = (yaml_path.parent / functions_dir_str).resolve()
-        verbose = metadata.get("verbose", 2)
+            functions_dir_str = metadata.get("functions_dir", "../steps")
+            functions_dir = (yaml_path.parent / functions_dir_str).resolve()
+            verbose = metadata.get("verbose", 2)
 
-        phases = split_phases(steps_config)
+            phases = split_phases(steps_config)
 
-        # Read METADATA from all step files
-        step_settings = {}
-        for phase in phases:
-            for step in phase.steps:
-                if step.name not in step_settings:
-                    step_path = functions_dir / f"{step.name}.py"
-                    settings = get_step_settings(step_path)
-                    # Resolve environment
-                    env = settings["environment"]
-                    if env is not None and env == self._default_env:
-                        env = None
-                    settings["environment"] = env
-                    step_settings[step.name] = settings
+            # Read METADATA from all step files
+            step_settings = {}
+            for phase in phases:
+                for step in phase.steps:
+                    if step.name not in step_settings:
+                        step_path = functions_dir / f"{step.name}.py"
+                        settings = get_step_settings(step_path)
+                        # Resolve environment
+                        env = settings["environment"]
+                        if env is not None and env == self._default_env:
+                            env = None
+                        settings["environment"] = env
+                        step_settings[step.name] = settings
 
-        state = PipelineState(
-            name=name,
-            yaml_path=yaml_path,
-            phases=phases,
-            functions_dir=functions_dir,
-            step_settings=step_settings,
-            verbose=verbose,
-        )
-        state.workflow_name = workflow_name
+            state = PipelineState(
+                name=name,
+                yaml_path=yaml_path,
+                phases=phases,
+                functions_dir=functions_dir,
+                step_settings=step_settings,
+                verbose=verbose,
+            )
+            state.workflow_name = workflow_name
 
-        with self._lock:
-            # Re-check under the same lock hold as the insert: the early
-            # check above released the lock during YAML parsing, so a
-            # concurrent register() may have won the race since then.
-            if name in self._pipelines:
-                raise ValueError(f"Pipeline '{name}' is already registered")
-            self._pipelines[name] = state
+            with self._lock:
+                if not self._accepting:
+                    raise RuntimeError("Engine has been shut down")
+                self._pipelines[name] = state
+        finally:
+            with self._lock:
+                self._registering.discard(name)
 
         logger.info("Registered pipeline '%s': workflow=%s, %d phases, "
                      "%d steps", name, workflow_name, len(phases),
@@ -234,34 +236,39 @@ class Engine:
             Signals that one or more scope levels are complete for this
             job's scope group.
         """
-        if not self._accepting:
-            raise RuntimeError("Engine has been shut down")
-
-        state = self._get_pipeline(name)
         scope = scope or {}
         data = data if data is not None else {}
-
-        submission_idx = state.next_submission_idx()
         priority_value = priority if priority is not None else 0
 
-        # Submit Phase 0 to thread pool
-        future = self._executor.submit(
-            self._execute_phase0, state, data, scope, submission_idx,
-            priority=priority_value,
-        )
-        state.add_job_entry(future, scope, submission_idx)
+        # Keep acceptance, executor submission, and optional scope submission
+        # atomic with shutdown. Once shutdown acquires this lock and closes
+        # acceptance, no partially-accounted submission can reach an executor.
+        with self._lock:
+            if not self._accepting:
+                raise RuntimeError("Engine has been shut down")
+            if name not in self._pipelines:
+                raise KeyError(f"Pipeline '{name}' is not registered")
+            state = self._pipelines[name]
+            submission_idx = state.next_submission_idx()
 
-        # Handle scope completion signals
-        if complete:
-            complete_levels = (
-                [complete] if isinstance(complete, str) else list(complete)
+            # Submit Phase 0 to thread pool
+            future = self._executor.submit(
+                self._execute_phase0, state, data, scope, submission_idx,
+                priority=priority_value,
             )
-            # Process levels sequentially in one thread so that
-            # chained scopes (e.g., ["group", "all"]) execute in order.
-            self._scope_executor.submit(
-                self._handle_scope_complete_chain, state,
-                complete_levels, scope,
-            )
+            state.add_job_entry(future, scope, submission_idx)
+
+            # Handle scope completion signals
+            if complete:
+                complete_levels = (
+                    [complete] if isinstance(complete, str) else list(complete)
+                )
+                # Process levels sequentially in one thread so that
+                # chained scopes (e.g., ["group", "all"]) execute in order.
+                self._scope_executor.submit(
+                    self._handle_scope_complete_chain, state,
+                    complete_levels, scope,
+                )
 
     def status(self, name=None):
         """
@@ -322,7 +329,8 @@ class Engine:
         None
         """
         logger.info("Engine shutting down (wait=%s)", wait)
-        self._accepting = False
+        with self._lock:
+            self._accepting = False
         self._executor.shutdown(wait=wait)
         self._scope_executor.shutdown(
             wait=wait,

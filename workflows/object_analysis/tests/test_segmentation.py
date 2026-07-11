@@ -208,6 +208,29 @@ def test_segment_tiff_uses_channel_axis_for_multichannel(tmp_path):
     assert out["image_2d"].ndim == 2
 
 
+def test_segment_tiff_explicit_axis_resolves_ambiguous_tiff(tmp_path):
+    import tifffile
+    from _segmentation import segment_tiff
+
+    path = tmp_path / "ambiguous.tif"
+    image = np.zeros((3, 10, 3), dtype=np.uint8)
+    image[0, 5, 1] = 17
+    tifffile.imwrite(path, image)
+    model = _RecordingModel()
+
+    out = segment_tiff(
+        path,
+        {"model": model},
+        channels=[0],
+        channel_axis=0,
+        gpu=False,
+    )
+
+    assert out["image"].shape == (10, 3)
+    assert int(out["image"][5, 1]) == 17
+    assert model.calls[0]["shape"] == (10, 3)
+
+
 def test_segment_tiff_no_channel_axis_for_2d(tmp_path):
     import tifffile
     from _segmentation import segment_tiff

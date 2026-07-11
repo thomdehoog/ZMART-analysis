@@ -36,6 +36,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         inp["image_path"],
         state,
         channels=seg_params["channels"],
+        channel_axis=seg_params["channel_axis"],
         min_area_px=area_params["min_area_px"],
         max_area_px=area_params["max_area_px"],
         cellprob_threshold=seg_params["cellprob_threshold"],

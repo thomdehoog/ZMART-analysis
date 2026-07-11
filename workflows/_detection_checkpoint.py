@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import operator
 from pathlib import Path
 
 from _contracts import to_builtin
@@ -17,6 +18,7 @@ from _contracts import to_builtin
 
 SEGMENTATION_IDENTITY_KEYS = (
     "channels",
+    "channel_axis",
     "cellprob_threshold",
     "flow_threshold",
     "niter",
@@ -29,6 +31,9 @@ def segmentation_params(inp: dict, params: dict) -> dict:
     """Return params that define mask generation, excluding runtime details."""
     return {
         "channels": inp.get("channels", params.get("channels", None)),
+        "channel_axis": _channel_axis(
+            inp.get("channel_axis", params.get("channel_axis", None))
+        ),
         "cellprob_threshold": params.get("cellprob_threshold", None),
         "flow_threshold": params.get("flow_threshold", None),
         "niter": params.get("niter", None),
@@ -130,6 +135,29 @@ def _none_or_float(value):
     return float(value)
 
 
+def _channel_axis(value):
+    """Validate and normalize equivalent channel-last axis declarations."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(
+            f"channel_axis must be 0, 2, -1, or None; got {value}."
+        )
+    try:
+        value = operator.index(value)
+    except TypeError as exc:
+        raise ValueError(
+            f"channel_axis must be 0, 2, -1, or None; got {value}."
+        ) from exc
+    if value == 0:
+        return 0
+    if value in (-1, 2):
+        return -1
+    raise ValueError(
+        f"channel_axis must be 0, 2, -1, or None; got {value}."
+    )
+
+
 def segmentation_params_hash(params: dict) -> str:
     """Stable hash of true segmentation identity params.
 
@@ -138,6 +166,7 @@ def segmentation_params_hash(params: dict) -> str:
     retuned from persisted raw masks.
     """
     identity = {key: params.get(key, None) for key in SEGMENTATION_IDENTITY_KEYS}
+    identity["channel_axis"] = _channel_axis(identity["channel_axis"])
     text = json.dumps(to_builtin(identity), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

@@ -21,16 +21,27 @@ CLASSICAL_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis.yaml"
 DEEP_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis_deep.yaml"
 
 
-def _image_size_px(path: Path) -> list[int]:
+def _image_size_px(path: Path, channel_axis=None) -> list[int]:
     import tifffile
 
     shape = tifffile.imread(path).shape
     if len(shape) == 2:
         ny, nx = shape
-    elif len(shape) == 3 and shape[0] <= shape[-1]:
-        _, ny, nx = shape
     elif len(shape) == 3:
-        ny, nx, _ = shape
+        first, last = shape[0], shape[-1]
+        if channel_axis == 0:
+            _, ny, nx = shape
+        elif channel_axis in (-1, 2):
+            ny, nx, _ = shape
+        elif first == last:
+            raise SystemExit(
+                f"Cannot infer channel axis for image shape {shape}. "
+                "Pass --channel-axis 0 for (C,H,W) or -1 for (H,W,C)."
+            )
+        elif first < last:
+            _, ny, nx = shape
+        else:
+            ny, nx, _ = shape
     else:
         raise SystemExit(
             f"Cannot infer 2D image size from shape {shape}. "
@@ -101,6 +112,14 @@ def main():
         help="Comma-separated channel indices for 2D+channels input; "
         "default auto keeps up to three channels.",
     )
+    parser.add_argument(
+        "--channel-axis",
+        type=int,
+        choices=(-1, 0, 2),
+        default=None,
+        help="Channel axis for 3D TIFF input: 0 for (C,H,W), -1 or 2 for "
+        "(H,W,C). Required when orientation is ambiguous.",
+    )
     parser.add_argument("--gpu", action="store_true", default=False)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--save-overview", default=None)
@@ -114,9 +133,10 @@ def main():
         "tile_stage_xy_um": args.stage_xy_um,
         "tile_zwide_um": args.zwide_um,
         "source_pixel_size_um": args.pixel_size_um,
-        "source_image_size_px": _image_size_px(image_path),
+        "source_image_size_px": _image_size_px(image_path, args.channel_axis),
         "image_to_stage": args.image_to_stage,
         "channels": args.channels,
+        "channel_axis": args.channel_axis,
         "gpu": args.gpu,
     }
     if args.output_dir:
@@ -127,6 +147,12 @@ def main():
     print(f"Tile:          {payload['tile_id']}")
     channels = payload["channels"] if payload["channels"] is not None else "auto"
     print(f"Channels:      {channels}")
+    channel_axis = (
+        payload["channel_axis"]
+        if payload["channel_axis"] is not None
+        else "auto"
+    )
+    print(f"Channel axis:  {channel_axis}")
     print(f"Deep features: {'yes' if args.deep else 'no'}")
     print()
 

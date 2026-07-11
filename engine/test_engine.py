@@ -41,6 +41,7 @@ import textwrap
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import pytest
@@ -94,6 +95,14 @@ def _temp_yaml(content):
     path = Path(_TEMP_DIR) / f"pipeline_{_next_id()}.yaml"
     path.write_text(text)
     return str(path)
+
+
+def _capture_exception(errors, function):
+    """Run ``function`` and append any raised exception for thread assertions."""
+    try:
+        function()
+    except BaseException as exc:
+        errors.append(exc)
 
 
 def _wait_for_results(engine, name, expected, timeout=30):
@@ -1262,6 +1271,93 @@ class TestEngineLifecycle(unittest.TestCase):
         e.shutdown()
         with self.assertRaises(RuntimeError):
             e.register("test", yaml)
+
+    def test_concurrent_registration_reserves_pipeline_name(self):
+        """Only one parser may build a given pipeline name at a time."""
+        import engine._pipeline as pipeline_module
+        from engine import Engine
+
+        _temp_step("def run(pd, state, **p): return pd", name="reg_race")
+        yaml = _temp_yaml("wf:\n  - reg_race:")
+        parse_started = threading.Event()
+        release_parse = threading.Event()
+        real_parse_yaml = pipeline_module.parse_yaml
+        errors = []
+
+        def blocked_parse_yaml(path):
+            parse_started.set()
+            if not release_parse.wait(timeout=5):
+                raise TimeoutError("test did not release YAML parsing")
+            return real_parse_yaml(path)
+
+        e = Engine()
+        with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+            thread = threading.Thread(
+                target=lambda: _capture_exception(
+                    errors, lambda: e.register("test", yaml)
+                )
+            )
+            thread.start()
+            self.assertTrue(parse_started.wait(timeout=5))
+            with self.assertRaisesRegex(ValueError, "already registered"):
+                e.register("test", yaml)
+            release_parse.set()
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertIn("test", e.status())
+        e.shutdown()
+
+    def test_registration_cannot_complete_after_shutdown_starts(self):
+        """A registration parsing during shutdown must not become visible."""
+        import engine._pipeline as pipeline_module
+        from engine import Engine
+
+        _temp_step("def run(pd, state, **p): return pd", name="reg_shutdown")
+        yaml = _temp_yaml("wf:\n  - reg_shutdown:")
+        parse_started = threading.Event()
+        release_parse = threading.Event()
+        real_parse_yaml = pipeline_module.parse_yaml
+        errors = []
+
+        def blocked_parse_yaml(path):
+            parse_started.set()
+            if not release_parse.wait(timeout=5):
+                raise TimeoutError("test did not release YAML parsing")
+            return real_parse_yaml(path)
+
+        e = Engine()
+        with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+            thread = threading.Thread(
+                target=lambda: _capture_exception(
+                    errors, lambda: e.register("late", yaml)
+                )
+            )
+            thread.start()
+            self.assertTrue(parse_started.wait(timeout=5))
+            e.shutdown(wait=False)
+            release_parse.set()
+            thread.join(timeout=5)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], RuntimeError)
+        self.assertNotIn("late", e.status())
+
+    def test_failed_registration_releases_pipeline_name(self):
+        """A parse failure must not leave the name permanently reserved."""
+        from engine import Engine
+
+        _temp_step("def run(pd, state, **p): return pd", name="reg_retry")
+        invalid_yaml = _temp_yaml("wf: [")
+        valid_yaml = _temp_yaml("wf:\n  - reg_retry:")
+        e = Engine()
+        with self.assertRaises(Exception):
+            e.register("retry", invalid_yaml)
+        e.register("retry", valid_yaml)
+        self.assertIn("retry", e.status())
+        e.shutdown()
 
     def test_shutdown_then_submit_raises(self):
         """submit() after shutdown raises RuntimeError."""

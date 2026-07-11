@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -10,7 +11,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from _contracts import validate_targets, validate_tile_detection  # noqa: E402
-from _detection_checkpoint import area_filter_params, segmentation_params_hash  # noqa: E402
+from _detection_checkpoint import (  # noqa: E402
+    area_filter_params,
+    segmentation_params,
+    segmentation_params_hash,
+)
 from _intensity_scale import compute_foreground_intensity_scale  # noqa: E402
 from _object_crops import extract_object_crops  # noqa: E402
 
@@ -234,6 +239,7 @@ def test_detection_checkpoint_can_reenter_feature_extraction(tmp_path):
 def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
     base = {
         "channels": None,
+        "channel_axis": None,
         "cellprob_threshold": 0.0,
         "flow_threshold": 0.4,
         "niter": None,
@@ -247,9 +253,83 @@ def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
     assert segmentation_params_hash(base | {"segmentation_binning": 4}) != (
         segmentation_params_hash(base | {"segmentation_binning": 2})
     )
+    assert segmentation_params_hash(base | {"channel_axis": 0}) != (
+        segmentation_params_hash(base | {"channel_axis": -1})
+    )
+    assert segmentation_params_hash(base | {"channel_axis": 2}) == (
+        segmentation_params_hash(base | {"channel_axis": -1})
+    )
     assert segmentation_params_hash(base | {"unused_legacy_key": 1.0}) == (
         segmentation_params_hash(base | {"unused_legacy_key": None})
     )
+
+
+def test_segmentation_params_normalizes_and_validates_channel_axis():
+    assert segmentation_params({"channel_axis": 2}, {})["channel_axis"] == -1
+    assert segmentation_params({"channel_axis": -1}, {})["channel_axis"] == -1
+    assert segmentation_params({}, {"channel_axis": 0})["channel_axis"] == 0
+    with pytest.raises(ValueError, match="channel_axis must be"):
+        segmentation_params({"channel_axis": 1}, {})
+
+
+def test_ambiguous_channel_axis_round_trips_through_detection_checkpoint(tmp_path):
+    import tifffile
+
+    image = np.zeros((3, 10, 3), dtype=np.uint8)
+    image[0, 5, 1] = 11
+    image_path = tmp_path / "ambiguous.tif"
+    tifffile.imwrite(image_path, image)
+    output_dir = tmp_path / "detection"
+    pipeline_data = {
+        "input": _payload(
+            image_path,
+            channel_axis=0,
+            channels=[0],
+            output_dir=str(output_dir),
+            source_image_size_px=[3, 10],
+        ),
+        "metadata": {"verbose": 0},
+    }
+
+    detected = detect_objects.run(
+        pipeline_data, {"model": _ShapeAgnosticCellposeModel()}
+    )["detect_objects"]
+    assert detected["image"].shape == (10, 3)
+    assert detected["segmentation_params"]["channel_axis"] == 0
+
+    checkpoint_path = detected["artifacts"]["detection_checkpoint_json"]
+    checkpoint = json.loads(Path(checkpoint_path).read_text())
+    assert checkpoint["segmentation_params"]["channel_axis"] == 0
+
+    loaded = load_detected_objects.run(
+        {
+            "input": {
+                "detection_checkpoint_path": checkpoint_path,
+                "segmentation_params_hash": detected["segmentation_params_hash"],
+            },
+            "metadata": {"verbose": 0},
+        },
+        {},
+    )["detect_objects"]
+    assert loaded["image"].shape == (10, 3)
+    assert int(loaded["image"][5, 1]) == 11
+    assert loaded["segmentation_params"]["channel_axis"] == 0
+
+    checkpoint["segmentation_params"]["channel_axis"] = -1
+    Path(checkpoint_path).write_text(json.dumps(checkpoint), encoding="utf-8")
+    with pytest.raises(ValueError, match="may be corrupt"):
+        load_detected_objects.run(
+            {
+                "input": {
+                    "detection_checkpoint_path": checkpoint_path,
+                    "segmentation_params_hash": detected[
+                        "segmentation_params_hash"
+                    ],
+                },
+                "metadata": {"verbose": 0},
+            },
+            {},
+        )
 
 
 def test_checkpoint_reentry_can_retune_area_filter_without_redetection(tmp_path):
@@ -1407,3 +1487,8 @@ class _StubCellposeModel:
         masks[5:11, 6:12] = 1
         masks[20:30, 25:35] = 2
         return masks, None, None
+
+
+class _ShapeAgnosticCellposeModel:
+    def eval(self, x, channel_axis=None, **kwargs):
+        return np.zeros(x.shape[:2], dtype=np.int32), None, None

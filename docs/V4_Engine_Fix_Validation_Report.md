@@ -2,168 +2,238 @@
 
 Date: 2026-07-11
 
-Branch: `v4-engine`
+Target branch: `v4-engine`
 
 Remote base reviewed: `5b98c65810ee6620a6e32b21fb49e1e4253ecf65`
 
+Fix series reviewed:
+
+- `f10baa1` — engine lifecycle/scope coordination fixes
+- `96df3f3` — initial Fable verification notes
+- `79648b6` — Claude engine/segmentation self-review fixes
+- the follow-up changes described in this report
+
 Reviewer handoff: Fable
 
-## Purpose
+## Scope and test-data constraint
 
-This change set fixes engine concurrency, shutdown, status-reporting, and
-cross-platform CI problems found during a review of the v4 branch. Validation
-used only repository test fixtures and synthetic test data. No production
-workflow or production step implementation was changed.
+This report covers a deep review and repair of the v4 engine and the object
+analysis channel-axis contract. Validation used only repository fixtures,
+temporary files, generated TIFF arrays, mock workers, and synthetic pipeline
+steps. No production image or experiment dataset was read or modified.
 
-## Problems and fixes
+The original change stopped short of production workflow changes. The later
+review found that a test-only channel-axis change could not provide a usable
+or safe contract, because the value also had to flow through pipeline input,
+checkpoint identity, checkpoint reload, and CLI geometry. The follow-up was
+therefore explicitly approved to make those narrowly scoped workflow changes.
 
-### 1. Scope completion could deadlock the priority executor
+## Original v4 fixes retained and revalidated
 
-Root cause: scope-completion work ran in the same priority executor as phase-0
-jobs and synchronously waited for matching phase-0 futures. With one executor
-thread, a completion task could run ahead of lower-priority phase-0 work and
-occupy the only thread needed to complete that work.
+### Scope completion executor deadlock
 
-Fix: scope completion now runs in a separate `ThreadPoolExecutor`. The priority
-executor remains responsible for phase-0 jobs, so a completion waiter cannot
-consume phase-0 execution capacity.
+Scope-completion coordination now runs in a dedicated executor instead of
+occupying a phase-0 priority worker while waiting for phase-0 futures. This
+removes the one-worker starvation/deadlock path.
 
-Primary code: `engine/_pipeline.py`
+### Non-waiting shutdown and worker-pool closure
 
-Regression test:
-`TestEnginePriority.test_scope_completion_does_not_block_lower_priority_phase0`
+`shutdown(wait=False)` cancels queued priority work, canceled submissions are
+reflected in status, and closed worker pools reject late acquisition or return.
+The scope executor also cancels queued completion work during non-waiting
+shutdown.
 
-### 2. `shutdown(wait=False)` could run queued work and leave a worker alive
+### Accurate pending/running/failed status
 
-Root cause: non-waiting shutdown marked the priority executor as closed but
-allowed it to drain queued tasks. The worker pool was shut down immediately,
-so later queued tasks could create a new worker after shutdown had returned.
+Pipeline state records pending and running transitions explicitly. The failed
+count is derived from the retained failure list so counters cannot drift after
+scope failure collection.
+
+### Cross-platform mock Cellpose test
+
+The test PYTHONPATH uses `os.pathsep`, making it valid on Windows and POSIX.
+
+## Claude changes reviewed
+
+Claude's `79648b6` change correctly addressed these defects, and the behavior
+was retained:
+
+1. `WorkerTimeoutError` is distinct from `StepExecutionError`.
+2. Conda workers receive an explicit engine PID for parent-heartbeat cleanup.
+3. Duplicate pipeline names are checked again at insertion time.
+4. Failed status is derived from the failure collection.
+5. Ambiguous equal-end TIFF shapes are rejected unless `channel_axis` is
+   explicit.
+
+The review found three remaining implementation gaps and one reporting gap.
+They are fixed below.
+
+## Follow-up fixes
+
+### 1. Atomic registration across duplicates and shutdown
+
+Problem: the second duplicate-name check prevented two completed inserts, but
+both callers could still parse and build the same pipeline concurrently. More
+importantly, registration could finish successfully after shutdown had already
+set the engine to non-accepting.
 
 Fix:
 
-- non-waiting priority-executor shutdown cancels queued futures;
-- canceled submissions are reflected in pipeline status;
-- both the top-level worker pool and each environment pool have a closed state;
-- closed pools reject acquisition and do not return workers to the idle list;
-- scope-executor shutdown cancels queued completion work when `wait=False`.
+- `_registering` reserves names under the engine lifecycle lock;
+- duplicate registered or reserved names fail before YAML parsing;
+- the final insertion rechecks `_accepting` under the same lock used by
+  shutdown;
+- reservations are released in `finally`, including parser/metadata failures;
+- shutdown changes `_accepting` while holding that lock.
 
-Primary code: `engine/_pipeline.py`, `engine/_pool.py`, `engine/_run.py`
+Deterministic tests cover same-name concurrency, shutdown while parsing, and
+reservation cleanup after parse failure. Adversarial tests add 32 concurrent
+same-name callers and 24 distinct registrations paused across shutdown.
 
-Regression tests:
+### 2. Atomic submit acceptance across shutdown
 
-- `TestEngineLifecycle.test_shutdown_without_wait_cancels_queue_and_closes_workers`
-- `TestPool.test_shutdown_before_use`
+Problem: submit checked `_accepting` outside the lifecycle lock. Shutdown could
+close an executor after the check but before submission/accounting, producing
+a partially counted or late submission.
 
-### 3. `status()` always reported `running=0`
+Fix: acceptance, pipeline lookup, submission accounting, phase-0 executor
+submission, and optional scope-coordinator submission now share the lifecycle
+lock with shutdown. A submit either wins before shutdown or receives the
+documented shutdown error; it cannot land between those states.
 
-Root cause: running state was a hard-coded approximation and pending state was
-derived from cumulative completion and failure counters.
+The existing submit/shutdown adversarial test now also asserts that no
+unexpected exception type was hidden during the race.
 
-Fix: `PipelineState` now tracks pending and running operations explicitly.
-Transitions are recorded when submissions start, finish, fail, or are canceled.
+### 3. End-to-end channel-axis contract
 
-Primary code: `engine/_run.py`, `engine/_pipeline.py`
+Problem: `segment_tiff()` accepted `channel_axis`, but the canonical detection
+step never forwarded pipeline/YAML input. Checkpoint reload also ignored it,
+and checkpoint identity did not include it. An explicit value supplied for an
+ambiguous TIFF therefore still failed, while differently interpreted TIFFs
+could share an identity hash.
 
-Regression test:
-`TestEngineStatus.test_status_tracks_pending_and_running_jobs`
+Fix:
 
-### 4. Mock Cellpose CI test failed on Linux and macOS
+- `channel_axis` is read from pipeline input with YAML fallback;
+- detection forwards it to `segment_tiff()`;
+- it is included in segmentation identity and persisted checkpoints;
+- reload uses the persisted axis before feature extraction;
+- new checkpoints verify that their stored segmentation parameters still
+  match their stored identity hash before those parameters are trusted;
+- legacy checkpoints without the new key retain their prior hash behavior;
+- axis `2` is normalized to `-1`, because both mean channel-last;
+- booleans, floats, strings, middle axes, and other invalid declarations are
+  rejected;
+- the three object-analysis YAML pipelines expose `channel_axis: null`;
+- the CLI exposes `--channel-axis` and uses it when calculating source image
+  size; ambiguous shapes fail with an actionable CLI message.
 
-Root cause: the test built `PYTHONPATH` with a hard-coded semicolon. Semicolon is
-the Windows separator; POSIX platforms require a colon.
+Tests cover both orientations of `(3, 10, 3)`, exact pixel preservation,
+checkpoint round-trip, checkpoint tampering, hash separation, alias
+normalization, invalid values, CLI geometry, and property-style selection for
+1, 2, 3, 5, and 8 channels.
 
-Fix: the test now uses `os.pathsep`.
+### 4. Handoff report correction
 
-Primary test:
-`workflows/object_analysis/tests/test_object_analysis.py::test_split_detection_features_engine_path_with_mock_backend`
+The earlier report described only `f10baa1` and claimed production workflow
+code had not changed even after Claude changed `_segmentation.py`. This report
+supersedes that stale statement and describes the complete reviewed series.
 
-## Validation performed
+## Validation
 
-All validation used a disposable Python 3.11 environment installed from
-`.[test]` and repository-provided test/synthetic inputs.
+Environment:
+
+- macOS
+- CPython 3.11.15
+- disposable venv at `/tmp/smart-analysis-review-venv`
+- editable install from `.[test]`
+- dependency compatibility check required before handoff
+
+Commands:
+
+```bash
+python -m pytest engine/test_engine.py engine/test_lifecycle_adversarial.py \
+  workflows/object_analysis/tests/test_segmentation.py \
+  workflows/object_analysis/tests/test_channel_axis_adversarial.py \
+  workflows/object_analysis/tests/test_object_analysis.py -q
+
+python -m pytest -m adversarial --tb=short -q
+
+python -m pytest \
+  -m "not cellpose and not deep and not cluster and not conda_env" \
+  --tb=short -q
+
+python -m compileall -q engine workflows
+uv pip check --python /tmp/smart-analysis-review-venv/bin/python
+git diff --check
+```
+
+The CI-equivalent marker exclusion matches repository CI: the deselected tests
+need real Cellpose/Torch/model access, a clustering environment, or dedicated
+conda worker environments. Those resources are outside the approved synthetic
+test-data scope.
+
+### Local results
 
 | Validation | Result |
 | --- | --- |
-| Focused engine regressions | 4 passed |
-| Former cross-platform mock Cellpose failure | 1 passed |
-| Engine suite excluding slow/conda-env tests | 95 passed, 1 deselected |
-| Fast adversarial suite | 22 passed |
-| Slow adversarial suite | 12 passed |
-| CI-equivalent suite | 345 passed, 11 deselected |
+| Targeted engine/object-analysis suites | 190 passed, 4 resource-marked skips |
+| Full adversarial suite, including slow tests | 65 passed, 338 deselected |
+| Registration/submit race set repeated 10 times | 40 passed |
+| CI-equivalent suite | 392 passed, 11 deselected |
 | Python compilation | passed |
-| `pip check` | passed |
+| dependency compatibility (`uv pip check`) | passed |
 | `git diff --check` | passed |
 
-CI-equivalent command:
+One CI-equivalent run emitted the existing scikit-image empty-region
+`RuntimeWarning`; no test failed.
 
-```bash
-pytest -m "not cellpose and not deep and not cluster and not conda_env" --tb=short -q
-```
+## Files changed in the complete reviewed series
 
-The 11 deselected tests require external runtime resources that the repository's
-GitHub Actions workflow also does not provision: real Cellpose/Torch, DINO model
-access, clustering environments, or dedicated conda test environments.
+Engine implementation and tests:
 
-## Files intentionally changed
-
+- `engine/__init__.py`
+- `engine/_errors.py`
 - `engine/_pipeline.py`
 - `engine/_pool.py`
 - `engine/_run.py`
+- `engine/_worker.py`
 - `engine/test_engine.py`
+- `engine/test_lifecycle_adversarial.py`
+- `engine/worker_script.py`
+
+Object-analysis implementation, configuration, and tests:
+
+- `workflows/_detection_checkpoint.py`
+- `workflows/_segmentation.py`
+- `workflows/basic_test/tests/test_adversarial.py`
+- `workflows/object_analysis/pipelines/object_analysis.yaml`
+- `workflows/object_analysis/pipelines/object_analysis_deep.yaml`
+- `workflows/object_analysis/pipelines/object_detection.yaml`
+- `workflows/object_analysis/run_pipeline.py`
+- `workflows/object_analysis/steps/detect_objects.py`
+- `workflows/object_analysis/steps/load_detected_objects.py`
+- `workflows/object_analysis/tests/test_channel_axis_adversarial.py`
 - `workflows/object_analysis/tests/test_object_analysis.py`
+- `workflows/object_analysis/tests/test_segmentation.py`
+
+Documentation:
+
 - `docs/V4_Engine_Fix_Validation_Report.md`
 
-## Constraint and residual issue
+## Fable verification checklist
 
-The review also identified ambiguous channel-axis inference in
-`workflows/_segmentation.py`. It was not changed because the requested scope
-explicitly prohibited changes to production workflow and step scripts. A future
-fix should add an explicit channel-axis contract or reject ambiguous shapes.
-
-## Suggested Fable verification
-
-1. Inspect the separate scope executor and confirm it is shut down before the
-   worker pool.
-2. Confirm non-waiting priority shutdown cancels queued futures.
-3. Confirm worker acquisition fails after pool shutdown.
-4. Run the four focused regressions named above.
-5. Run the CI-equivalent command and verify all selected tests pass.
-6. Confirm `git diff <base>..HEAD -- workflows` contains only the test-file
-   portability change and no production workflow or step change.
-
-## Fable verification results
-
-Date: 2026-07-11
-
-Verified commit: `f10baa1` against base `5b98c65`. Validation used a
-disposable Python 3.11.15 venv installed from `.[test]` (`pip check` clean)
-on Linux.
-
-1. Confirmed. `Engine` creates a dedicated `ThreadPoolExecutor`
-   (`_scope_executor`, `engine/_pipeline.py`) for scope-completion work,
-   separate from the phase-0 `_PriorityThreadPool`. `Engine.shutdown()`
-   closes the priority executor, then the scope executor (with
-   `cancel_futures=not wait`), then the worker pool.
-2. Confirmed. `_PriorityThreadPool.shutdown(wait=False)` drains the heap
-   under the lock and cancels every queued future; canceled submissions are
-   reflected in status via a done-callback that decrements the pending
-   counter (`engine/_run.py`).
-3. Confirmed. Both `WorkerPool` and `_EnvPool` set a closed flag on
-   shutdown; `_EnvPool.acquire()` and `WorkerPool._get_env_pool()` raise
-   `RuntimeError` after close, and `_EnvPool.release()` no longer returns
-   workers to the idle list once closed.
-4. Passed. All four focused regressions plus the mock-Cellpose pathsep test
-   passed (5 passed).
-5. Passed with an environment caveat. The CI-equivalent command selected
-   345 tests and deselected 11, matching the report. 332 passed; the 13
-   failures were all in `engine/test_conda_utils.py` with
-   `FileNotFoundError: Could not run 'conda info'` — conda is not installed
-   in the verification container. CI provisions Miniconda via
-   `setup-miniconda`, so these are environment-availability failures, not
-   code defects. No non-conda test failed.
-6. Confirmed. `git diff 5b98c65..f10baa1 -- workflows` contains only the
-   `os.pathsep` portability change in
-   `workflows/object_analysis/tests/test_object_analysis.py`. The full
-   change set touches exactly the files listed under "Files intentionally
-   changed". `python -m compileall engine workflows` and
-   `git diff 5b98c65..f10baa1 --check` both passed.
+1. Confirm registration reserves names before parsing and releases every
+   reservation in `finally`.
+2. Confirm shutdown and final registration insertion both use `_lock` while
+   reading/writing `_accepting`.
+3. Confirm submit acceptance and both executor submissions are atomic with
+   shutdown under `_lock`.
+4. Trace `channel_axis` from pipeline input/YAML through detection,
+   segmentation identity, checkpoint JSON, and checkpoint reload.
+5. Confirm `2` and `-1` produce the same identity while `0` differs.
+6. Run the targeted, adversarial, and CI-equivalent commands above.
+7. Confirm test inputs are temporary/synthetic and no production dataset is
+   referenced.
+8. Inspect the final GitHub Actions matrix and require every supported
+   OS/Python job to pass.

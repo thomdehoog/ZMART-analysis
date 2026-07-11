@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import operator
+
 import numpy as np
 import tifffile
 
@@ -237,6 +239,16 @@ def _to_channel_last(image, channel_axis):
     is the channel axis. Equal end axes are ambiguous and raise ``ValueError``.
     """
     if channel_axis is not None:
+        if isinstance(channel_axis, (bool, np.bool_)):
+            raise ValueError(
+                f"channel_axis must be 0, 2, -1, or None; got {channel_axis}."
+            )
+        try:
+            channel_axis = operator.index(channel_axis)
+        except TypeError as exc:
+            raise ValueError(
+                f"channel_axis must be 0, 2, -1, or None; got {channel_axis}."
+            ) from exc
         if channel_axis in (-1, 2):
             return image
         if channel_axis == 0:

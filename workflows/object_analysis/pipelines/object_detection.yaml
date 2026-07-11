@@ -9,6 +9,7 @@ metadata:
 object_detection:
   - detect_objects:
       channels: null
+      channel_axis: null
       cellprob_threshold: 0.0
       flow_threshold: 0.4
       niter: null

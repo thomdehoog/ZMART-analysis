@@ -103,6 +103,7 @@ def test_race_submit_during_shutdown(temp_step, temp_yaml):
     t.join(timeout=10)
 
     assert not t.is_alive(), "DEADLOCK: submit thread did not finish after shutdown"
+    assert errors == [], f"unexpected submit/shutdown errors: {errors}"
 
 
 @pytest.mark.adversarial
