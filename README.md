@@ -256,6 +256,8 @@ smart-analysis/
                 clean_env.py
             pipelines/
             steps/
+                image_io.py        # OME-Zarr / OME-TIFF loading
+                test_image_io.py   # unit tests (32 tests)
             run_pipeline.py
 
     docs/
@@ -274,7 +276,18 @@ The test suite sets up environments, runs all tests, and cleans up automatically
 python workflows/basic_test/run_all.py
 ```
 
-The test suite covers:
+Image loading has its own tests, run from an environment with ngio
+installed:
+
+```bash
+python workflows/rare_event_selection/steps/test_image_io.py
+```
+
+They build synthetic positions in both NGFF 0.4 and 0.5, including a
+sharded one, and check plane selection, metadata, physical coordinates,
+lazy chunk access, and the steps that consume them.
+
+The engine test suite covers:
 
 - Local step execution
 - Data flow between steps
@@ -291,6 +304,10 @@ The test suite covers:
 - Python 3.10+
 - PyYAML (auto installed by test suite if missing)
 - Conda (for environment switching)
+
+Workflow packages are installed by each workflow's `setup_env.py`. For
+`rare_event_selection` that includes ngio for OME-Zarr, scikit-image, and
+cellpose.
 
 ## License
 

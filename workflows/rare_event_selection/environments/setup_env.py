@@ -41,6 +41,7 @@ PIP_PACKAGES = [
     "numpy",
     "scikit-image",
     "pooch",
+    "ngio",
     "cellpose",
 ]
 

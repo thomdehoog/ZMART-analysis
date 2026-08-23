@@ -5,6 +5,11 @@ Usage:
     python run_pipeline.py
     python run_pipeline.py --label experiment_001
     python run_pipeline.py --source path/to/image.tif
+    python run_pipeline.py --source path/to/position.zarr --label pos_A1
+
+The source can be an OME-Zarr position (NGFF 0.4 or 0.5, one Zarr per
+position), an image file, or a skimage sample dataset. Which plane of a
+position is analysed is set by the level / t / c / z keys in the YAML.
 """
 
 import sys
@@ -30,8 +35,8 @@ def main():
     )
     parser.add_argument(
         "--source", default="skimage.human_mitosis",
-        help="Data source: skimage.human_mitosis or path to image "
-             "(default: skimage.human_mitosis)",
+        help="Data source: skimage.human_mitosis, an OME-Zarr position, "
+             "or a path to an image (default: skimage.human_mitosis)",
     )
     args = parser.parse_args()
 
@@ -51,14 +56,31 @@ def main():
     print("=" * 60)
     print("  Result")
     print("=" * 60)
+    image_metadata = result["preprocess"]["image_metadata"]
+
+    print(f"  Image:            {image_metadata['format']} "
+          f"{tuple(image_metadata['shape'])} "
+          f"{''.join(image_metadata['axes'])}")
+    if image_metadata["index"] or image_metadata["projection"]:
+        plane = dict(image_metadata["index"])
+        if image_metadata["channel"] is not None:
+            plane["c"] = image_metadata["channel"]
+        if image_metadata["projection"]:
+            plane["z"] = image_metadata["projection"]
+        print(f"  Plane:            {plane}")
     print(f"  Cells segmented:  {result['segment']['n_cells']}")
     print(f"  Cells selected:   {len(result['feedback']['cells'])}")
     print(f"  Feedback file:    {result['feedback']['filepath']}")
     print()
     for cell in result["feedback"]["cells"]:
-        print(f"    label={cell['label']:3d}  "
-              f"pos=({cell['centroid_x']:.1f}, {cell['centroid_y']:.1f})  "
-              f"area={cell['area']}px")
+        line = (f"    label={cell['label']:3d}  "
+                f"pos=({cell['centroid_x']:.1f}, {cell['centroid_y']:.1f})px  "
+                f"area={cell['area']}px")
+        if "centroid_x_physical" in cell:
+            line += (f"  ({cell['centroid_x_physical']:.1f}, "
+                     f"{cell['centroid_y_physical']:.1f}) "
+                     f"{cell['physical_unit']}")
+        print(line)
     print()
     print("=" * 60)
 
