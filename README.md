@@ -234,9 +234,13 @@ either format:
 ```
 
 Axes the image does not have are ignored, so the same YAML runs over
-positions of different shapes. A test writes the same content as OME-Zarr
-0.4, OME-Zarr 0.5 and OME-TIFF and asserts every selection returns
-identical pixels.
+positions of different shapes, and `level` counts from full resolution
+whatever a writer named its datasets. A test writes the same content as
+OME-Zarr 0.4, OME-Zarr 0.5 and OME-TIFF and asserts every selection
+returns identical pixels.
+
+Pointing at a plate, a well or a bioformats2raw container instead of a
+position gives an error listing the positions inside it.
 
 Images can be large, so reads stay lazy in both formats: only the chunks,
 shards or TIFF tiles backing the requested plane are fetched, never the
@@ -254,7 +258,10 @@ When the input carries spatial metadata, the feedback JSON adds physical
 coordinates alongside the pixel ones, so the selected cells can be sent
 straight back to the microscope. They come from the scale and translation
 of the OME-Zarr level that was read, or from PhysicalSize and the stage
-position in the OME-XML of an OME-TIFF, converted to a common unit.
+position in the OME-XML of an OME-TIFF, reconciled to a single unit when
+the writer used different ones. If a stage position was recorded but
+cannot be reconciled, no physical coordinate is written at all, rather
+than one that looks like a stage position and is not.
 
 ```json
 {

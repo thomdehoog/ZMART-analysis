@@ -1008,5 +1008,243 @@ class TestTiffLazyReading(OmeZarrTestCase):
         self.assertGreater(stack_reads, plane_reads)
 
 
+class TestUnitReconciliation(unittest.TestCase):
+    """
+    Writers do not agree on units. A pixel size in one unit and a stage
+    position in another has to come out as one coherent coordinate.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_units_"))
+        cls.array = np.random.default_rng(5).integers(0, 255, (4, 4),
+                                                     dtype=np.uint8)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def _write(self, name, pixel_unit, pixel_size, position_unit, position):
+        import tifffile
+
+        path = self.tmpdir / name
+        tifffile.imwrite(
+            path, self.array, photometric="minisblack",
+            metadata={
+                "axes": "YX",
+                "PhysicalSizeX": pixel_size, "PhysicalSizeXUnit": pixel_unit,
+                "PhysicalSizeY": pixel_size, "PhysicalSizeYUnit": pixel_unit,
+                "Plane": {"PositionX": [position], "PositionY": [position],
+                          "PositionXUnit": [position_unit],
+                          "PositionYUnit": [position_unit]},
+            })
+        return path
+
+    def test_no_recorded_position_means_the_image_corner(self):
+        import tifffile
+
+        path = self.tmpdir / "no_position.ome.tif"
+        tifffile.imwrite(path, self.array, photometric="minisblack",
+                         metadata={"axes": "YX", "PhysicalSizeX": 0.5,
+                                   "PhysicalSizeXUnit": "\u00b5m",
+                                   "PhysicalSizeY": 0.5,
+                                   "PhysicalSizeYUnit": "\u00b5m"})
+
+        _, meta = load_plane(path)
+        self.assertEqual(meta["origin"], {})
+        physical = to_physical(10.0, 10.0, meta)
+        self.assertAlmostEqual(physical["x"], 5.0)
+
+    def test_position_in_millimeters_with_pixels_in_micrometers(self):
+        path = self._write("mixed.ome.tif", "\u00b5m", 0.5, "mm", 2.0)
+
+        _, meta = load_plane(path)
+        self.assertEqual(meta["space_unit"], "micrometer")
+        # 2 mm is 2000 um, and the coordinate has to be in one unit
+        self.assertAlmostEqual(meta["origin"]["x"], 2000.0)
+
+        physical = to_physical(10.0, 10.0, meta)
+        self.assertAlmostEqual(physical["x"], 10.0 * 0.5 + 2000.0)
+
+    def test_pixel_size_in_nanometers(self):
+        path = self._write("nano.ome.tif", "nm", 325.0, "nm", 1000.0)
+
+        _, meta = load_plane(path)
+        self.assertEqual(meta["space_unit"], "nanometer")
+        self.assertAlmostEqual(meta["pixel_size"]["x"], 325.0)
+        self.assertAlmostEqual(meta["origin"]["x"], 1000.0)
+
+    def test_unconvertible_position_unit_is_dropped(self):
+        # Better no coordinate than a wrong one sent to a microscope.
+        path = self._write("reference.ome.tif", "\u00b5m", 0.5,
+                           "reference frame", 5.0)
+
+        _, meta = load_plane(path)
+        self.assertEqual(meta["pixel_size"]["x"], 0.5)
+        self.assertIsNone(meta["origin"])
+        self.assertIsNone(to_physical(1.0, 2.0, meta))
+
+
+class TestForeignWriters(unittest.TestCase):
+    """
+    Stores written by hand rather than by ngio.
+
+    Every other fixture here is written by the same library that reads it
+    back, which cannot catch assumptions about how a writer names things.
+    These are written straight through zarr, the way a converter would.
+    """
+
+    AXES = [
+        {"name": "t", "type": "time", "unit": "second"},
+        {"name": "c", "type": "channel"},
+        {"name": "z", "type": "space", "unit": "micrometer"},
+        {"name": "y", "type": "space", "unit": "micrometer"},
+        {"name": "x", "type": "space", "unit": "micrometer"},
+    ]
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import zarr  # noqa: F401
+        except ImportError:
+            raise unittest.SkipTest("zarr is not installed")
+
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_foreign_"))
+        cls.array = np.random.default_rng(4).integers(
+            0, 4096, (1, 2, 3, 32, 32), dtype=np.uint16)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    @classmethod
+    def _datasets(cls, paths_and_scales):
+        return [
+            {"path": path,
+             "coordinateTransformations": [
+                 {"type": "scale", "scale": [1, 1, 1, scale, scale]},
+                 {"type": "translation",
+                  "translation": [0, 0, 0, ORIGIN_YX[0], ORIGIN_YX[1]]}]}
+            for path, scale in paths_and_scales
+        ]
+
+    def _write_v04(self, name, dataset_names=("s0", "s1")):
+        """NGFF 0.4: Zarr v2, metadata in .zattrs, no omero block."""
+        import zarr
+
+        store = self.tmpdir / name
+        group = zarr.create_group(store=str(store), zarr_format=2)
+
+        for path, data in ((dataset_names[0], self.array),
+                           (dataset_names[1], self.array[:, :, :, ::2, ::2])):
+            array = group.create_array(name=path, shape=data.shape,
+                                       dtype=data.dtype, chunks=(1, 1, 1, 16, 16))
+            array[:] = data
+
+        group.attrs["multiscales"] = [{
+            "version": "0.4", "name": "position", "axes": self.AXES,
+            "datasets": self._datasets(
+                ((dataset_names[0], PIXEL_SIZE), (dataset_names[1], PIXEL_SIZE * 2))),
+        }]
+        return store
+
+    def _write_v05(self, name):
+        """NGFF 0.5: Zarr v3, metadata under the ome attribute."""
+        import zarr
+
+        store = self.tmpdir / name
+        group = zarr.create_group(store=str(store), zarr_format=3)
+        array = group.create_array(name="0", shape=self.array.shape,
+                                   dtype=self.array.dtype,
+                                   chunks=(1, 1, 1, 16, 16))
+        array[:] = self.array
+
+        group.attrs["ome"] = {
+            "version": "0.5",
+            "multiscales": [{
+                "version": "0.5", "name": "position", "axes": self.AXES,
+                "datasets": self._datasets((("0", PIXEL_SIZE),)),
+            }],
+        }
+        return store
+
+    def test_reads_a_hand_written_v04(self):
+        store = self._write_v04("foreign_v04.zarr")
+        plane, meta = load_plane(store, c=1, z=0)
+        np.testing.assert_array_equal(plane, self.array[0, 1, 0])
+        self.assertEqual(meta["ngff_version"], "0.4")
+        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE)
+        self.assertAlmostEqual(meta["origin"]["x"], ORIGIN_YX[1])
+
+    def test_reads_a_hand_written_v05(self):
+        store = self._write_v05("foreign_v05.zarr")
+        plane, meta = load_plane(store, c=1, z=2)
+        np.testing.assert_array_equal(plane, self.array[0, 1, 2])
+        self.assertEqual(meta["ngff_version"], "0.5")
+
+    def test_level_is_an_index_whatever_the_datasets_are_called(self):
+        # "0", "1", ... is only a convention. An integer level has to mean
+        # "counting from full resolution" or the default breaks entirely.
+        store = self._write_v04("foreign_levels.zarr", ("s0", "s1"))
+
+        plane, meta = load_plane(store)
+        self.assertEqual(plane.shape, (32, 32))
+        self.assertEqual(meta["level"], "s0")
+
+        plane, meta = load_plane(store, level=1)
+        self.assertEqual(plane.shape, (16, 16))
+        self.assertEqual(meta["level"], "s1")
+        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
+
+    def test_level_can_still_be_named(self):
+        store = self._write_v04("foreign_named.zarr", ("full", "half"))
+        plane, meta = load_plane(store, level="half")
+        self.assertEqual(plane.shape, (16, 16))
+        self.assertEqual(meta["level"], "half")
+
+    def test_unknown_level_lists_what_there_is(self):
+        store = self._write_v04("foreign_bad_level.zarr", ("full", "half"))
+        with self.assertRaises(ValueError) as caught:
+            load_plane(store, level="quarter")
+        self.assertIn("full, half", str(caught.exception))
+
+    def test_channel_by_name_without_an_omero_block(self):
+        store = self._write_v04("foreign_nochannels.zarr")
+        with self.assertRaises(Exception) as caught:
+            load_plane(store, c="DAPI")
+        self.assertIn("DAPI", str(caught.exception))
+
+    def test_bioformats2raw_container_names_its_positions(self):
+        import zarr
+
+        store = self.tmpdir / "converted.zarr"
+        root = zarr.create_group(store=str(store), zarr_format=2)
+        root.attrs["bioformats2raw.layout"] = 3
+        root.create_group("OME")
+
+        for series in ("0", "1"):
+            image = root.create_group(series)
+            array = image.create_array(name="0", shape=self.array.shape,
+                                       dtype=self.array.dtype,
+                                       chunks=(1, 1, 1, 16, 16))
+            array[:] = self.array
+            image.attrs["multiscales"] = [{
+                "version": "0.4", "name": series, "axes": self.AXES,
+                "datasets": self._datasets((("0", PIXEL_SIZE),)),
+            }]
+
+        with self.assertRaises(ValueError) as caught:
+            load_plane(store)
+
+        message = str(caught.exception)
+        self.assertIn("not a position", message)
+        self.assertIn("Positions: 0, 1", message)
+        self.assertNotIn("OME", message.split("Positions:")[1])
+
+        # and the position it points at does load
+        plane, _ = load_plane(store / "1", z=0)
+        np.testing.assert_array_equal(plane, self.array[0, 0, 0])
+
+
 if __name__ == "__main__":
     unittest.main()

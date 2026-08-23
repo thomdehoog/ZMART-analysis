@@ -79,8 +79,37 @@ def _open_position(source):
         ) from error
 
 
+def _resolve_level(container, level):
+    """
+    Resolve a resolution level to a multiscale dataset path.
+
+    An integer counts levels from full resolution, which works whatever a
+    writer named its datasets: "0", "1", ... is only a convention, and
+    bioformats2raw and friends use their own. A string is taken as the
+    dataset path itself.
+    """
+    paths = list(container.level_paths)
+
+    text = str(level)
+    if text.lstrip("-").isdigit():
+        return paths[_bounded(int(text), len(paths), "level")]
+
+    if text in paths:
+        return text
+
+    raise ValueError(
+        f"Resolution level {level!r} not found. Levels: {', '.join(paths)}"
+    )
+
+
 def _positions_below(source):
-    """(kind, position paths) if `source` is a plate or a well, else (None, [])."""
+    """
+    (kind, position paths) if `source` holds positions, else (None, []).
+
+    Covers HCS plates and wells, and the layout bioformats2raw writes,
+    where the root carries a marker and the positions are numbered
+    subgroups.
+    """
     import ngio
 
     for kind, opener, lister in (
@@ -92,6 +121,23 @@ def _positions_below(source):
         except Exception:
             continue
 
+    try:
+        import zarr
+
+        group = zarr.open_group(str(source), mode="r")
+        attributes = dict(group.attrs)
+        marker = attributes.get("bioformats2raw.layout")
+        if marker is None and isinstance(attributes.get("ome"), dict):
+            marker = attributes["ome"].get("bioformats2raw.layout")
+
+        if marker is not None:
+            # OME holds the metadata document, not an image.
+            paths = sorted(name for name in group.group_keys() if name != "OME")
+            if paths:
+                return "bioformats2raw container", paths
+    except Exception:
+        pass
+
     return None, []
 
 
@@ -100,7 +146,7 @@ def _load_ome_zarr(source, level, t, c, z):
     import numpy as np
 
     container = _open_position(source)
-    image = container.get_image(path=str(level))
+    image = container.get_image(path=_resolve_level(container, level))
 
     projection = _projection_mode(z) if image.has_axis("z") else None
 
@@ -142,7 +188,7 @@ def _load_ome_zarr(source, level, t, c, z):
         "axes": list(image.axes),
         "shape": list(image.shape),
         "dtype": str(image.dtype),
-        "level": str(level),
+        "level": _resolve_level(container, level),
         "index": {k: int(v) for k, v in slicing.items()},
         "projection": projection,
         "channel": channel_index,
@@ -262,6 +308,11 @@ def _tiff_origin(pixels, chosen, unit):
 
     Acquisitions record it per plane, so the entry matching the selected
     t / c / z is used, falling back to the first one.
+
+    Returns {} when no position was recorded, which means the origin is
+    the image corner. Returns None when one was recorded but could not be
+    expressed in the same unit as the pixel size: no coordinate is better
+    than one that looks like a stage position and is not.
     """
     if pixels is None or not pixels.planes or unit is None:
         return {}
@@ -282,8 +333,11 @@ def _tiff_origin(pixels, chosen, unit):
         ("x", plane.position_x, plane.position_x_unit),
     ):
         converted = _convert_length(value, _unit_name(value_unit), unit)
-        if converted is not None:
-            origin[axis] = converted
+        if converted is None:
+            if value is not None:
+                return None
+            continue
+        origin[axis] = converted
 
     return origin
 
@@ -571,7 +625,11 @@ def to_physical(centroid_y, centroid_x, metadata):
     if "y" not in pixel_size or "x" not in pixel_size:
         return None
 
-    origin = metadata.get("origin") or {}
+    origin = metadata.get("origin")
+    if origin is None:
+        # A stage position was recorded but could not be reconciled with
+        # the pixel size, so there is no coordinate to give.
+        return None
 
     return {
         "y": centroid_y * float(pixel_size["y"]) + float(origin.get("y", 0.0)),
