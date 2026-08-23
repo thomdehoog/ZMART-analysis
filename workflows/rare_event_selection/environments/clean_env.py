@@ -1,7 +1,7 @@
 """
 Remove conda environments for the rare_event_selection workflow.
 
-Finds and removes all environments matching the SMART--rare_event_selection--*
+Finds and removes all environments matching the ZMART--rare_event_selection--*
 naming pattern.
 
 Usage:
@@ -25,7 +25,7 @@ from conda_utils import get_conda_info, get_conda_exe, list_envs_by_prefix
 
 
 WORKFLOW = "rare_event_selection"
-PREFIX = f"SMART--{WORKFLOW}--"
+PREFIX = f"ZMART--{WORKFLOW}--"
 
 WIDTH = 70
 
@@ -82,7 +82,7 @@ def main():
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
-    banner("SMART Analysis -- Environment Cleanup")
+    banner("ZMART Analysis -- Environment Cleanup")
 
     section("Conda")
     try:

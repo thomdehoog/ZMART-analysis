@@ -12,8 +12,8 @@ Usage:
     python setup_env.py --dry-run
 
 Naming convention:
-    SMART--{workflow}--main     -- default env for the workflow
-    SMART--{workflow}--{step}   -- isolated env for a specific step
+    ZMART--{workflow}--main     -- default env for the workflow
+    ZMART--{workflow}--{step}   -- isolated env for a specific step
 
 Requirements:
     - conda (Miniconda or Anaconda)
@@ -113,14 +113,14 @@ def main():
     )
     args = parser.parse_args()
 
-    env_name = f"SMART--{WORKFLOW}--{args.step}"
+    env_name = f"ZMART--{WORKFLOW}--{args.step}"
     gpu = args.gpu or detect_gpu()
     t_start = time.time()
 
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
-    banner("SMART Analysis -- Environment Setup")
+    banner("ZMART Analysis -- Environment Setup")
 
     section("System")
     import platform as pf

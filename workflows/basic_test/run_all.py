@@ -103,7 +103,7 @@ def main():
 
     print()
     print("=" * WIDTH)
-    print("  SMART Analysis -- Basic Test Suite")
+    print("  ZMART Analysis -- Basic Test Suite")
     print("=" * WIDTH)
 
     print()

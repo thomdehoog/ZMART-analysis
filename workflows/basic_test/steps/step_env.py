@@ -1,5 +1,5 @@
 """
-Test step -- requests SMART--basic_test--env_b environment.
+Test step -- requests ZMART--basic_test--env_b environment.
 
 Used to test that step-level environment switching works.
 """
@@ -7,7 +7,7 @@ Used to test that step-level environment switching works.
 METADATA = {
     "description": "Test step - runs in env_b",
     "version": "1.0",
-    "environment": "SMART--basic_test--env_b",
+    "environment": "ZMART--basic_test--env_b",
     "data_transfer": "file_paths",
 }
 

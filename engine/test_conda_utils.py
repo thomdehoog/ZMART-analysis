@@ -92,7 +92,7 @@ class TestListEnvsByPrefix(unittest.TestCase):
 
     def test_returns_list(self):
         info = get_conda_info()
-        result = list_envs_by_prefix(info, "SMART--")
+        result = list_envs_by_prefix(info, "ZMART--")
         self.assertIsInstance(result, list)
 
     def test_nonexistent_prefix(self):
@@ -102,7 +102,7 @@ class TestListEnvsByPrefix(unittest.TestCase):
 
     def test_all_match_prefix(self):
         info = get_conda_info()
-        prefix = "SMART--"
+        prefix = "ZMART--"
         result = list_envs_by_prefix(info, prefix)
         for name in result:
             self.assertTrue(name.startswith(prefix))

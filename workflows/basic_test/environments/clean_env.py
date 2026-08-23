@@ -1,7 +1,7 @@
 """
 Remove conda environments for the basic_test workflow.
 
-Finds and removes all environments matching the SMART--basic_test--*
+Finds and removes all environments matching the ZMART--basic_test--*
 naming pattern.
 
 Usage:
@@ -25,7 +25,7 @@ from conda_utils import get_conda_info, get_conda_exe, list_envs_by_prefix
 
 
 WORKFLOW = "basic_test"
-PREFIX = f"SMART--{WORKFLOW}--"
+PREFIX = f"ZMART--{WORKFLOW}--"
 
 WIDTH = 70
 
@@ -82,7 +82,7 @@ def main():
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
-    banner("SMART Analysis -- Environment Cleanup")
+    banner("ZMART Analysis -- Environment Cleanup")
 
     section("Conda")
     try:

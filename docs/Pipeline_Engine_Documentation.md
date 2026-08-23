@@ -134,7 +134,7 @@ This can be set at two levels:
 ### 3.1 Directory Structure
 
 ```
-smart-analysis/
+zmart-analysis/
 ├── engine/
 │   └── engine.py                    # The orchestration engine
 └── workflows/
@@ -255,7 +255,7 @@ print(result["analysis"]["output_path"])
 **Step 1: Create the folder structure**
 
 ```
-smart-analysis/
+zmart-analysis/
 └── workflows/
     └── demo/
         ├── pipelines/
@@ -1566,7 +1566,7 @@ def run(pipeline_data: dict, **params) -> dict:
 ### Directory Structure
 
 ```
-smart-analysis/
+zmart-analysis/
 ├── engine/
 │   └── engine.py
 └── workflows/

@@ -8,7 +8,7 @@ instead of JSON serialization.
 METADATA = {
     "description": "Test pickle data transfer",
     "version": "1.0",
-    "environment": "SMART--basic_test--env_b",
+    "environment": "ZMART--basic_test--env_b",
     "data_transfer": "pickle",
 }
 

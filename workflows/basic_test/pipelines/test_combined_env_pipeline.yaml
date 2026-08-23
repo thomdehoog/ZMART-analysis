@@ -1,13 +1,13 @@
 # Test: Combined environment switching (most complex)
-# Pipeline runs in SMART--basic_test--env_a, but step_env_b
-# requests SMART--basic_test--env_c (nested subprocess).
+# Pipeline runs in ZMART--basic_test--env_a, but step_env_b
+# requests ZMART--basic_test--env_c (nested subprocess).
 
 metadata:
   purpose: "Test nested environment switching"
   version: "1.0"
   verbose: 3
   functions_dir: "../steps"
-  environment: "SMART--basic_test--env_a"
+  environment: "ZMART--basic_test--env_a"
 
 combined-env-test:
   - step_local:

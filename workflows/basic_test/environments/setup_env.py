@@ -3,9 +3,9 @@ Create conda environments for the basic_test workflow.
 
 Creates three lightweight environments to test the engine's
 environment switching functionality:
-    SMART--basic_test--env_a   Python 3.10
-    SMART--basic_test--env_b   Python 3.11
-    SMART--basic_test--env_c   Python 3.12
+    ZMART--basic_test--env_a   Python 3.10
+    ZMART--basic_test--env_b   Python 3.11
+    ZMART--basic_test--env_c   Python 3.12
 
 Usage:
     python setup_env.py              # create all three envs
@@ -109,7 +109,7 @@ def main():
     # ------------------------------------------------------------------
     # Header
     # ------------------------------------------------------------------
-    banner("SMART Analysis -- Environment Setup")
+    banner("ZMART Analysis -- Environment Setup")
 
     section("System")
     import platform as pf
@@ -149,7 +149,7 @@ def main():
     # ------------------------------------------------------------------
     section("Environments to create")
     for step_name, config in targets.items():
-        env_name = f"SMART--{WORKFLOW}--{step_name}"
+        env_name = f"ZMART--{WORKFLOW}--{step_name}"
         exists = env_exists(conda_info, env_name)
         status = " (already exists)" if exists else ""
         info(env_name, f"Python {config['python']}{status}")
@@ -161,7 +161,7 @@ def main():
     created = 0
 
     for i, (step_name, config) in enumerate(targets.items(), 1):
-        env_name = f"SMART--{WORKFLOW}--{step_name}"
+        env_name = f"ZMART--{WORKFLOW}--{step_name}"
 
         step(i, total, f"{config['description']} -- {env_name}")
 
@@ -231,7 +231,7 @@ def main():
     section("Environments")
     conda_info = get_conda_info()
     for step_name in targets:
-        env_name = f"SMART--{WORKFLOW}--{step_name}"
+        env_name = f"ZMART--{WORKFLOW}--{step_name}"
         exists = env_exists(conda_info, env_name)
         status = "[OK]  " if exists else "[FAIL]"
         print(f"  {status} {env_name}")

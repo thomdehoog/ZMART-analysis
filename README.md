@@ -1,4 +1,4 @@
-# Smart Analysis
+# Zmart Analysis
 
 A Python pipeline engine for scientific image analysis workflows. Define multi-step processing pipelines in YAML, and let the engine handle execution, data flow, and environment isolation.
 
@@ -10,7 +10,7 @@ The common workarounds are either to find one environment that satisfies all dep
 
 ## The Solution
 
-Smart Analysis solves this with three ideas:
+Zmart Analysis solves this with three ideas:
 
 1. **YAML defined pipelines.** Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
 
@@ -110,7 +110,7 @@ my-workflow:
 ```yaml
 # Mode 2: pipeline level environment
 metadata:
-  environment: "SMART--my_workflow--main"
+  environment: "ZMART--my_workflow--main"
   functions_dir: "../steps"
 
 my-workflow:
@@ -123,7 +123,7 @@ my-workflow:
 ```python
 # Mode 3: step level environment (in the step file)
 METADATA = {
-    "environment": "SMART--my_workflow--segment",
+    "environment": "ZMART--my_workflow--segment",
     "data_transfer": "file_paths",  # or "pickle" for complex objects
 }
 ```
@@ -214,11 +214,11 @@ This is the core feature. Scientific Python has a dependency conflict problem. P
 ### Environment naming convention
 
 ```
-SMART--{workflow}--{step}
+ZMART--{workflow}--{step}
 
-SMART--rare_event_selection--main       default env for the workflow
-SMART--rare_event_selection--segment    isolated env for a specific step
-SMART--basic_test--env_a                test environment A
+ZMART--rare_event_selection--main       default env for the workflow
+ZMART--rare_event_selection--segment    isolated env for a specific step
+ZMART--basic_test--env_a                test environment A
 ```
 
 ### Environment setup
@@ -235,7 +235,7 @@ The setup script auto detects your GPU (NVIDIA CUDA, Apple MPS, or CPU), picks t
 ## Project structure
 
 ```
-smart-analysis/
+zmart-analysis/
     engine/
         engine.py              # pipeline orchestrator
         conda_utils.py         # conda discovery and GPU detection

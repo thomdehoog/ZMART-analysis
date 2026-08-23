@@ -1,5 +1,5 @@
 """
-Test step -- requests SMART--basic_test--env_c environment.
+Test step -- requests ZMART--basic_test--env_c environment.
 
 Used to test nested environment switching (pipeline in env_a,
 this step switches to env_c).
@@ -8,7 +8,7 @@ this step switches to env_c).
 METADATA = {
     "description": "Test step - runs in env_c",
     "version": "1.0",
-    "environment": "SMART--basic_test--env_c",
+    "environment": "ZMART--basic_test--env_c",
     "data_transfer": "file_paths",
 }
 

@@ -1,5 +1,5 @@
 # Test: Step-level environment switching
-# step_env runs in SMART--basic_test--env_b via subprocess.
+# step_env runs in ZMART--basic_test--env_b via subprocess.
 
 metadata:
   purpose: "Test step-level environment switching"

@@ -622,7 +622,7 @@ class TestEnvironmentBoundary(OmeZarrTestCase):
         shutil.copy(Path(__file__).parent / "image_io.py", cls.step_dir)
         (cls.step_dir / "consume_reference.py").write_text(
             'METADATA = {"description": "reads the position itself",\n'
-            '            "environment": "SMART--elsewhere",\n'
+            '            "environment": "ZMART--elsewhere",\n'
             '            "data_transfer": "file_paths"}\n'
             "\n"
             "def run(pipeline_data, **params):\n"
