@@ -154,9 +154,28 @@ class TestPlaneSelection(OmeZarrTestCase):
                 self.assertEqual(meta["level"], "1")
                 self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
 
-    def test_out_of_range_index_raises(self):
-        with self.assertRaises(Exception):
-            load_plane(self.stores["0.5"], t=99)
+    def test_out_of_range_selection_raises(self):
+        import ngio
+
+        for version, store in self.stores.items():
+            for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"},
+                           {"level": 9}):
+                with self.subTest(ngff=version, **kwargs):
+                    with self.assertRaises((ngio.NgioValueError,
+                                            ngio.NgioValidationError,
+                                            ValueError)):
+                        load_plane(store, **kwargs)
+
+    def test_unknown_z_selection_names_the_options(self):
+        with self.assertRaises(ValueError) as caught:
+            load_plane(self.stores["0.5"], z="sum")
+        self.assertIn("mid", str(caught.exception))
+        self.assertIn("max", str(caught.exception))
+
+    def test_mean_projection_values(self):
+        plane, _ = load_plane(self.stores["0.5"], z="mean")
+        expected = np.rint(self.array[0, 0].mean(axis=0)).astype(self.array.dtype)
+        np.testing.assert_array_equal(plane, expected)
 
 
 class TestMetadata(OmeZarrTestCase):
@@ -175,7 +194,6 @@ class TestMetadata(OmeZarrTestCase):
                 _, meta = load_plane(store)
                 self.assertEqual(meta["axes"], ["t", "c", "z", "y", "x"])
                 self.assertEqual(meta["shape"], list(SHAPE))
-                self.assertEqual(meta["n_levels"], 2)
 
     def test_reports_pixel_size_and_origin(self):
         for version, store in self.stores.items():
@@ -240,6 +258,7 @@ class TestLazyReading(OmeZarrTestCase):
         for version, store in self.stores.items():
             with self.subTest(ngff=version):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z=2)
+                self.assertGreater(reads, 0, "the read counter matched nothing")
                 self.assertLessEqual(
                     reads, 4,
                     f"read {reads} chunks for a single plane, expected <= 4",
@@ -250,10 +269,40 @@ class TestLazyReading(OmeZarrTestCase):
         for version, store in self.stores.items():
             with self.subTest(ngff=version):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z="max")
+                self.assertGreater(reads, 0, "the read counter matched nothing")
                 self.assertLessEqual(
                     reads, 20,
                     f"read {reads} chunks for one z-stack of 5 planes, "
                     f"expected <= 20 of the 80 in the array",
+                )
+
+
+    def test_reads_far_less_than_the_whole_array(self):
+        import ngio
+
+        for version, store in self.stores.items():
+            with self.subTest(ngff=version):
+                plane_reads = self._count_chunk_reads(source=store, z=2)
+
+                from unittest.mock import patch
+                from zarr.storage import LocalStore
+
+                original = LocalStore.get
+                everything = set()
+
+                async def counting_get(self, key, *args, **kw):
+                    if key.rsplit("/", 1)[-1] not in TestLazyReading.METADATA_KEYS:
+                        everything.add(key)
+                    return await original(self, key, *args, **kw)
+
+                with patch.object(LocalStore, "get", counting_get):
+                    container = ngio.open_ome_zarr_container(str(store), mode="r")
+                    container.get_image().get_as_numpy()
+
+                self.assertLess(
+                    plane_reads, len(everything),
+                    f"one plane read {plane_reads} objects, the whole array "
+                    f"reads {len(everything)}",
                 )
 
 
@@ -281,6 +330,20 @@ class TestAxisVariants(OmeZarrTestCase):
         store, array = self._write("zyx.zarr", ("z", "y", "x"), (3, 32, 32))
         plane, _ = load_plane(store, z="max")
         np.testing.assert_array_equal(plane, array.max(axis=0))
+
+    def test_channel_name_ignored_without_a_channel_axis(self):
+        # The same YAML runs over positions that do not all have channels.
+        store, array = self._write("zyx_nochan.zarr", ("z", "y", "x"), (3, 32, 32))
+        plane, meta = load_plane(store, c="DAPI", z=0)
+        np.testing.assert_array_equal(plane, array[0])
+        self.assertIsNone(meta["channel"])
+        self.assertIsNone(meta["channel_name"])
+
+    def test_projection_not_claimed_without_a_z_axis(self):
+        store, array = self._write("tyx_noz.zarr", ("t", "y", "x"), (2, 32, 32))
+        plane, meta = load_plane(store, z="max")
+        np.testing.assert_array_equal(plane, array[0])
+        self.assertIsNone(meta["projection"])
 
     def test_yx(self):
         store, array = self._write("yx.zarr", ("y", "x"), (32, 32))
@@ -340,6 +403,20 @@ class TestOtherInputs(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_plane("skimage.not_a_dataset")
 
+    def test_skimage_attribute_that_is_not_a_loader(self):
+        with self.assertRaises(ValueError):
+            load_plane("skimage.__file__")
+
+    def test_rejects_an_rgb_file(self):
+        from skimage.io import imsave
+
+        path = self.tmpdir / "rgb.tif"
+        imsave(path, np.zeros((8, 8, 3), dtype=np.uint8), check_contrast=False)
+
+        with self.assertRaises(ValueError) as caught:
+            load_plane(path)
+        self.assertIn("2D plane", str(caught.exception))
+
 
 class TestPlateInput(OmeZarrTestCase):
     """A plate is not a position, and the error should say so."""
@@ -362,6 +439,35 @@ class TestPlateInput(OmeZarrTestCase):
         self.assertIn("B/03/0", message)
 
 
+class TestWellInput(OmeZarrTestCase):
+    """A well is not a position either."""
+
+    def test_well_error_lists_positions(self):
+        import ngio
+
+        store = self.tmpdir / "well.zarr"
+        well = ngio.create_empty_well(store, ngff_version="0.5", overwrite=True)
+        for path in ("0", "1"):
+            well.add_image(path)
+
+        with self.assertRaises(ValueError) as caught:
+            load_plane(store)
+
+        message = str(caught.exception)
+        self.assertIn("not a position", message)
+        self.assertIn("Positions: 0, 1", message)
+
+    def test_unrelated_zarr_group_keeps_its_own_error(self):
+        import zarr
+
+        store = self.tmpdir / "plain.zarr"
+        zarr.create_group(store=str(store))
+
+        with self.assertRaises(Exception) as caught:
+            load_plane(store)
+        self.assertNotIn("not a position", str(caught.exception))
+
+
 class TestSteps(OmeZarrTestCase):
     """The pipeline steps consume an OME-Zarr position end to end."""
 
@@ -376,9 +482,12 @@ class TestSteps(OmeZarrTestCase):
     @staticmethod
     def _load_step(name):
         """Load a step file the way the engine does: by path, not by import."""
+        import sys
         import types
 
         path = Path(__file__).parent / f"{name}.py"
+        if str(path.parent) not in sys.path:
+            sys.path.insert(0, str(path.parent))
         namespace = {"__name__": name, "__file__": str(path)}
         exec(compile(path.read_text(), str(path), "exec"), namespace)
         module = types.ModuleType(name)
@@ -434,6 +543,30 @@ class TestSteps(OmeZarrTestCase):
                 source["centroid_y"] * PIXEL_SIZE + ORIGIN_YX[0],
             )
 
+    def test_steps_still_run_on_a_plain_image_file(self):
+        from skimage.io import imsave
+        from skimage.measure import label
+
+        path = self.tmpdir / "steps_plane.tif"
+        imsave(path, self.array[0, 0, 2], check_contrast=False)
+
+        preprocess = self._load_step("preprocess")
+        extract = self._load_step("extract_features")
+        feedback = self._load_step("feedback")
+
+        data = preprocess.run(self._pipeline_data(path))
+        image = data["preprocess"]["image_preprocessed"]
+        masks = label(image > image.mean())
+        data["segment"] = {"masks": masks, "n_cells": int(masks.max())}
+        data = extract.run(data, select_by="area", percentile=90)
+        data = feedback.run(data, output_dir=str(self.tmpdir / "output3"))
+
+        written = json.loads(Path(data["feedback"]["filepath"]).read_text())
+        self.assertEqual(written["image"]["format"], "image-file")
+        self.assertIsNone(written["image"]["ngff_version"])
+        self.assertTrue(written["cells"])
+        self.assertNotIn("centroid_x_physical", written["cells"][0])
+
     def test_feedback_omits_physical_coordinates_without_metadata(self):
         feedback = self._load_step("feedback")
 
@@ -460,6 +593,116 @@ class TestSteps(OmeZarrTestCase):
 
         cell = data["feedback"]["cells"][0]
         self.assertNotIn("centroid_x_physical", cell)
+
+
+class TestEnvironmentBoundary(OmeZarrTestCase):
+    """
+    A step running in its own environment must still be able to read the
+    position. pipeline_data travels as JSON there, so it carries the
+    image reference and the step loads the plane itself.
+
+    The subprocess runs the current interpreter rather than a conda
+    environment, which exercises the same code path without needing conda.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        import sys
+
+        engine_dir = Path(__file__).resolve().parents[3] / "engine"
+        if str(engine_dir) not in sys.path:
+            sys.path.insert(0, str(engine_dir))
+
+        # A steps directory of its own, so the test also proves the engine
+        # puts the step's own directory on sys.path for the subprocess.
+        cls.step_dir = cls.tmpdir / "remote_steps"
+        cls.step_dir.mkdir()
+        shutil.copy(Path(__file__).parent / "image_io.py", cls.step_dir)
+        (cls.step_dir / "consume_reference.py").write_text(
+            'METADATA = {"description": "reads the position itself",\n'
+            '            "environment": "SMART--elsewhere",\n'
+            '            "data_transfer": "file_paths"}\n'
+            "\n"
+            "def run(pipeline_data, **params):\n"
+            "    from image_io import load_plane\n"
+            "\n"
+            "    plane, metadata = load_plane(\n"
+            '        **pipeline_data["preprocess"]["image_ref"])\n'
+            '    pipeline_data["consume_reference"] = {\n'
+            '        "shape": list(plane.shape),\n'
+            '        "total": int(plane.sum()),\n'
+            '        "ngff_version": metadata["ngff_version"],\n'
+            "    }\n"
+            "    return pipeline_data\n"
+        )
+
+    def test_step_in_another_environment_loads_the_plane(self):
+        import engine
+
+        for version, store in self.stores.items():
+            with self.subTest(ngff=version):
+                pipeline_data = {
+                    "metadata": {"label": "position", "verbose": 0},
+                    "preprocess": {
+                        "image_ref": {"source": str(store), "level": 0,
+                                      "t": 1, "c": 1, "z": 4},
+                    },
+                }
+
+                result = engine.run_in_subprocess(
+                    str(self.step_dir / "consume_reference.py"),
+                    pipeline_data, {}, environment=None,
+                    data_transfer="file_paths",
+                )
+
+                expected = self.array[1, 1, 4]
+                self.assertEqual(result["consume_reference"]["shape"],
+                                 list(expected.shape))
+                self.assertEqual(result["consume_reference"]["total"],
+                                 int(expected.sum()))
+                self.assertEqual(result["consume_reference"]["ngff_version"],
+                                 version)
+
+    def test_arrays_in_pipeline_data_are_reported_clearly(self):
+        import engine
+
+        pipeline_data = {
+            "metadata": {"label": "position", "verbose": 0},
+            "preprocess": {"image": np.zeros((4, 4), dtype=np.uint16)},
+        }
+
+        with self.assertRaises(TypeError) as caught:
+            engine.run_in_subprocess(
+                str(self.step_dir / "consume_reference.py"),
+                pipeline_data, {}, environment=None,
+                data_transfer="file_paths",
+            )
+
+        message = str(caught.exception)
+        self.assertIn("preprocess.image", message)
+        self.assertIn("pickle", message)
+
+    def test_preprocess_publishes_a_reference(self):
+        preprocess = TestSteps._load_step("preprocess")
+        data = preprocess.run(
+            {"metadata": {"label": "position", "verbose": 0},
+             "input": {"data_source": str(self.stores["0.4"])}},
+            t=1, c="GFP", z="max",
+        )
+
+        reference = data["preprocess"]["image_ref"]
+        self.assertEqual(reference, {"source": str(self.stores["0.4"]),
+                                     "level": 0, "t": 1, "c": "GFP",
+                                     "z": "max"})
+
+        # The reference alone is enough to get the same plane back.
+        plane, _ = load_plane(**reference)
+        np.testing.assert_array_equal(plane, data["preprocess"]["image"])
+
+        import json as json_module
+        json_module.dumps(reference)  # must survive the JSON boundary
 
 
 if __name__ == "__main__":

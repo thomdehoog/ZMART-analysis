@@ -74,6 +74,12 @@ def load_function(func_name: str, functions_dir: Path):
     if not func_path.exists():
         raise FileNotFoundError(f"Function file not found: {func_path}")
 
+    # Put the steps directory on sys.path so a step can import helper
+    # modules that live beside it. Subprocess execution does the same,
+    # so the import works in every execution mode.
+    if str(functions_dir) not in sys.path:
+        sys.path.insert(0, str(functions_dir))
+
     namespace = {"__name__": func_name, "__file__": str(func_path)}
     with open(func_path) as f:
         exec(compile(f.read(), str(func_path), "exec"), namespace)
@@ -136,7 +142,48 @@ def run_in_subprocess(func_path: str, pipeline_data: dict, params: dict,
     if data_transfer == "pickle":
         return _run_subprocess_pickle(func_path, pipeline_data, params, environment)
     else:
+        _require_json_serializable(pipeline_data, func_path)
         return _run_subprocess_json(func_path, pipeline_data, params, environment)
+
+
+def _require_json_serializable(pipeline_data: dict, func_path: str) -> None:
+    """
+    Check pipeline_data before handing it to a subprocess.
+
+    In "file_paths" mode pipeline_data travels as JSON, so arrays and
+    other objects from earlier steps cannot cross the boundary. The point
+    of the mode is that steps pass references, such as a path to an image
+    and which plane of it to read, and let each step load what it needs.
+    """
+    try:
+        json.dumps(pipeline_data)
+        return
+    except TypeError as error:
+        offenders = [
+            f"{step}.{key}"
+            for step, contents in pipeline_data.items()
+            if isinstance(contents, dict)
+            for key, value in contents.items()
+            if not _is_json_safe(value)
+        ]
+
+        raise TypeError(
+            f"{Path(func_path).stem} runs in another environment with "
+            f"data_transfer='file_paths', so pipeline_data is passed as "
+            f"JSON, but it holds data that JSON cannot carry: "
+            f"{', '.join(offenders) or error}\n"
+            f"Either pass a reference the step can load from, or set "
+            f"data_transfer='pickle' in the step METADATA to ship the "
+            f"objects themselves."
+        ) from error
+
+
+def _is_json_safe(value) -> bool:
+    try:
+        json.dumps(value)
+        return True
+    except TypeError:
+        return False
 
 
 def _run_subprocess_json(func_path: str, pipeline_data: dict, params: dict,
@@ -148,6 +195,9 @@ def _run_subprocess_json(func_path: str, pipeline_data: dict, params: dict,
 import sys
 import json
 import importlib.util
+
+# Let the step import helper modules that live beside it
+sys.path.insert(0, {repr(os.path.dirname(str(func_path)))})
 
 # Load the function
 spec = importlib.util.spec_from_file_location("func", {repr(str(func_path))})
@@ -186,6 +236,9 @@ def _run_subprocess_pickle(func_path: str, pipeline_data: dict, params: dict,
 import sys
 import pickle
 import importlib.util
+
+# Let the step import helper modules that live beside it
+sys.path.insert(0, {repr(os.path.dirname(str(func_path)))})
 
 # Load the function
 spec = importlib.util.spec_from_file_location("func", {repr(str(func_path))})

@@ -14,16 +14,11 @@ METADATA = {
 
 
 def run(pipeline_data: dict, **params) -> dict:
-    import sys
     import numpy as np
-    from pathlib import Path
     from skimage.filters import gaussian
     from skimage.exposure import equalize_adapthist
 
-    # Sibling helper module; step files are loaded by path, not imported.
-    step_dir = str(Path(__file__).parent)
-    if step_dir not in sys.path:
-        sys.path.insert(0, step_dir)
+    # The engine puts the steps directory on sys.path
     from image_io import load_plane
 
     verbose = pipeline_data["metadata"].get("verbose", 0)
@@ -37,8 +32,13 @@ def run(pipeline_data: dict, **params) -> dict:
     c = params.get("c", 0)
     z = params.get("z", "mid")
 
+    # Everything needed to load this plane again, JSON-safe so it can
+    # cross into another environment. A later step re-opens the position
+    # lazily with load_plane(**image_ref) instead of being handed pixels.
+    image_ref = {"source": data_source, "level": level, "t": t, "c": c, "z": z}
+
     # Load a single YX plane
-    img, image_metadata = load_plane(data_source, level=level, t=t, c=c, z=z)
+    img, image_metadata = load_plane(**image_ref)
 
     # Preprocess
     img_smooth = gaussian(img, sigma=sigma)
@@ -68,6 +68,7 @@ def run(pipeline_data: dict, **params) -> dict:
         "sigma": sigma,
         "clip_limit": clip_limit,
         "data_source": data_source,
+        "image_ref": image_ref,
         "image_metadata": image_metadata,
     }
 

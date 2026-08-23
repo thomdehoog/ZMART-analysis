@@ -764,6 +764,71 @@ METADATA = {
 - Works for complex Python objects
 - Be careful with large data (memory intensive)
 
+In `file_paths` mode `pipeline_data` is passed as JSON, so anything that
+JSON cannot carry, a numpy array for instance, stops at the environment
+boundary. The engine checks this before spawning the subprocess and names
+the offending keys:
+
+```
+TypeError: segment runs in another environment with
+data_transfer='file_paths', so pipeline_data is passed as JSON, but it
+holds data that JSON cannot carry: preprocess.image
+```
+
+The fix is usually to pass a reference instead of the data, and let the
+step load what it needs. See 7.6.
+
+### 7.6 Passing References Instead of Data
+
+A step that runs in its own environment does not need to be handed
+pixels. It can be handed a description of where they are and load them
+itself. This keeps `pipeline_data` JSON-sized however large the images
+are, and it lets each step read only the part it needs.
+
+The `rare_event_selection` workflow does this for OME-Zarr. Its
+`preprocess` step publishes a reference alongside the plane it loaded:
+
+```python
+pipeline_data["preprocess"] = {
+    "image": img,                 # for steps sharing this process
+    "image_ref": {                # for steps in another environment
+        "source": "/data/plate.zarr/B/03/0",
+        "level": 0, "t": 0, "c": 0, "z": "mid",
+    },
+    ...
+}
+```
+
+A step in another environment reconstructs the same plane from it:
+
+```python
+def run(pipeline_data, **params):
+    from image_io import load_plane
+
+    plane, metadata = load_plane(**pipeline_data["preprocess"]["image_ref"])
+```
+
+Because the read is lazy, only the chunks backing that plane are fetched.
+A step that needs a different plane, channel or resolution level can ask
+for one by overriding a key, without the earlier step having loaded it.
+
+### 7.7 Helper Modules Beside Your Steps
+
+The engine puts the steps directory on `sys.path` before loading a step,
+in every execution mode, so a step can import modules that live beside
+it:
+
+```
+steps/
+    image_io.py      # helper, not a step
+    preprocess.py    # from image_io import load_plane
+    segment.py
+```
+
+The helper is loaded in whichever environment the step runs in, so it
+must import its own dependencies inside its functions, the same rule
+steps follow.
+
 ---
 
 ## 8. Data Flow

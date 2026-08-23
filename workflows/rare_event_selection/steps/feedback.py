@@ -16,15 +16,12 @@ METADATA = {
 
 
 def run(pipeline_data: dict, **params) -> dict:
-    import sys
     import json
     import numpy as np
     from pathlib import Path
     from datetime import datetime
 
-    step_dir = str(Path(__file__).parent)
-    if step_dir not in sys.path:
-        sys.path.insert(0, step_dir)
+    # The engine puts the steps directory on sys.path
     from image_io import to_physical
 
     verbose = pipeline_data["metadata"].get("verbose", 0)

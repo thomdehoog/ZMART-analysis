@@ -257,7 +257,7 @@ smart-analysis/
             pipelines/
             steps/
                 image_io.py        # OME-Zarr / OME-TIFF loading
-                test_image_io.py   # unit tests (32 tests)
+                test_image_io.py   # image loading tests
             run_pipeline.py
 
     docs/
@@ -285,7 +285,8 @@ python workflows/rare_event_selection/steps/test_image_io.py
 
 They build synthetic positions in both NGFF 0.4 and 0.5, including a
 sharded one, and check plane selection, metadata, physical coordinates,
-lazy chunk access, and the steps that consume them.
+lazy chunk access, the steps that consume them, and a step reading a
+position from another environment.
 
 The engine test suite covers:
 
