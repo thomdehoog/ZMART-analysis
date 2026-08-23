@@ -785,8 +785,9 @@ pixels. It can be handed a description of where they are and load them
 itself. This keeps `pipeline_data` JSON-sized however large the images
 are, and it lets each step read only the part it needs.
 
-The `rare_event_selection` workflow does this for OME-Zarr. Its
-`preprocess` step publishes a reference alongside the plane it loaded:
+The `rare_event_selection` workflow does this for its image input, which
+may be OME-Zarr or OME-TIFF. Its `preprocess` step publishes a reference
+alongside the plane it loaded:
 
 ```python
 pipeline_data["preprocess"] = {

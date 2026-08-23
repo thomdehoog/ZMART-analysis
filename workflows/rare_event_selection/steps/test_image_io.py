@@ -18,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
-from image_io import is_ome_zarr, load_plane, to_physical
+from image_io import is_ome_zarr, is_tiff, load_plane, to_physical
 
 
 PIXEL_SIZE = 0.325
@@ -47,6 +47,30 @@ def _make_position(path, ngff_version, array, shards=None):
     )
 
 
+def _make_ome_tiff(path, array, tile=(32, 32), positions=True):
+    """Write the same content as _make_position, as a single OME-TIFF."""
+    import tifffile
+
+    n_planes = array.shape[0] * array.shape[1] * array.shape[2]
+    metadata = {
+        "axes": "TCZYX",
+        "PhysicalSizeX": PIXEL_SIZE, "PhysicalSizeXUnit": "\u00b5m",
+        "PhysicalSizeY": PIXEL_SIZE, "PhysicalSizeYUnit": "\u00b5m",
+        "PhysicalSizeZ": Z_SPACING,
+        "Channel": {"Name": ["DAPI", "GFP"]},
+    }
+    if positions:
+        metadata["Plane"] = {
+            "PositionY": [ORIGIN_YX[0]] * n_planes,
+            "PositionX": [ORIGIN_YX[1]] * n_planes,
+            "PositionYUnit": ["\u00b5m"] * n_planes,
+            "PositionXUnit": ["\u00b5m"] * n_planes,
+        }
+
+    tifffile.imwrite(path, array, photometric="minisblack", tile=tile,
+                     metadata=metadata)
+
+
 class OmeZarrTestCase(unittest.TestCase):
     """Shared fixtures: one position per NGFF version."""
 
@@ -69,6 +93,9 @@ class OmeZarrTestCase(unittest.TestCase):
         # NGFF 0.5 is Zarr v3, so it can also carry shards.
         _make_position(cls.stores["0.5"], "0.5", cls.array,
                        shards=(1, 1, 1, 64, 64))
+
+        cls.tiff = cls.tmpdir / "position.ome.tif"
+        _make_ome_tiff(cls.tiff, cls.array)
 
     @classmethod
     def tearDownClass(cls):
@@ -378,7 +405,7 @@ class TestOtherInputs(unittest.TestCase):
 
         plane, meta = load_plane(path)
         np.testing.assert_array_equal(plane, image)
-        self.assertEqual(meta["format"], "image-file")
+        self.assertEqual(meta["format"], "tiff")
 
     def test_image_file_has_no_physical_coordinates(self):
         from skimage.io import imsave
@@ -390,11 +417,24 @@ class TestOtherInputs(unittest.TestCase):
         self.assertEqual(meta["pixel_size"], {})
         self.assertIsNone(to_physical(1.0, 2.0, meta))
 
-    def test_rejects_a_3d_image_file(self):
-        from skimage.io import imsave
+    def test_reads_a_plane_from_a_plain_stack(self):
+        import tifffile
 
         path = self.tmpdir / "stack.tif"
-        imsave(path, np.zeros((3, 8, 8), dtype=np.uint8), check_contrast=False)
+        stack = np.random.default_rng(3).integers(0, 255, (3, 8, 8),
+                                                 dtype=np.uint8)
+        tifffile.imwrite(path, stack, photometric="minisblack",
+                         metadata={"axes": "ZYX"})
+
+        plane, meta = load_plane(path, z=2)
+        np.testing.assert_array_equal(plane, stack[2])
+        self.assertEqual(meta["index"], {"z": 2})
+
+    def test_rejects_a_multi_dimensional_png(self):
+        from skimage.io import imsave
+
+        path = self.tmpdir / "rgb.png"
+        imsave(path, np.zeros((8, 8, 3), dtype=np.uint8), check_contrast=False)
 
         with self.assertRaises(ValueError):
             load_plane(path)
@@ -415,7 +455,7 @@ class TestOtherInputs(unittest.TestCase):
 
         with self.assertRaises(ValueError) as caught:
             load_plane(path)
-        self.assertIn("2D plane", str(caught.exception))
+        self.assertIn("RGB", str(caught.exception))
 
 
 class TestPlateInput(OmeZarrTestCase):
@@ -562,7 +602,7 @@ class TestSteps(OmeZarrTestCase):
         data = feedback.run(data, output_dir=str(self.tmpdir / "output3"))
 
         written = json.loads(Path(data["feedback"]["filepath"]).read_text())
-        self.assertEqual(written["image"]["format"], "image-file")
+        self.assertEqual(written["image"]["format"], "tiff")
         self.assertIsNone(written["image"]["ngff_version"])
         self.assertTrue(written["cells"])
         self.assertNotIn("centroid_x_physical", written["cells"][0])
@@ -703,6 +743,269 @@ class TestEnvironmentBoundary(OmeZarrTestCase):
 
         import json as json_module
         json_module.dumps(reference)  # must survive the JSON boundary
+
+
+class TestOmeTiff(OmeZarrTestCase):
+    """The OME-TIFF path honours the same contract as OME-Zarr."""
+
+    def test_detects_tiff(self):
+        self.assertTrue(is_tiff(self.tiff))
+        self.assertTrue(is_tiff("/data/position.OME.TIFF"))
+        self.assertFalse(is_tiff("/data/position.zarr"))
+        self.assertFalse(is_ome_zarr(self.tiff))
+
+    def test_default_takes_middle_z(self):
+        plane, meta = load_plane(self.tiff)
+        np.testing.assert_array_equal(plane, self.array[0, 0, 2])
+        self.assertEqual(meta["format"], "ome-tiff")
+        self.assertEqual(meta["index"], {"t": 0, "z": 2})
+        self.assertEqual(meta["channel"], 0)
+
+    def test_explicit_indices(self):
+        plane, _ = load_plane(self.tiff, t=1, c=1, z=4)
+        np.testing.assert_array_equal(plane, self.array[1, 1, 4])
+
+    def test_channel_by_name(self):
+        plane, meta = load_plane(self.tiff, c="GFP", z=0)
+        np.testing.assert_array_equal(plane, self.array[0, 1, 0])
+        self.assertEqual(meta["channel_name"], "GFP")
+
+    def test_projections(self):
+        plane, meta = load_plane(self.tiff, z="max")
+        np.testing.assert_array_equal(plane, self.array[0, 0].max(axis=0))
+        self.assertEqual(meta["projection"], "max")
+
+        plane, _ = load_plane(self.tiff, z="mean")
+        expected = np.rint(self.array[0, 0].mean(axis=0)).astype(self.array.dtype)
+        np.testing.assert_array_equal(plane, expected)
+
+    def test_reports_pixel_size_and_origin(self):
+        _, meta = load_plane(self.tiff)
+        self.assertAlmostEqual(meta["pixel_size"]["y"], PIXEL_SIZE)
+        self.assertAlmostEqual(meta["pixel_size"]["z"], Z_SPACING)
+        self.assertAlmostEqual(meta["origin"]["y"], ORIGIN_YX[0])
+        self.assertAlmostEqual(meta["origin"]["x"], ORIGIN_YX[1])
+        self.assertEqual(meta["space_unit"], "micrometer")
+
+    def test_physical_coordinates(self):
+        _, meta = load_plane(self.tiff)
+        physical = to_physical(10.0, 20.0, meta)
+        self.assertAlmostEqual(physical["y"], 10.0 * PIXEL_SIZE + ORIGIN_YX[0])
+        self.assertAlmostEqual(physical["x"], 20.0 * PIXEL_SIZE + ORIGIN_YX[1])
+
+    def test_out_of_range_selection_raises(self):
+        for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"},
+                       {"level": 9}):
+            with self.subTest(**kwargs):
+                with self.assertRaises(ValueError):
+                    load_plane(self.tiff, **kwargs)
+
+    def test_pyramid_levels(self):
+        import tifffile
+
+        path = self.tmpdir / "pyramid.ome.tif"
+        full = self.array[0, 0, 0]
+        with tifffile.TiffWriter(path) as writer:
+            writer.write(full, subifds=1, tile=(32, 32))
+            writer.write(full[::2, ::2], subfiletype=1, tile=(32, 32))
+
+        plane, meta = load_plane(path, level=1)
+        self.assertEqual(plane.shape, (32, 32))
+        np.testing.assert_array_equal(plane, full[::2, ::2])
+        self.assertEqual(meta["level"], "1")
+
+    def test_pyramid_pixel_size_follows_the_level(self):
+        import tifffile
+
+        path = self.tmpdir / "pyramid_meta.ome.tif"
+        full = self.array[0, 0, 0]
+        with tifffile.TiffWriter(path) as writer:
+            writer.write(full, subifds=1, tile=(32, 32), photometric="minisblack",
+                         metadata={"axes": "YX", "PhysicalSizeX": PIXEL_SIZE,
+                                   "PhysicalSizeXUnit": "\u00b5m",
+                                   "PhysicalSizeY": PIXEL_SIZE,
+                                   "PhysicalSizeYUnit": "\u00b5m"})
+            writer.write(full[::2, ::2], subfiletype=1, tile=(32, 32))
+
+        _, meta = load_plane(path, level=1)
+        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
+
+    def test_plain_tiff_without_ome_metadata(self):
+        import tifffile
+
+        path = self.tmpdir / "plain.tif"
+        tifffile.imwrite(path, self.array[0, 0, 0])
+
+        plane, meta = load_plane(path)
+        np.testing.assert_array_equal(plane, self.array[0, 0, 0])
+        self.assertEqual(meta["format"], "tiff")
+        self.assertEqual(meta["pixel_size"], {})
+        self.assertIsNone(to_physical(1.0, 2.0, meta))
+
+    def test_rgb_tiff_is_refused(self):
+        import tifffile
+
+        path = self.tmpdir / "rgb.tif"
+        tifffile.imwrite(path, np.zeros((16, 16, 3), dtype=np.uint8),
+                         photometric="rgb")
+
+        with self.assertRaises(ValueError) as caught:
+            load_plane(path)
+        self.assertIn("RGB", str(caught.exception))
+
+
+class TestMultiPositionTiff(OmeZarrTestCase):
+    """One TIFF can hold several positions; the caller says which."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+
+        import tifffile
+
+        cls.multi = cls.tmpdir / "two_positions.ome.tif"
+        cls.first = cls.array[0, 0]
+        cls.second = cls.array[1, 1]
+        with tifffile.TiffWriter(cls.multi) as writer:
+            writer.write(cls.first, metadata={"axes": "ZYX", "Name": "pos0"})
+            writer.write(cls.second, metadata={"axes": "ZYX", "Name": "pos1"})
+
+    def test_ambiguous_file_names_the_positions(self):
+        with self.assertRaises(ValueError) as caught:
+            load_plane(self.multi)
+
+        message = str(caught.exception)
+        self.assertIn("2 positions", message)
+        self.assertIn("pos1", message)
+
+    def test_select_by_index(self):
+        plane, _ = load_plane(self.multi, series=1, z=0)
+        np.testing.assert_array_equal(plane, self.second[0])
+
+    def test_select_by_name(self):
+        plane, _ = load_plane(self.multi, series="pos0", z=0)
+        np.testing.assert_array_equal(plane, self.first[0])
+
+    def test_unknown_position(self):
+        with self.assertRaises(ValueError):
+            load_plane(self.multi, series="pos9")
+
+
+class TestFormatParity(OmeZarrTestCase):
+    """
+    The principle: a step must not care which format it was given.
+
+    The same content is written as OME-Zarr 0.4, OME-Zarr 0.5 and
+    OME-TIFF, and every selection must come back identical.
+    """
+
+    def _sources(self):
+        return {"ngff 0.4": self.stores["0.4"],
+                "ngff 0.5": self.stores["0.5"],
+                "ome-tiff": self.tiff}
+
+    def test_every_selection_agrees(self):
+        selections = (
+            {}, {"z": 0}, {"z": 4}, {"t": 1}, {"c": 1}, {"c": "GFP"},
+            {"t": 1, "c": "GFP", "z": 3}, {"z": "max"}, {"z": "mean"},
+            {"t": 1, "z": "max"},
+        )
+
+        for selection in selections:
+            planes = {name: load_plane(source, **selection)[0]
+                      for name, source in self._sources().items()}
+            reference_name, reference = next(iter(planes.items()))
+
+            for name, plane in planes.items():
+                with self.subTest(selection=selection, format=name):
+                    np.testing.assert_array_equal(
+                        plane, reference,
+                        f"{name} disagrees with {reference_name} "
+                        f"for {selection}",
+                    )
+
+    def test_metadata_agrees(self):
+        shared = ("axes", "shape", "dtype", "index", "projection", "channel",
+                  "channel_name", "space_unit")
+
+        results = {name: load_plane(source, t=1, c="GFP", z=3)[1]
+                   for name, source in self._sources().items()}
+        reference = results["ngff 0.5"]
+
+        for name, meta in results.items():
+            with self.subTest(format=name):
+                for key in shared:
+                    self.assertEqual(meta[key], reference[key], f"{key} differs")
+                self.assertAlmostEqual(meta["pixel_size"]["x"],
+                                       reference["pixel_size"]["x"])
+                self.assertAlmostEqual(meta["origin"]["y"],
+                                       reference["origin"]["y"])
+
+    def test_physical_coordinates_agree(self):
+        for name, source in self._sources().items():
+            with self.subTest(format=name):
+                _, meta = load_plane(source)
+                physical = to_physical(12.0, 34.0, meta)
+                self.assertAlmostEqual(physical["y"],
+                                       12.0 * PIXEL_SIZE + ORIGIN_YX[0])
+                self.assertAlmostEqual(physical["x"],
+                                       34.0 * PIXEL_SIZE + ORIGIN_YX[1])
+                self.assertEqual(physical["unit"], "micrometer")
+
+    def test_steps_run_on_either_format(self):
+        from skimage.measure import label
+
+        outputs = {}
+        for name, source in self._sources().items():
+            preprocess = TestSteps._load_step("preprocess")
+            extract = TestSteps._load_step("extract_features")
+
+            data = preprocess.run(
+                {"metadata": {"label": name, "verbose": 0},
+                 "input": {"data_source": str(source)}},
+                c="DAPI", z="max",
+            )
+            image = data["preprocess"]["image_preprocessed"]
+            masks = label(image > image.mean())
+            data["segment"] = {"masks": masks, "n_cells": int(masks.max())}
+            data = extract.run(data, select_by="area", percentile=90)
+            outputs[name] = data["extract_features"]["selected_labels"]
+
+        reference = outputs["ngff 0.5"]
+        for name, selected in outputs.items():
+            with self.subTest(format=name):
+                np.testing.assert_array_equal(selected, reference)
+
+
+class TestTiffLazyReading(OmeZarrTestCase):
+    """TIFF reads decode tiles, not whole files."""
+
+    def test_single_plane_decodes_few_tiles(self):
+        from unittest.mock import patch
+        from tifffile.zarr import ZarrTiffStore
+
+        original = ZarrTiffStore.get
+        reads = []
+
+        async def counting_get(self, key, *args, **kwargs):
+            if not str(key).endswith((".zarray", ".zgroup", ".zattrs",
+                                      "zarr.json")):
+                reads.append(key)
+            return await original(self, key, *args, **kwargs)
+
+        with patch.object(ZarrTiffStore, "get", counting_get):
+            load_plane(self.tiff, t=0, c=0, z=2)
+            plane_reads = len(reads)
+
+            reads.clear()
+            load_plane(self.tiff, t=0, c=0, z="max")
+            stack_reads = len(reads)
+
+        # 64x64 in 32x32 tiles is 4 per plane, and the array holds 20 planes.
+        self.assertGreater(plane_reads, 0, "the read counter matched nothing")
+        self.assertLessEqual(plane_reads, 4)
+        self.assertLessEqual(stack_reads, 20)
+        self.assertGreater(stack_reads, plane_reads)
 
 
 if __name__ == "__main__":

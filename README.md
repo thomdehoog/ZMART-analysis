@@ -207,6 +207,99 @@ result = run_pipeline(
 )
 ```
 
+## Image input
+
+A step should not care which format it was handed. Every input goes
+through `workflows/rare_event_selection/steps/image_io.py` and comes back
+as a 2D plane plus a metadata dict of the same shape:
+
+| Input | Read with |
+|---|---|
+| OME-Zarr position, NGFF 0.4 and 0.5, one Zarr per position | [ngio](https://github.com/fractal-analytics-platform/ngio) |
+| OME-TIFF and plain TIFF, including pyramids and multi-position files | tifffile, with OME-XML via ome-types |
+| PNG, JPEG and other flat images | skimage, imported only for these |
+| skimage sample datasets, e.g. `skimage.human_mitosis` | skimage |
+
+The analysis steps are 2D, so loading always reduces the input to one YX
+plane. Which plane is set in the YAML, and means the same thing for
+either format:
+
+```yaml
+  - preprocess:
+      level: 0          # resolution level, 0 is full resolution
+      t: 0              # time point
+      c: 0              # channel index, or a channel name like "DAPI"
+      z: "mid"          # z index, "mid", or a projection: "max" / "mean"
+      # series: 0       # which position, for a TIFF holding several
+```
+
+Axes the image does not have are ignored, so the same YAML runs over
+positions of different shapes. A test writes the same content as OME-Zarr
+0.4, OME-Zarr 0.5 and OME-TIFF and asserts every selection returns
+identical pixels.
+
+Images can be large, so reads stay lazy in both formats: only the chunks,
+shards or TIFF tiles backing the requested plane are fetched, never the
+whole TCZYX array. A z-projection reduces over one z-stack, not the whole
+image.
+
+```bash
+python workflows/rare_event_selection/run_pipeline.py \
+    --source /data/plate.zarr/B/03/0 --label pos_B03
+```
+
+### Physical coordinates
+
+When the input carries spatial metadata, the feedback JSON adds physical
+coordinates alongside the pixel ones, so the selected cells can be sent
+straight back to the microscope. They come from the scale and translation
+of the OME-Zarr level that was read, or from PhysicalSize and the stage
+position in the OME-XML of an OME-TIFF, converted to a common unit.
+
+```json
+{
+  "label": 42,
+  "centroid_x": 118.7,
+  "centroid_y": 204.3,
+  "centroid_x_physical": 2038.6,
+  "centroid_y_physical": 1066.4,
+  "physical_unit": "micrometer"
+}
+```
+
+### Using it from another workflow
+
+`image_io.py` is a plain module sitting beside the steps that use it. The
+engine puts the steps directory on `sys.path` before loading a step, in
+every execution mode, so a step imports it directly:
+
+```python
+def run(pipeline_data, **params):
+    from image_io import load_plane
+
+    plane, metadata = load_plane("/data/plate.zarr/B/03/0", c="DAPI", z="max")
+    plane, metadata = load_plane("/data/position.ome.tif", c="DAPI", z="max")
+```
+
+Copy the module into a new workflow's `steps/` folder and it works there
+too. It has no dependency on this workflow, and it imports ngio,
+tifffile, ome-types and skimage only in the branch that needs them, so a
+step environment carries just the readers it actually uses.
+
+When a step runs in its own conda environment, `pipeline_data` crosses
+the boundary as JSON, so it cannot carry an array. Steps pass a reference
+instead and load the plane themselves:
+
+```python
+plane, metadata = load_plane(**pipeline_data["preprocess"]["image_ref"])
+```
+
+`preprocess` publishes that reference next to the image it loaded. Since
+reads are lazy, a step in another environment pays for the plane it asks
+for and nothing else. The engine checks `pipeline_data` before spawning a
+subprocess and names the keys that JSON cannot carry, rather than failing
+inside the subprocess.
+
 ## Environment switching
 
 This is the core feature. Scientific Python has a dependency conflict problem. Packages like PyTorch, TensorFlow, and scipy ship native libraries that can interfere with each other. The engine isolates steps in separate conda environments when needed.
@@ -283,10 +376,11 @@ installed:
 python workflows/rare_event_selection/steps/test_image_io.py
 ```
 
-They build synthetic positions in both NGFF 0.4 and 0.5, including a
-sharded one, and check plane selection, metadata, physical coordinates,
-lazy chunk access, the steps that consume them, and a step reading a
-position from another environment.
+They build synthetic positions in NGFF 0.4, NGFF 0.5 and OME-TIFF, one
+sharded and one tiled, and check plane selection, metadata, physical
+coordinates, lazy chunk and tile access, agreement between the formats,
+the steps that consume them, and a step reading a position from another
+environment.
 
 The engine test suite covers:
 

@@ -41,7 +41,9 @@ PIP_PACKAGES = [
     "numpy",
     "scikit-image",
     "pooch",
-    "ngio",
+    "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
+    "tifffile",      # TIFF and OME-TIFF
+    "ome-types",     # OME-XML metadata
     "cellpose",
 ]
 

@@ -8,8 +8,9 @@ Usage:
     python run_pipeline.py --source path/to/position.zarr --label pos_A1
 
 The source can be an OME-Zarr position (NGFF 0.4 or 0.5, one Zarr per
-position), an image file, or a skimage sample dataset. Which plane of a
-position is analysed is set by the level / t / c / z keys in the YAML.
+position), an OME-TIFF, a plain image file, or a skimage sample dataset.
+Which plane is analysed is set by the level / t / c / z keys in the YAML,
+and they mean the same thing for either format.
 """
 
 import sys
@@ -36,7 +37,8 @@ def main():
     parser.add_argument(
         "--source", default="skimage.human_mitosis",
         help="Data source: skimage.human_mitosis, an OME-Zarr position, "
-             "or a path to an image (default: skimage.human_mitosis)",
+             "an OME-TIFF, or a path to an image "
+             "(default: skimage.human_mitosis)",
     )
     args = parser.parse_args()
 

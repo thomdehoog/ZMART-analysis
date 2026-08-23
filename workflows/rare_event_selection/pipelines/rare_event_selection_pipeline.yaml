@@ -3,10 +3,10 @@
 # Segments cells, extracts features, selects rare events
 # by percentile threshold, and writes feedback JSON.
 #
-# Input is a single 2D plane: from an OME-Zarr position (NGFF 0.4 or 0.5,
-# one Zarr per position, axes TCZYX), an image file, or a skimage sample.
-# The level / t / c / z keys below pick that plane and only apply to
-# OME-Zarr input.
+# Input is a single 2D plane, picked by the level / t / c / z keys below.
+# They work the same for an OME-Zarr position (NGFF 0.4 or 0.5, one Zarr
+# per position, axes TCZYX) and for an OME-TIFF. Axes the image does not
+# have are ignored.
 
 metadata:
   purpose: "Select rare cells by feature threshold"
@@ -17,10 +17,11 @@ metadata:
 
 rare-event-selection:
   - preprocess:
-      level: 0          # multiscale resolution level, 0 is full resolution
+      level: 0          # resolution level, 0 is full resolution
       t: 0              # time point
       c: 0              # channel index, or a channel name like "DAPI"
       z: "mid"          # z index, "mid", or a projection: "max" / "mean"
+      # series: 0       # which position, for a TIFF holding several
       sigma: 1.0
       clip_limit: 0.03
 
