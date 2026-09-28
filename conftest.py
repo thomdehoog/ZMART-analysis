@@ -21,7 +21,7 @@ The most-used:
 - ``slow`` -- > ~5s
 - ``cellpose`` -- requires cellpose + skimage in the active env
 - ``pooch`` -- uses public skimage sample data downloaded/cached by pooch
-- ``conda_env`` -- requires SMART--basic_test--env_a
+- ``conda_env`` -- requires the conda environments a workflow's setup_env.py creates
 """
 
 from __future__ import annotations
@@ -285,7 +285,7 @@ def pytest_configure(config):
         ("slow", "tests that take more than ~5s individually"),
         ("cellpose", "requires real cellpose + skimage in the active env"),
         ("pooch", "uses public skimage sample data downloaded/cached by pooch"),
-        ("conda_env", "requires SMART--basic_test--env_a conda env"),
+        ("conda_env", "requires the conda environments a workflow's setup_env.py creates"),
     ):
         config.addinivalue_line("markers", f"{marker}: {description}")
 

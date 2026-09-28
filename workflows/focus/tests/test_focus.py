@@ -362,6 +362,7 @@ def test_an_artefact_frame_would_beat_real_focus_on_brenner(tmp_path):
 
 
 @pytest.mark.integration
+@pytest.mark.conda_env
 def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for_results):
     """focus.yaml is registered, submitted and drained the way a caller does.
 
