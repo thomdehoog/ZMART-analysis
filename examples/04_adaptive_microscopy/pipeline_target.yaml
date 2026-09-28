@@ -1,8 +1,0 @@
-# Expensive targeted pass: one high-res tile per submission. No scoping.
-
-metadata:
-  functions_dir: "./steps"
-  verbose: 0
-
-target:
-  - target_tile:

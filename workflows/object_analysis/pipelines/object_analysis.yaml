@@ -8,6 +8,8 @@ metadata:
 
 object_analysis:
   - detect_objects:
+      method: robust   # robust = Cellpose; fast = QuPath-style watershed
+      threshold: 100     # fast only: a nucleus's mean above background, in counts
       channels: null
       channel_axis: null
       cellprob_threshold: 0.0
@@ -15,6 +17,7 @@ object_analysis:
       niter: null
       diameter: null
       segmentation_binning: 1
+      border_margin_px: null
       min_area_px: null
       max_area_px: null
       min_equivalent_diameter_um: null
@@ -22,5 +25,11 @@ object_analysis:
       gpu: true
 
   - extract_classical_features:
+      # Every extras family: texture (gradients, stat_texture, lbp, fft,
+      # glrlm), background (global_bg, local_bg), neighbourhood, morphology.
+      # Each becomes a gating axis on the page, and every channelised extra
+      # is reported per colour (name, name_c0, name_c1, ...), the same
+      # contract the intensity columns already follow.
+      extras: [all]
 
   - build_object_table:

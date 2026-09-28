@@ -102,8 +102,8 @@ class _EnvPool:
             logger.info("EnvPool(%s): reaped %d idle worker(s)",
                         env_label, len(to_shutdown))
 
-    def shutdown_all(self):
-        """Shut down all workers in this pool."""
+    def shutdown_all(self, now=False):
+        """Shut down all workers in this pool; with ``now``, at once."""
         with self._lock:
             self._closed = True
             all_workers = self._idle + self._busy
@@ -111,7 +111,7 @@ class _EnvPool:
             self._busy.clear()
 
         for worker in all_workers:
-            worker.shutdown()
+            worker.shutdown(now=now)
 
     @property
     def status(self):
@@ -130,8 +130,9 @@ class WorkerPool:
 
     Parameters
     ----------
-    idle_timeout : float
-        Seconds before idle workers are shut down (default: 300).
+    idle_timeout : float or None
+        Seconds before idle workers are shut down (default: 300); None
+        means they are never reaped.
     connect_timeout : float
         Seconds to wait for a new worker to connect (default: 60).
     """
@@ -201,19 +202,24 @@ class WorkerPool:
             return self._env_pools[environment]
 
     def _get_semaphore(self, step_path, max_workers):
-        """Get or create a concurrency semaphore for a step."""
+        """Get or create a concurrency semaphore for a step at this width.
+
+        Keyed by the width as well as the file: two pipelines that share a
+        step file and ask for different widths each get their own, rather
+        than whichever width was registered first.
+        """
+        key = (step_path, int(max_workers))
         with self._sem_lock:
-            if step_path not in self._step_semaphores:
-                self._step_semaphores[step_path] = threading.Semaphore(
-                    max_workers)
-            return self._step_semaphores[step_path]
+            if key not in self._step_semaphores:
+                self._step_semaphores[key] = threading.Semaphore(max_workers)
+            return self._step_semaphores[key]
 
     # -- Reaper --------------------------------------------------------
 
     def _ensure_reaper(self):
         """Start the reaper thread on first pool creation."""
         if self._reaper is None:
-            logger.debug("Pool: starting reaper (idle_timeout=%.0fs)",
+            logger.debug("Pool: starting reaper (idle_timeout=%s)",
                          self.idle_timeout)
             self._reaper = threading.Thread(
                 target=self._reaper_loop, daemon=True,
@@ -239,8 +245,12 @@ class WorkerPool:
                 workers.extend(pool.status)
         return {"workers": workers}
 
-    def shutdown_all(self):
-        """Shut down all workers and stop background threads."""
+    def shutdown_all(self, now=False):
+        """Shut down all workers and stop background threads.
+
+        With ``now`` every worker is put down at once, busy or not: the
+        operator's Interrupt, which must reach a step in flight.
+        """
         self._shutdown_event.set()
 
         with self._pool_lock:
@@ -249,9 +259,9 @@ class WorkerPool:
             n = len(pools)
 
         if n:
-            logger.info("Pool: shutting down %d env pool(s)", n)
+            logger.info("Pool: shutting down %d env pool(s) (now=%s)", n, now)
         for pool in pools:
-            pool.shutdown_all()
+            pool.shutdown_all(now=now)
 
         logger.debug("Pool: shutdown complete")
 
