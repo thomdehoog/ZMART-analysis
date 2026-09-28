@@ -494,6 +494,7 @@ def segment_position(
             )
         detector_params = {
             "method": "robust",
+            **_cellpose_provenance(model),
             "requested_gpu": bool(gpu),
             "used_gpu": bool(used_gpu),
             "device": used_device,
@@ -507,7 +508,7 @@ def segment_position(
     if scale != 1.0:
         masks = _resize_nearest(masks, (ny, nx))
     raw_masks = np.asarray(masks, dtype=np.int32)
-    raw_n_objects = int(raw_masks.max())
+    raw_n_objects = int(np.count_nonzero(np.bincount(raw_masks.ravel())[1:]))
     # Border first, then size: an object clipped by the tile edge has a
     # smaller area than the object really is, so filtering by size before
     # dropping it would judge it on a measurement the edge invented.
@@ -520,7 +521,7 @@ def segment_position(
         max_area_px=max_area_px,
     )
     dropped_labels = sorted(set(dropped_labels) | set(dropped_by_area))
-    n_objects = int(masks.max())
+    n_objects = int(np.count_nonzero(np.bincount(masks.ravel())[1:]))
 
     image_2d = seg_input if seg_input.ndim == 2 else seg_input[..., 0]
 
@@ -620,6 +621,9 @@ def watershed_masks(plane, *, diameter_px: float, threshold: float):
     masks, _ = filter_masks_by_area(
         np.asarray(split, dtype=np.int32), min_area_px=min_area, max_area_px=max_area
     )
+    # These are the detector's own labels, so they are numbered 1..n here,
+    # once. The filters the operator applies afterwards keep these numbers.
+    masks, _, _ = segmentation.relabel_sequential(np.asarray(masks, dtype=np.int32))
     return np.asarray(masks, dtype=np.int32), used
 
 
@@ -704,6 +708,32 @@ def _cellpose_device_candidates(prefer_accelerator: bool):
         candidates.append(("mps", True, {"gpu": True, "device": torch.device("mps")}))
     candidates.append(("cpu", False, {"gpu": False}))
     return candidates
+
+
+def _cellpose_provenance(model) -> dict:
+    """Which Cellpose produced the masks: its version, its network, and the
+    torch it ran on. The masks change with all three, so a table without
+    them cannot be reproduced; they go into ``detector_params`` beside the
+    thresholds, where the checkpoint keeps them."""
+    out = {}
+    try:
+        import cellpose
+
+        out["cellpose_version"] = str(getattr(cellpose, "version", None) or
+                                      getattr(cellpose, "__version__", "unknown"))
+    except Exception:  # noqa: BLE001 - provenance never fails a detection
+        out["cellpose_version"] = "unknown"
+    network = getattr(model, "pretrained_model", None)
+    if network is not None and not isinstance(network, str):
+        network = str(network[0]) if len(network) else None
+    out["cellpose_model"] = Path(network).name if network else "default"
+    try:
+        import torch
+
+        out["torch_version"] = str(torch.__version__)
+    except Exception:  # noqa: BLE001
+        out["torch_version"] = None
+    return out
 
 
 def _instantiate_cellpose_model(models, kwargs):
@@ -879,16 +909,20 @@ def filter_masks_by_border(masks, *, border_margin_px=None):
 
 
 def _keep_labels(masks, keep: list[int]):
-    """Renumber *keep* from 1 and drop the rest; return (masks, dropped).
+    """Keep only *keep*, at their own label numbers; return (masks, dropped).
 
-    Both filters end here, because relabelling after a drop is one operation
-    however the labels were chosen.
+    The labels are the detector's, and they are kept as they are: an object
+    that survives a filter keeps the number it had, so its ``object_id`` and
+    the crops written under it stay the same when the border margin or the
+    size bounds are retuned from the saved raw masks. Renumbering would
+    give the same cell a different name every time the filter changed, and
+    ``dropped_labels`` would name labels that no longer mean anything.
     """
-    mapping = np.zeros(int(masks.max()) + 1, dtype=np.int32)
-    mapping[keep] = np.arange(1, len(keep) + 1, dtype=np.int32)
-    dropped = sorted(set(np.flatnonzero(np.bincount(masks.ravel())).tolist())
-                     - set(keep) - {0})
-    return mapping[masks].astype(np.int32, copy=False), [int(d) for d in dropped]
+    present = np.flatnonzero(np.bincount(masks.ravel()))
+    keep_set = set(int(k) for k in keep)
+    dropped = sorted(int(l) for l in present if l and int(l) not in keep_set)
+    kept = np.where(np.isin(masks, list(keep_set)), masks, 0)
+    return kept.astype(np.int32, copy=False), dropped
 
 
 _filter_masks_by_area = filter_masks_by_area

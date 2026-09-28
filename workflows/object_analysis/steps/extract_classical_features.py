@@ -351,20 +351,33 @@ def _expand_extras(extras):
 # Helpers shared across families.
 # ---------------------------------------------------------------------------
 
-def _to_uint8(img: np.ndarray) -> np.ndarray:
-    """Map any non-negative image to ``uint8 [0, 255]`` for texture
-    features that expect 8-bit input, currently LBP.
+def _texture_scale(img: np.ndarray, masks: np.ndarray, params: dict) -> float:
+    """The intensity that maps to the top texture bin.
 
-    Returns uint8 input unchanged. Otherwise rescales by the global
-    ``img.max()`` and clips to [0, 255], returning a new array.
+    Texture features quantise the image into a few grey levels, and the
+    number an object gets depends on where the top of the scale sits. It
+    used to sit at the brightest pixel of the tile, so one hot pixel or one
+    speck of debris re-binned every object on that tile, and no two tiles
+    binned alike. Now it is ``intensity_scale`` from the recipe when given
+    (the camera's full range is the natural choice: 4095 for 12-bit data),
+    and otherwise the 99.9th percentile of the pixels inside objects, which
+    a single bright pixel cannot move.
     """
+    given = params.get("intensity_scale")
+    if given is not None and float(given) > 0:
+        return float(given)
+    arr = np.asarray(img, dtype=np.float64)
+    inside = arr[masks > 0] if masks is not None and np.any(masks > 0) else arr.ravel()
+    scale = float(np.percentile(inside, 99.9)) if inside.size else 1.0
+    return scale if scale > 0 else 1.0
+
+
+def _to_uint8(img: np.ndarray, scale: float) -> np.ndarray:
+    """Map an image to ``uint8 [0, 255]`` with *scale* at 255, for texture
+    features that expect 8-bit input, currently LBP. Values above the scale
+    are clipped."""
     arr = np.asarray(img)
-    if arr.dtype == np.uint8:
-        return arr
-    vmax = float(arr.max()) if arr.size else 1.0
-    if vmax <= 0:
-        vmax = 1.0
-    return np.clip(arr.astype(np.float64) / vmax * 255.0, 0, 255).astype(np.uint8)
+    return np.clip(arr.astype(np.float64) / scale * 255.0, 0, 255).astype(np.uint8)
 
 
 def _per_label_mean(values_image: np.ndarray,
@@ -660,9 +673,7 @@ def _statistical_texture_values(
 ) -> dict[str, np.ndarray]:
     n_bins = int(params.get("n_intensity_bins", 256))
     img_arr = np.asarray(img)
-    vmax = float(img_arr.max()) if img_arr.size else 1.0
-    if vmax <= 0:
-        vmax = 1.0
+    vmax = _texture_scale(img_arr, masks, params)
     img_q = np.clip(img_arr / vmax * (n_bins - 1), 0, n_bins - 1).astype(np.int64)
 
     fg = masks > 0
@@ -744,7 +755,7 @@ def _lbp_values(
     R = float(params.get("lbp_R", 1))
     method = str(params.get("lbp_method", "default"))
 
-    lbp = local_binary_pattern(_to_uint8(img), P=P, R=R, method=method).astype(
+    lbp = local_binary_pattern(_to_uint8(img, _texture_scale(img, masks, params)), P=P, R=R, method=method).astype(
         np.int32
     )
 
@@ -886,9 +897,7 @@ def _glrlm_values(
 ) -> dict[str, np.ndarray]:
     n_levels = int(params.get("glrlm_levels", 16))
     img_arr = np.asarray(img)
-    vmax = float(img_arr.max()) if img_arr.size else 1.0
-    if vmax <= 0:
-        vmax = 1.0
+    vmax = _texture_scale(img_arr, masks, params)
     img_q = np.clip(
         img_arr.astype(np.float64) / vmax * (n_levels - 1), 0, n_levels - 1
     ).astype(np.int16)

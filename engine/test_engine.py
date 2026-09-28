@@ -1303,6 +1303,22 @@ class TestEngineResults(unittest.TestCase):
 
 class TestEngineConcurrency(unittest.TestCase):
 
+    def test_a_yaml_max_workers_below_one_is_refused_at_register(self):
+        _temp_step("def run(pd, state, **p): return pd", name="narrow")
+        yaml = _temp_yaml("wf:\n  - narrow:\n      max_workers: 0")
+        from engine import Engine
+        with Engine() as e:
+            with self.assertRaises(ValueError):
+                e.register("test", yaml)
+
+    def test_a_yaml_max_workers_reaches_the_step_settings(self):
+        _temp_step("def run(pd, state, **p): return pd", name="wide")
+        yaml = _temp_yaml("wf:\n  - wide:\n      max_workers: 3")
+        from engine import Engine
+        with Engine() as e:
+            e.register("test", yaml)
+            self.assertEqual(e._pipelines["test"].step_settings["wide"]["max_workers"], 3)
+
     def test_many_concurrent_jobs(self):
         _temp_step("""
             def run(pd, state, **p):
@@ -1830,6 +1846,15 @@ def _alive(pid):
         os.kill(pid, 0)
     except OSError:
         return False
+    # A killed grandchild whose parent never reaps it stays as a zombie, and
+    # a zombie still answers kill(pid, 0). It is dead all the same.
+    try:
+        with open(f"/proc/{pid}/status") as status:
+            for line in status:
+                if line.startswith("State:"):
+                    return "Z" not in line.split()[1]
+    except OSError:
+        pass
     return True
 
 

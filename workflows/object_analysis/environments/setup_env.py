@@ -43,7 +43,10 @@ STEP_PROFILES = {
             "pooch",
             "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
             "ome-types",     # OME-XML metadata
-            "cellpose",
+            # Pinned to one major version: the default network and what
+            # `diameter: null` means both changed between 3 and 4, and a
+            # table must say which produced it (see detector_params).
+            "cellpose>=4,<5",
             "scikit-image>=0.23",   # the fast detector's watershed
         ],
         "diagnostics": [
