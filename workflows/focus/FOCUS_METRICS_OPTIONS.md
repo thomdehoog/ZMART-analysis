@@ -1,8 +1,10 @@
 # Focus metrics: what we have, what else there is
 
-A note of the discussion on 2026-09-22. Nothing here is built.
+A note of the discussion on 2026-09-22. The two additions recommended below
+were built on 2026-09-28: `score_focus` now offers `brenner`, `dct`,
+`vollath_f4` and `intensity`, chosen with `metric` in `focus.yaml`.
 
-## What `score_focus` has today
+## What `score_focus` had before the additions
 
 - **Brenner** (gradient): mean squared difference between pixels two apart, along both axes.
 - **DCT entropy** (frequency): Shannon entropy of the normalised DCT coefficient energy.
@@ -15,7 +17,7 @@ Both are scored on every stack; the page chooses which one decides, and the peak
 | Family | Examples | Strength | Weakness |
 | --- | --- | --- | --- |
 | Gradient (have) | Brenner, Tenengrad, variance of the Laplacian | Sharp peak on structured tissue | Noise in dim images looks like sharpness |
-| Frequency (have) | DCT entropy, wavelet energy | Largely independent of how bright the image is | Broader peak, costs more to compute |
+| Frequency (have) | DCT entropy, wavelet energy | Independent of how bright the image is, now that the DC term is left out | Broader peak, costs more to compute; a pure-noise frame has the flattest spectrum of all, so it is fooled by an unsettled end plane like every other metric |
 | Statistics | Normalised variance, Vollath F4 (autocorrelation) | Robust in low signal and noise | Slightly flatter peak than gradient |
 | Intensity | Mean of the brightest 1 %, total signal | Simplest; works on sparse or faint samples on a confocal | Bleaching lowers it as the stack goes on; a bright speck of debris can win |
 | Hardware | Leica's reflection autofocus off the coverslip | Fast, needs no image | Finds the glass, not the tissue; needs an offset |
@@ -28,7 +30,7 @@ peaks at the focal plane. Intensity only fails as a measure on a widefield.
 
 ## Recommendation
 
-Add two metrics, both cheap score functions in `steps/score_focus.py` beside Brenner:
+Add two metrics, both cheap score functions in `steps/score_focus.py` beside Brenner (done):
 
 1. **Vollath F4**: strongest exactly where Brenner is weakest, in dim, noisy fluorescence.
 2. **Intensity, as the mean of the brightest percentile**: not the plain mean, so a single speck cannot take
