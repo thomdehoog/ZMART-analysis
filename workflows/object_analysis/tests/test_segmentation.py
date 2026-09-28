@@ -385,6 +385,7 @@ def test_segment_position_passes_cellpose_tuning_params(tmp_path):
         "diameter": 90.0,
     }
     assert out["detector_params"] == {
+        "method": "robust",
         "requested_gpu": False,
         "used_gpu": False,
         "device": "cpu",
