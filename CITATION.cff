@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+title: "ZMART Analysis: reproducible, environment-isolated image analysis pipelines for live adaptive microscopy"
+message: "If you use this software in research, please cite it as below."
+type: software
+authors:
+  - family-names: de Hoog
+    given-names: Thom
+    affiliation: "Center for Microscopy and Image Analysis (ZMB), University of Zurich"
+repository-code: "https://github.com/thomdehoog/ZMART-analysis"
+license: MIT
+keywords:
+  - microscopy
+  - image-analysis
+  - bioimage-analysis
+  - pipeline
+  - cellpose
+  - python
+  - conda
+  - live-acquisition
+  - smart-microscopy
+abstract: >-
+  The analysis half of ZMART, the microscopy toolkit of the Center for
+  Microscopy and Image Analysis (ZMB), University of Zurich. Pipelines are
+  YAML recipes of small Python steps; each step runs in its own conda
+  environment inside a worker that stays warm, so analysis keeps pace with
+  a microscope that is still acquiring, and steps can be scoped to run once
+  per field, per well or per plate. Ships workflows for focus scoring,
+  object detection and measurement, population plots and driver
+  configuration.

@@ -1,0 +1,51 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.10', '3.11', '3.12']
+
+    defaults:
+      run:
+        # `bash -el {0}` makes conda activation work on every step,
+        # including on Windows runners (where `bash` is git-bash by default).
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+          activate-environment: orchestrator
+          auto-activate-base: false
+          miniforge-version: latest
+
+      - name: Show environment
+        run: |
+          python --version
+          conda --version
+          which python
+
+      - name: Install package with test deps
+        run: pip install -e .[test]
+
+      - name: Run pytest
+        # Skipped here because CI does not provision them:
+        #   cellpose   -- needs cellpose + torch in a workflow environment
+        #   conda_env  -- needs the workflow conda environments
+        #   pooch      -- downloads public sample images
+        run: pytest -m "not cellpose and not conda_env and not pooch"

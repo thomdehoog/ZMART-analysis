@@ -97,3 +97,32 @@ def test_too_few_objects_or_an_unknown_kind_are_refused(tmp_path):
         _plotted(table, "pca", ids=["cell1", "cell2"])
     with pytest.raises(ValueError, match="kind"):
         _plotted(table, "tsne")
+
+
+def test_the_plot_says_how_much_spread_its_axes_carry(tmp_path):
+    """Two axes drawn from four features are only readable with the share of
+    the spread they explain and the features pulling on them."""
+    got = _plotted(_a_population(tmp_path), "pca")
+    ratio = got["explained_variance_ratio"]
+    assert len(ratio) == 4 and all(0.0 <= r <= 1.0 for r in ratio)
+    assert sum(ratio) == pytest.approx(1.0, abs=1e-6)
+    assert ratio == sorted(ratio, reverse=True)
+    assert set(got["loadings"]) == {"pca_1", "pca_2"}
+    assert set(got["loadings"]["pca_1"]) <= set(got["features"])
+    assert got["umap"] is None
+
+
+def test_a_missing_value_takes_its_columns_median(tmp_path):
+    """One object with no area measured is plotted at the median area, not
+    dropped and not at zero: the plot keeps the object and does not invent
+    an extreme for it."""
+    table = _a_population(tmp_path)
+    rows = table.read_text(encoding="utf-8").splitlines()
+    header = rows[0].split(",")
+    area = header.index("area")
+    cells = rows[1].split(","); cells[area] = ""
+    rows[1] = ",".join(cells)
+    table.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    got = _plotted(table, "pca")
+    assert "area" in got["features"]
+    assert got["objects"] == 60
