@@ -199,6 +199,13 @@ class Engine:
                         settings["environment"] = env
                         if step.max_workers is not None:
                             settings["max_workers"] = step.max_workers
+                        if (not isinstance(settings["max_workers"], int)
+                                or settings["max_workers"] < 1):
+                            raise ValueError(
+                                f"Step '{step.name}': max_workers must be a "
+                                f"whole number of 1 or more, got "
+                                f"{settings['max_workers']!r}"
+                            )
                         step_settings[step.name] = settings
 
             state = PipelineState(

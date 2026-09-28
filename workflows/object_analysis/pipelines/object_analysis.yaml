@@ -25,6 +25,13 @@ object_analysis:
       gpu: true
 
   - extract_classical_features:
+      # Texture features quantise intensities into a few levels, and the top
+      # of that scale must be the same on every tile for the numbers to be
+      # comparable. Set it to the camera's full range (4095 for 12-bit
+      # data, 65535 for 16-bit). Left null, the 99.9th percentile of the
+      # pixels inside objects is used per tile, which one hot pixel cannot
+      # move but which still varies a little from tile to tile.
+      intensity_scale: null
       # Every extras family: texture (gradients, stat_texture, lbp, fft,
       # glrlm), background (global_bg, local_bg), neighbourhood, morphology.
       # Each becomes a gating axis on the page, and every channelised extra

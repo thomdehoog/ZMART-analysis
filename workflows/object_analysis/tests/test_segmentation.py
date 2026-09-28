@@ -276,8 +276,10 @@ def test_segment_position_filters_masks_by_min_and_max_area(tmp_path):
     assert out["n_objects"] == 1
     assert out["dropped_labels"] == [1, 3]
     assert out["area_filter"] == {"min_area_px": 10, "max_area_px": 50}
-    assert np.unique(out["masks"]).tolist() == [0, 1]
-    assert int((out["masks"] == 1).sum()) == 25
+    # The survivor keeps the detector's own label, so its id is the same
+    # whatever the size bounds were.
+    assert np.unique(out["masks"]).tolist() == [0, 2]
+    assert int((out["masks"] == 2).sum()) == 25
 
 
 def test_segment_position_binning_downsamples_cellpose_input_without_upsampling(tmp_path):
@@ -384,6 +386,11 @@ def test_segment_position_passes_cellpose_tuning_params(tmp_path):
         "niter": 2000,
         "diameter": 90.0,
     }
+    provenance = {
+        key: out["detector_params"].pop(key)
+        for key in ("cellpose_version", "cellpose_model", "torch_version")
+    }
+    assert set(provenance) == {"cellpose_version", "cellpose_model", "torch_version"}
     assert out["detector_params"] == {
         "method": "robust",
         "requested_gpu": False,
@@ -542,15 +549,29 @@ def test_border_margin_of_none_or_zero_keeps_everything():
         assert int(kept.max()) == 2
 
 
-def test_objects_in_the_border_band_are_dropped_and_the_rest_relabelled():
+def test_objects_in_the_border_band_are_dropped_and_the_rest_keep_their_labels():
     from detect_objects import filter_masks_by_border
 
     masks = _labelled(20, 20, [(0, 3, 0, 3), (8, 12, 8, 12), (17, 20, 17, 20)])
     kept, dropped = filter_masks_by_border(masks, border_margin_px=4)
 
     assert dropped == [1, 3]
-    assert int(kept.max()) == 1, "the survivor is renumbered from 1"
-    assert set(np.unique(kept[8:12, 8:12].ravel()).tolist()) == {1}
+    assert np.unique(kept).tolist() == [0, 2], "the survivor keeps its own label"
+    assert set(np.unique(kept[8:12, 8:12].ravel()).tolist()) == {2}
+
+
+def test_a_border_margin_and_a_size_bound_together_name_dropped_labels_correctly(tmp_path):
+    """Both filters drop labels from the detector's own numbering, so the
+    union of the two lists names real objects rather than a renumbered
+    intermediate."""
+    from detect_objects import filter_masks_by_area, filter_masks_by_border
+
+    masks = _labelled(20, 20, [(0, 3, 0, 3), (8, 12, 8, 12), (14, 15, 14, 15), (17, 20, 17, 20)])
+    kept, by_border = filter_masks_by_border(masks, border_margin_px=4)
+    kept, by_area = filter_masks_by_area(kept, min_area_px=4)
+    assert by_border == [1, 4]
+    assert by_area == [3]
+    assert np.unique(kept).tolist() == [0, 2]
 
 
 def test_an_object_reaching_into_the_band_is_dropped_whole():

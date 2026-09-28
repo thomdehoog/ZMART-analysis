@@ -30,6 +30,7 @@ import collections
 import logging
 import os
 import pickle
+import socket
 import subprocess
 import sys
 import threading
@@ -65,6 +66,9 @@ _STDERR_BUFFER = 8192
 #: ``conda run -n <env> python -c ...`` from one parent, three failed on the
 #: same ``__conda_tmp_<n>.txt``.
 _spawn_turn = threading.Lock()
+
+#: How long one accept() turn waits before checking for a shutdown, seconds.
+_ACCEPT_TURN_S = 0.25
 
 
 def _the_python_of(environment):
@@ -189,7 +193,13 @@ class Worker:
         authkey = os.urandom(32)
         self._listener = Listener(("localhost", 0), authkey=authkey)
         port = self._listener.address[1]
-        self._listener._listener._socket.settimeout(self.connect_timeout)
+        # The accept below waits in short turns, checking between them
+        # whether a shutdown landed, so the worker's door can be closed from
+        # another thread. On Linux closing the listening socket does not
+        # wake a thread blocked in accept(); it would sit there for the
+        # whole connect_timeout, holding the spawn turn and stalling every
+        # other spawn in the process.
+        self._listener._listener._socket.settimeout(_ACCEPT_TURN_S)
 
         python = ([sys.executable] if self.environment is None
                   else _the_python_of(self.environment))
@@ -243,7 +253,7 @@ class Worker:
             self._stderr_drainer = _StderrDrainer(self._process.stderr)
 
             try:
-                self._conn = self._listener.accept()
+                self._conn = self._accept_in_turns()
             except Exception as e:
                 # A press that landed while the worker was on its way closes
                 # the door it was to come through; that is the press, not a
@@ -262,6 +272,30 @@ class Worker:
         self._last_active = time.monotonic()
         logger.info("Worker ready: pid=%d, env=%s",
                      self._process.pid, env_label)
+
+    def _accept_in_turns(self):
+        """Wait for the worker to connect, a short turn at a time.
+
+        Between turns a shutdown that landed is honoured at once, and a
+        worker process that already died is reported without waiting out
+        the rest of the connect timeout.
+        """
+        deadline = time.monotonic() + self.connect_timeout
+        while True:
+            try:
+                return self._listener.accept()
+            except socket.timeout:
+                pass
+            self._refuse_if_put_down()
+            if self._process is not None and self._process.poll() is not None:
+                raise OSError(
+                    f"worker process exited with code {self._process.returncode} "
+                    "before connecting"
+                )
+            if time.monotonic() >= deadline:
+                raise socket.timeout(
+                    f"no connection within {self.connect_timeout}s"
+                )
 
     def _refuse_if_put_down(self):
         """A shutdown that landed at any point of the spawn wins.
