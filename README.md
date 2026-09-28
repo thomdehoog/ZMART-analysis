@@ -1,197 +1,118 @@
-# Smart Analysis
+# ZMART Analysis
 
-[![tests](https://github.com/thomdehoog/smart-analysis/actions/workflows/test.yml/badge.svg?branch=v4-engine)](https://github.com/thomdehoog/smart-analysis/actions/workflows/test.yml)
-[![python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
-[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+The party that reads pixels and returns numbers. ZMART has three: the
+instrument moves and captures, this measures what was captured, and the page
+decides what to do about it. Nothing here moves a stage. See
+`docs/design/what-runs-where.md` for where the line falls.
 
-Smart Analysis is a local Python workflow engine for scientific image
-analysis, built around live adaptive microscopy. It accepts work while a
-microscope is acquiring images, keeps heavy analysis workers warm, and
-returns results quickly enough for acquisition software to decide what to
-image next.
+## The workflows
 
-The same API also runs saved datasets after acquisition. A workflow that
-processes live tiles can usually be run as a batch pipeline without
-rewriting the analysis steps.
+- **`focus/`** — sharpness of every plane in a z-stack: a gradient metric and
+  an entropy one, both on every run, peak refined between planes. Returns a
+  trace and a decision.
+- **`object_analysis/`** — cellpose detection, per-object features, object
+  table. `object_analysis.yaml` is detection plus features; `object_analysis_fast.yaml`
+  the same with the watershed detector in the classical environment;
+  `object_detection.yaml` stops at the checkpoint.
 
-## Why use it
+Each step's docstring is the reference for what it takes and returns; each
+pipeline's YAML lists every parameter with its default. Detection parameters
+can be set in the pipeline or overridden per submission, so the operator page
+can tune on one position without registering a pipeline of its own.
 
-- **Live feedback loops.** Submit each tile as it arrives, aggregate
-  results when a region is complete, and feed the result back into the
-  microscope controller.
-- **Per-step environments.** Run incompatible libraries in separate conda
-  environments while keeping one Python API at the orchestration layer.
-- **Warm workers.** Load expensive objects such as Cellpose models once
-  per worker and reuse them across submissions.
-- **Subprocess isolation.** Every step runs outside the engine process, so
-  a crashing or misconfigured analysis step fails its own job without
-  taking down the orchestrator.
-- **YAML recipes, Python steps.** Workflows are declared in YAML; each
-  step is a small Python file with a `run()` function.
+## Reading and writing
 
-## Install
+`_image_io.load_plane` reads an OME-Zarr position (ngio, NGFF 0.4 and 0.5) or
+an OME-TIFF (tifffile, ome-types) through one contract, lazily, so a position
+costs the planes asked for. It refuses a channel-last `(H, W, 3)` image, which
+is RGB samples to a TIFF reader, and a focus stack that does not say which axis
+is depth.
 
-```bash
-git clone https://github.com/thomdehoog/smart-analysis.git
-cd smart-analysis
-conda create -n SMART--analysis-dev python=3.12 -y
-conda activate SMART--analysis-dev
-python -m pip install -e ".[test]"
-pytest -m "not cellpose and not slow"
-```
+`_output.py` says where results go: the `analysis` folder beside the `data` an
+image came from, under the frame's short name.
 
-Python 3.10 or newer is required. Use conda for local development and
-microscope deployments; the engine's environment switching also relies
-on conda when a step declares a separate environment in its `METADATA`.
+    <acquisition>/data/  vendor/  analysis/
 
-## Minimal workflow
+**`tifffile` must be 2026.6.1 or newer.** Older versions import a name zarr 3.3
+moved and every read fails claiming `zarr 3.3.0 < 3 is not supported`. Pinned in
+both `setup_env.py` files and in CI.
 
-A workflow has three pieces: a YAML recipe, one or more step files, and a
-runner that submits jobs. This complete workflow doubles a submitted
-number.
+## Where this came from
 
-`pipeline.yaml`:
+Vendored from [smart-analysis](https://github.com/thomdehoog/smart-analysis)
+`v4-engine` at `a760858`, as a **copied subset** — not a subtree, so there is no
+automatic re-sync. Taken: `engine/`, the shared `workflows/_*.py`,
+`object_analysis/`, `conftest.py`, `LICENSE`. Left: `basic_test`,
+`cell_analysis`, `rare_event_selection`, `target_discovery`, and the packaging.
+Upstream's `target_acquisition` was taken and then removed, superseded by
+`object_analysis`; so was the DINO deep-feature path (`extract_deep_features`,
+`_object_crops`, `_intensity_scale`, `load_detected_objects`, the `*_deep`
+pipelines) — unused here, and one `git archive` away when wanted.
 
-```yaml
-metadata:
-  functions_dir: "./steps"
+`workflows/_image_io.py` comes from a different branch,
+`claude/v4-branch-wweiv5` (`rare_event_selection/steps/image_io.py`) — the one
+file here whose upstream is not `v4-engine`. `workflows/focus/` and
+`workflows/_output.py` were written here and have no upstream.
 
-hello:
-  - double_it:
-```
+### Changes to vendored code
 
-`steps/double_it.py`:
+Kept minimal, so a re-sync stays cheap.
 
-```python
-def run(pipeline_data, state, **params):
-    n = pipeline_data["input"]["n"]
-    pipeline_data["doubled"] = n * 2
-    return pipeline_data
-```
+- `conftest.py` registers the pytest markers, which upstream declares in a
+  `pyproject.toml` that was not taken.
+- `test_object_analysis.py` and `test_image_io.py` skip tests for workflows and
+  engine APIs this checkout does not have.
+- `detect_objects.py` derives `output_dir` from the image when the caller names
+  none. Upstream had no acquisition layout to derive it from.
+- `_segmentation.py` reads through `_image_io`; `segment_tiff` became
+  `segment_position`. It gained `filter_masks_by_border` for tile overlap, and
+  `segmentation_params` now accepts per-submission overrides.
+- `to_builtin` (in `build_object_table.py` and `detect_objects.py`) takes the
+  `item()` door only for 0-d values: a one-element numpy array also answers
+  `item()`, which collapsed a single-object field's columns to scalars and
+  crashed the table step with `len()` on an int.
+- `run_pipeline.py` reads through the same contract.
+- The `environments/setup_env.py` and `clean_env.py` scripts (focus and
+  object_analysis alike) had their `__main__` blocks sitting mid-file above
+  the functions they call, and the `sys.path` line for the engine's
+  `conda_utils` below the import that needs it — none of the four could run
+  at all. Reordered: imports, path, definitions, call at the end.
+- `engine/_worker.py` serialises worker spawn-to-connect under one process-wide
+  lock. `conda run` on Windows writes its activation through a temp file whose
+  name is not unique across concurrent invocations from one parent; parallel
+  spawns corrupted each other's activation and every worker but the first died
+  naming an environment that exists. Worth offering upstream — it is a
+  property of conda, not of this checkout.
+- The environment prefix is **`ZMART--`** — the brand here — where upstream
+  says `SMART--`: the step metadata, the environment scripts and
+  `environment.yml` all name `ZMART--<workflow>--<step>`. The engine's own
+  tests keep upstream's `SMART--basic_test--env_a`, being upstream's tests.
 
-`run.py`:
+- `detect_objects.py` stacks `extra_channel_paths` channel-last into the
+  image the feature extractor measures, so intensity features come out per
+  colour; segmentation itself still reads the one image it was handed.
+- `object_analysis.yaml` turns every extras family on (`extras: [all]`):
+  texture, background correction, neighbourhood and morphology all become
+  gating axes on the page — and, per the extractor's channelisation, each
+  channelised feature is reported per colour like the intensity columns.
+- `detect_objects.py` accepts `extra_channel_indices` beside
+  `extra_channel_paths`: when the input is one OME-Zarr position rather than
+  one file per plane, the other colours are read from the same store by index
+  (through `load_plane`) and stacked channel-last exactly like the paths, so
+  per-colour features survive the move to zarr input.
 
-```python
-import time
-from engine import Engine
+## Running the tests
 
+    python -m pytest zmart_analysis
 
-with Engine() as engine:
-    engine.register("hello", "pipeline.yaml")
-    engine.submit("hello", {"n": 21})
+Tests needing a runtime that is absent skip themselves. **On this machine use
+`dino3_test`**: in `lasxapi_extended`, torch fails to load `fbgemm.dll`
+in-process while the cellpose probe, which runs in a subprocess, passes.
 
-    while not (results := engine.results("hello")):
-        time.sleep(0.05)
+    C:/ProgramData/MinicondaZMB/envs/dino3_test/python.exe -m pytest zmart_analysis
 
-print(results[0]["doubled"])  # 42
-```
+## Still owed
 
-See [`examples/01_hello_world/`](examples/01_hello_world/) for this
-workflow as runnable files, [`examples/`](examples/) for more engine
-patterns, and [`workflows/`](workflows/) for larger microscopy workflows.
-
-## Scoped aggregation
-
-Live acquisition often has per-tile work followed by per-region work. For
-example, segment every tile immediately, then stitch or summarize a whole
-region once the microscope finishes acquiring it.
-
-Declare the aggregating step with a `scope`:
-
-```yaml
-overview:
-  - segment_tile:
-  - stitch_region:
-      scope: group
-```
-
-Submit tiles with matching scope labels. The acquisition layer signals
-when the group is complete:
-
-```python
-engine.submit("overview", tile_1, scope={"group": "R3"})
-engine.submit("overview", tile_2, scope={"group": "R3"})
-engine.submit("overview", tile_3, scope={"group": "R3"}, complete="group")
-```
-
-`segment_tile` runs once per submitted tile. `stitch_region` runs once
-for `R3` after the `complete="group"` submission and receives the
-accumulated tile results in `pipeline_data["results"]`.
-
-The engine does not guess completion. The caller knows when acquisition
-for a region is done and tells the engine explicitly.
-
-## Per-step environments
-
-Steps run in worker subprocesses. By default, a worker uses the same
-Python environment as the orchestrator. Add an `environment` entry to a
-step's `METADATA` to run that step in another conda environment:
-
-```python
-METADATA = {
-    "environment": "SMART--target_acquisition--main",
-    "max_workers": 1,
-}
-
-
-def run(pipeline_data, state, **params):
-    from cellpose import models
-
-    if "model" not in state:
-        state["model"] = models.CellposeModel(gpu=params.get("gpu", False))
-    ...
-```
-
-The engine reads `METADATA` with `ast.literal_eval`; it does not import
-step modules in the orchestrator process. Heavy imports happen only
-inside the worker environment.
-
-## Project structure
-
-| Path | Purpose |
-|---|---|
-| `engine/` | The engine package and unit tests. Public API is re-exported from `engine/__init__.py`. |
-| `examples/` | Small runnable workflows showing basic submission, scoped aggregation, environment isolation, and adaptive feedback. |
-| `workflows/basic_test/` | Synthetic workflows used for integration, robustness, and adversarial tests. |
-| `workflows/rare_event_selection/` | Cellpose and scikit-image workflow for rare-event selection. |
-| `workflows/cell_analysis/` | Generic preprocess, segment, extract, and select workflow. |
-| `workflows/object_analysis/` | Object-centered analysis with classical features and optional DINOv2 embeddings. |
-| `workflows/target_discovery/` | Selects and clusters revisit targets from object tables and tile geometry. |
-| `workflows/target_acquisition/` | Combined target-acquisition workflow: per-tile Cellpose segmentation plus coordinate conversion. |
-| `docs/` | Usage guide and v4 design rationale. |
-| `.github/workflows/` | Cross-platform pytest CI. |
-
-## Testing
-
-```bash
-pytest -m "not cellpose and not slow"
-pytest
-pytest -m "not slow"
-pytest engine/
-pytest workflows/object_analysis/tests/ -m "not cellpose and not deep"
-pytest workflows/target_discovery/tests/
-pytest workflows/target_acquisition/tests/ -m "not cellpose"
-```
-
-Tests marked `cellpose` require Cellpose and Torch in the active
-environment and skip cleanly when those imports fail. Tests marked
-`deep` require a Torch/DINO-capable environment. Tests marked
-`cluster` require the target-discovery clustering environment. Tests marked
-`pooch` use public scikit-image sample data downloaded/cached by pooch.
-Tests marked `conda_env` require the small test environments created by
-`workflows/basic_test/environments/setup_env.py`.
-
-## Limitations
-
-Smart Analysis is intentionally local and small. It is not a distributed
-scheduler, a queue service, a notebook framework, or a result-storage
-system. Step files are trusted Python code controlled by the workflow
-author.
-
-For background and deeper examples, see
-[`docs/Usage_Guide.md`](docs/Usage_Guide.md) and
-[`docs/Engine_v4_Design.md`](docs/Engine_v4_Design.md).
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+Nothing has run against a real ZMART acquisition — every store tested so far is
+synthetic or a skimage sample. The rest of `claude/v4-branch-wweiv5` (foreign
+stores, the rename) is not ported.

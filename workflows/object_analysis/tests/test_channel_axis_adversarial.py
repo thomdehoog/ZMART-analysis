@@ -9,9 +9,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _detection_checkpoint import segmentation_params, segmentation_params_hash  # noqa: E402
-from _segmentation import select_channels  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
+from detect_objects import segmentation_params, segmentation_params_hash  # noqa: E402
+from detect_objects import select_channels  # noqa: E402
 
 
 pytestmark = pytest.mark.adversarial
@@ -92,15 +92,33 @@ def test_input_axis_overrides_yaml_axis_before_hashing():
     assert params["channels"] == [0]
 
 
-def test_cli_image_size_requires_axis_for_ambiguous_tiff(tmp_path):
+def test_cli_image_size_comes_from_the_image(tmp_path):
+    """A (3, 10, 3) image is ambiguous by shape and unambiguous by metadata.
+
+    The CLI used to demand --channel-axis for exactly this case. Reading
+    through one contract moved the question to the image itself, so the
+    answer no longer depends on what the caller was told to pass.
+    """
+    import tifffile
+
+    run_pipeline = _load_run_pipeline_module()
+    image_path = tmp_path / "declared.tif"
+    tifffile.imwrite(
+        image_path, np.zeros((3, 10, 3), dtype=np.uint8), metadata={"axes": "CYX"}
+    )
+
+    assert run_pipeline._image_size_px(image_path) == [3, 10]
+    # The old flag is accepted and ignored rather than changing the answer.
+    assert run_pipeline._image_size_px(image_path, 0) == [3, 10]
+
+
+def test_cli_image_size_refuses_an_undeclared_ambiguous_tiff(tmp_path):
+    """Nothing declares the axes, so nothing can honestly resolve them."""
     import tifffile
 
     run_pipeline = _load_run_pipeline_module()
     image_path = tmp_path / "ambiguous.tif"
     tifffile.imwrite(image_path, np.zeros((3, 10, 3), dtype=np.uint8))
 
-    with pytest.raises(SystemExit, match="Pass --channel-axis"):
+    with pytest.raises(ValueError, match="3-sample .RGB. image"):
         run_pipeline._image_size_px(image_path)
-    assert run_pipeline._image_size_px(image_path, 0) == [3, 10]
-    assert run_pipeline._image_size_px(image_path, -1) == [10, 3]
-    assert run_pipeline._image_size_px(image_path, 2) == [10, 3]

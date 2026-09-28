@@ -1,4 +1,10 @@
-"""Create conda environments for the object_analysis workflow."""
+"""Create the conda environment for the focus workflow.
+
+One environment, ``ZMART--focus--main``. Scoring sharpness needs numpy, a DCT
+from scipy, and the readers -- no cellpose, no torch, no GPU. Keeping it out
+of the cellpose environment means a focus run costs a small environment rather
+than a deep-learning one.
+"""
 
 from __future__ import annotations
 
@@ -24,109 +30,51 @@ from conda_utils import (  # noqa: E402
 
 
 
-WORKFLOW = "object_analysis"
+WORKFLOW = "focus"
 PYTHON_VERSION = "3.12"
 
-STEP_PROFILES = {
-    "cellpose": {
-        "description": "Cellpose detection",
-        "install_torch": True,
-        "pip_packages": [
-            "pyyaml",
-            "numpy",
-            # tifffile exposes a TIFF as a zarr array, which is how OME-TIFF
-            # and OME-Zarr reach the same plane selection. Versions before
-            # 2026.6.1 import a name zarr 3.3 moved, and fail on the first
-            # read with a misleading "zarr 3.3.0 < 3 is not supported".
-            "tifffile>=2026.6.1",
-            "imagecodecs",
-            "pooch",
-            "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
-            "ome-types",     # OME-XML metadata
-            "cellpose",
-            "scikit-image>=0.23",   # the fast detector's watershed
-        ],
-        "diagnostics": [
-            (
-                "TIFF/zarr interop",
-                "import tifffile, tifffile.zarr, zarr; "
-                "print(f'tifffile {tifffile.__version__} + zarr {zarr.__version__}')",
-            ),
-            (
-                "reads an OME-Zarr position",
-                "import tempfile, numpy as np, ngio; "
-                "from pathlib import Path; "
-                "d = Path(tempfile.mkdtemp()) / 'p.zarr'; "
-                "ngio.create_ome_zarr_from_array("
-                "    d, np.zeros((1, 1, 2, 8, 8), dtype='uint16'), pixelsize=1.0, "
-                "    axes_names=('t','c','z','y','x'), levels=1, overwrite=True); "
-                "c = ngio.open_ome_zarr_container(str(d), mode='r'); "
-                "print('OK')",
-            ),
-            ("OME-XML metadata", "import ome_types; print('OK')"),
-            ("cellpose", "from cellpose import models; print('OK')"),
-        ],
-    },
-    "classical": {
-        "description": "scikit-image classical feature extraction and the fast detector",
-        "install_torch": False,
-        "pip_packages": [
-            "pyyaml",
-            "numpy",
-            "scikit-image>=0.23",
-            # The fast detector runs here too (object_analysis_fast.yaml),
-            # and it reads the position and writes its masks the same way
-            # the cellpose one does: the same readers, torch left out.
-            "tifffile>=2026.6.1",
-            "imagecodecs",
-            "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
-            "ome-types",     # OME-XML metadata
-        ],
-        "diagnostics": [
-            (
-                "scikit-image",
-                "from skimage.measure import regionprops_table; "
-                "import numpy as np; "
-                "m = np.zeros((8, 8), dtype=np.int32); "
-                "m[2:4, 2:4] = 1; "
-                "regionprops_table(m, properties=('label', 'area')); "
-                "print('OK')",
-            ),
-            (
-                "the fast detector's watershed",
-                "from skimage import filters, measure, morphology, segmentation; "
-                "from scipy import ndimage; print('OK')",
-            ),
-            (
-                "TIFF/zarr interop",
-                "import tifffile, tifffile.zarr, zarr; "
-                "print(f'tifffile {tifffile.__version__} + zarr {zarr.__version__}')",
-            ),
-            (
-                "reads an OME-Zarr position",
-                "import tempfile, numpy as np, ngio; "
-                "from pathlib import Path; "
-                "d = Path(tempfile.mkdtemp()) / 'p.zarr'; "
-                "ngio.create_ome_zarr_from_array("
-                "    d, np.zeros((1, 1, 2, 8, 8), dtype='uint16'), pixelsize=1.0, "
-                "    axes_names=('t','c','z','y','x'), levels=1, overwrite=True); "
-                "c = ngio.open_ome_zarr_container(str(d), mode='r'); "
-                "print('OK')",
-            ),
-            ("OME-XML metadata", "import ome_types; print('OK')"),
-        ],
-    },
-}
+PIP_PACKAGES = [
+    "pyyaml",
+    "numpy",
+    "scipy",         # scipy.fft.dctn, the entropy metric's transform
+    # Before 2026.6.1 tifffile imports a name zarr 3.3 moved, and the first
+    # read fails with a misleading "zarr 3.3.0 < 3 is not supported".
+    "tifffile>=2026.6.1",
+    "imagecodecs",
+    "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
+    "ome-types",     # OME-XML metadata
+]
 
-
-def _selected_profile() -> dict:
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--step", default="cellpose")
-    args, _ = parser.parse_known_args()
-    if args.step not in STEP_PROFILES:
-        expected = ", ".join(sorted(STEP_PROFILES))
-        raise SystemExit(f"Unknown --step {args.step!r}. Expected one of: {expected}")
-    return STEP_PROFILES[args.step]
+#: ``__STEPS__`` is replaced with this workflow's steps directory before the
+#: check runs. A placeholder rather than a format field, because these are
+#: Python one-liners and braces are theirs.
+DIAGNOSTICS = [
+    (
+        "DCT transform",
+        "import numpy as np; from scipy.fft import dctn; "
+        "print('OK' if dctn(np.zeros((8, 8)), norm='ortho').shape == (8, 8) else 'FAIL')",
+    ),
+    (
+        "TIFF/zarr interop",
+        "import tifffile, tifffile.zarr, zarr; "
+        "print(tifffile.__version__ + ' + zarr ' + zarr.__version__)",
+    ),
+    (
+        "scores a z-stack in an OME-Zarr position",
+        "import sys, tempfile, numpy as np, ngio; "
+        "from pathlib import Path; "
+        "d = Path(tempfile.mkdtemp()) / 'p.zarr'; "
+        "a = np.zeros((1, 1, 5, 32, 32), dtype='uint16'); "
+        "a[0, 0, 2] = np.random.default_rng(0).integers(0, 4096, size=(32, 32)); "
+        "ngio.create_ome_zarr_from_array(d, a, pixelsize=1.0, z_spacing=1.0, "
+        "axes_names=('t','c','z','y','x'), levels=1, overwrite=True); "
+        "sys.path.insert(0, r'__STEPS__'); "
+        "from score_focus import run; "
+        "payload = dict(input=dict(image_path=str(d)), metadata=dict(verbose=0)); "
+        "peak = run(payload, dict(), skip_ends=0)['score_focus']['peak_index']; "
+        "print('OK' if abs(peak - 2) < 0.5 else 'FAIL peak=' + str(peak))",
+    ),
+]
 
 
 WIDTH = 70
@@ -532,12 +480,14 @@ def _run_torch_backend_check(conda: str, env_name: str, gpu: str) -> None:
 
 
 if __name__ == "__main__":
-    profile = _selected_profile()
+    steps = str(Path(__file__).resolve().parents[1] / "steps")
     setup_workflow_env(
         workflow=WORKFLOW,
-        pip_packages=profile["pip_packages"],
-        diagnostics=profile["diagnostics"],
+        pip_packages=PIP_PACKAGES,
+        diagnostics=[
+            (label, code.replace("__STEPS__", steps)) for label, code in DIAGNOSTICS
+        ],
         python_version=PYTHON_VERSION,
-        install_torch=profile["install_torch"],
-        default_step="cellpose",
+        install_torch=False,
+        default_step="main",
     )

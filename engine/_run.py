@@ -46,9 +46,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class StepConfig:
-    """Configuration for one step in a pipeline phase."""
+    """Configuration for one step in a pipeline phase.
+
+    ``environment`` is the pipeline's word on where the step runs, and
+    overrides the step file's own METADATA when given. A step file names the
+    environment its heaviest caller needs; a pipeline that uses the same step
+    for lighter work (a watershed where the file expects Cellpose) places it
+    somewhere cheaper without a second copy of the file.
+    """
     name: str
     params: dict
+    environment: str | None = None
+    #: The pipeline's word on how many of this step may run at once, over
+    #: the step file's own METADATA. A step file is written for its heaviest
+    #: caller; a pipeline whose work is light (a watershed, not Cellpose)
+    #: may run the same file wide without a second copy of it.
+    max_workers: int | None = None
 
 
 @dataclass
@@ -100,6 +113,9 @@ def split_phases(steps_config):
     A new phase starts when a step declares a scope. Steps before the
     first scope are Phase 0 (immediate). Each subsequent scope starts
     a new phase.
+
+    ``scope``, ``environment`` and ``max_workers`` are the engine's keys on a
+    step and are taken off before the rest reaches the step as its params.
     """
     phases = []
     current_steps = []
@@ -109,6 +125,8 @@ def split_phases(steps_config):
         name = list(step_dict.keys())[0]
         raw_params = dict(step_dict[name] or {})
         scope = raw_params.pop("scope", None)
+        environment = raw_params.pop("environment", None)
+        max_workers = raw_params.pop("max_workers", None)
 
         if scope is not None:
             if current_steps:
@@ -116,7 +134,12 @@ def split_phases(steps_config):
             current_steps = []
             current_scope = scope
 
-        current_steps.append(StepConfig(name=name, params=raw_params))
+        current_steps.append(
+            StepConfig(
+                name=name, params=raw_params, environment=environment,
+                max_workers=int(max_workers) if max_workers is not None else None,
+            )
+        )
 
     if current_steps:
         phases.append(Phase(steps=current_steps, scope=current_scope))

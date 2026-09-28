@@ -13,41 +13,26 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(WORKFLOWS_DIR))
 
 from engine import Engine  # noqa: E402
-from _contracts import save_overview  # noqa: E402
 
 
 WORKFLOW_DIR = Path(__file__).resolve().parent
 CLASSICAL_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis.yaml"
-DEEP_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis_deep.yaml"
 
 
 def _image_size_px(path: Path, channel_axis=None) -> list[int]:
-    import tifffile
+    """The (nx, ny) of a position, from its own metadata.
 
-    shape = tifffile.imread(path).shape
-    if len(shape) == 2:
-        ny, nx = shape
-    elif len(shape) == 3:
-        first, last = shape[0], shape[-1]
-        if channel_axis == 0:
-            _, ny, nx = shape
-        elif channel_axis in (-1, 2):
-            ny, nx, _ = shape
-        elif first == last:
-            raise SystemExit(
-                f"Cannot infer channel axis for image shape {shape}. "
-                "Pass --channel-axis 0 for (C,H,W) or -1 for (H,W,C)."
-            )
-        elif first < last:
-            _, ny, nx = shape
-        else:
-            ny, nx, _ = shape
-    else:
-        raise SystemExit(
-            f"Cannot infer 2D image size from shape {shape}. "
-            "Expected (H, W), (H, W, C), or (C, H, W)."
-        )
-    return [int(nx), int(ny)]
+    ``channel_axis`` is accepted and ignored: an image says what its axes
+    are, and this used to have to guess from the shape.
+    """
+    import sys
+
+    sys.path.insert(0, str(WORKFLOW_DIR / "steps"))
+    from detect_objects import load_plane
+
+    _, metadata = load_plane(path)
+    axes, shape = metadata["axes"], metadata["shape"]
+    return [int(shape[axes.index("x")]), int(shape[axes.index("y")])]
 
 
 def _parse_pair(text: str) -> list[float]:
@@ -94,10 +79,10 @@ def main():
         description="Run object-centered analysis on one image tile."
     )
     parser.add_argument("image_path", help="Path to a TIFF tile.")
-    parser.add_argument("--deep", action="store_true", help="Include DINOv2 embeddings.")
     parser.add_argument("--tile-id", default="R0,0,0")
     parser.add_argument("--stage-xy-um", type=_parse_pair, default=[0.0, 0.0])
-    parser.add_argument("--zwide-um", type=float, default=0.0)
+    parser.add_argument("--z-um", type=float, default=None,
+                        help="the height the tile was captured at; omitted is honest")
     parser.add_argument("--pixel-size-um", type=_parse_pair, default=[1.0, 1.0])
     parser.add_argument(
         "--image-to-stage",
@@ -122,16 +107,14 @@ def main():
     )
     parser.add_argument("--gpu", action="store_true", default=False)
     parser.add_argument("--output-dir", default=None)
-    parser.add_argument("--save-overview", default=None)
     args = parser.parse_args()
 
     image_path = Path(args.image_path)
-    yaml_path = DEEP_YAML if args.deep else CLASSICAL_YAML
     payload = {
         "image_path": str(image_path),
         "tile_id": _parse_tile_id(args.tile_id),
         "tile_stage_xy_um": args.stage_xy_um,
-        "tile_zwide_um": args.zwide_um,
+        "tile_z_um": args.z_um,
         "source_pixel_size_um": args.pixel_size_um,
         "source_image_size_px": _image_size_px(image_path, args.channel_axis),
         "image_to_stage": args.image_to_stage,
@@ -142,22 +125,8 @@ def main():
     if args.output_dir:
         payload["output_dir"] = args.output_dir
 
-    print(f"Pipeline:      {yaml_path}")
-    print(f"Image:         {image_path}")
-    print(f"Tile:          {payload['tile_id']}")
-    channels = payload["channels"] if payload["channels"] is not None else "auto"
-    print(f"Channels:      {channels}")
-    channel_axis = (
-        payload["channel_axis"]
-        if payload["channel_axis"] is not None
-        else "auto"
-    )
-    print(f"Channel axis:  {channel_axis}")
-    print(f"Deep features: {'yes' if args.deep else 'no'}")
-    print()
-
     with Engine() as engine:
-        engine.register("object_analysis", str(yaml_path))
+        engine.register("object_analysis", str(CLASSICAL_YAML))
         engine.submit("object_analysis", payload)
 
         while True:
@@ -171,18 +140,7 @@ def main():
             time.sleep(0.2)
 
     tile = results[0]["object_analysis"]
-    n_objects = tile["objects"]["n_objects"]
-    has_embeddings = "embeddings" in tile["objects"]
-    print("=" * 60)
-    print("  Result")
-    print("=" * 60)
-    print(f"  Objects detected: {n_objects}")
-    print(f"  Embeddings:       {'yes' if has_embeddings else 'no'}")
-
-    if args.save_overview:
-        path = save_overview(args.save_overview, {"tiles": [tile]})
-        print(f"  Overview saved:   {path}")
-    print()
+    print(f"Objects detected: {tile['objects']['n_objects']}")
 
 
 if __name__ == "__main__":
