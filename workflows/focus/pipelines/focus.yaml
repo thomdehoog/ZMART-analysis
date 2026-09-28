@@ -18,9 +18,22 @@ metadata:
   verbose: 1
   functions_dir: "../steps"
 
+# `metric` picks which sharpness measure decides the height. All four are
+# scored on every run, so the curves can be compared afterwards:
+#
+#   brenner      gradient; sharp peak on structured tissue, fooled by noise
+#   dct          frequency entropy; robust to brightness, broader peak
+#   vollath_f4   autocorrelation; best in dim, noisy fluorescence
+#   intensity    brightest `intensity_percentile` of pixels; confocal only,
+#                where the pinhole makes brightness peak at focus
+#
+# `skip_ends` is how many planes at each end of the sweep may not win, because
+# the ends of a drive carry edge artefacts that every sharpness metric rewards.
+
 focus:
   - score_focus:
-      metric: brenner
+      metric: brenner            # brenner | dct | vollath_f4 | intensity
+      intensity_percentile: 99   # only used by the intensity metric
       channel: 0
       level: 0
       t: 0

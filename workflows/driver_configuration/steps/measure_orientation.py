@@ -47,8 +47,13 @@ here is one that driver adopts unchanged.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
-import tifffile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _image_io import as_plane as _plane  # noqa: E402
 from skimage.registration import phase_cross_correlation
 
 METADATA = {
@@ -137,19 +142,6 @@ def nearest_orientation(matrix) -> tuple[tuple[int, bool], float]:
             best, best_residual = key, residual
     return best, best_residual
 
-
-def _plane(source, channel: int) -> np.ndarray:
-    """One 2-D plane, as floats. A stack hands over the channel asked for."""
-    if isinstance(source, np.ndarray):
-        array = source
-    else:
-        array = tifffile.imread(str(source))
-    array = np.asarray(array)
-    while array.ndim > 2:
-        index = channel if array.shape[0] > channel else 0
-        array = array[index]
-        channel = 0
-    return array.astype(np.float64)
 
 
 def overlap_agreement(reference: np.ndarray, moved: np.ndarray, dcol: float, drow: float) -> float:

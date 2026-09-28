@@ -37,8 +37,14 @@ Publishes under ``pipeline_data["measure_objective_pair"]``::
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import numpy as np
-import tifffile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _image_io import as_plane as _plane  # noqa: E402
+from _focus_metrics import _brenner  # noqa: E402
 from scipy.ndimage import zoom
 from skimage.registration import phase_cross_correlation
 
@@ -57,20 +63,6 @@ METADATA = {
 AGREEMENT_MIN = 0.5
 
 
-def _plane(source, channel: int = 0) -> np.ndarray:
-    array = source if isinstance(source, np.ndarray) else tifffile.imread(str(source))
-    array = np.asarray(array)
-    while array.ndim > 2:
-        array = array[channel if array.shape[0] > channel else 0]
-        channel = 0
-    return array.astype(np.float64)
-
-
-def _brenner(plane: np.ndarray) -> float:
-    """Mean squared difference between pixels two apart, along both axes."""
-    across = plane[:, 2:] - plane[:, :-2]
-    down = plane[2:, :] - plane[:-2, :]
-    return float(np.mean(across * across) + np.mean(down * down))
 
 
 def sharp_height_um(stack, z_um) -> dict:

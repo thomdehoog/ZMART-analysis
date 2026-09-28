@@ -61,6 +61,69 @@ def _scored(stack_path, **params):
     return run(data, {}, **params)["score_focus"]
 
 
+def _cell_like_stack(path, rng_seed=0):
+    """A 9-plane stack of bright blobs on a dark background, sharpest at plane 4.
+
+    The noise stack above suits the gradient and frequency metrics, but pure
+    white noise has no neighbour correlation, so Vollath F4 rightly scores it
+    as unsharp at every plane. Cells are not noise: this stack is what a
+    fluorescence field looks like, so every metric must agree on it.
+    """
+    from scipy import ndimage
+
+    rng = np.random.default_rng(rng_seed)
+    yy, xx = np.mgrid[0:96, 0:96]
+    image = np.zeros((96, 96))
+    for cy, cx in rng.integers(8, 88, size=(25, 2)):
+        image += 3000 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 2.0**2))
+    planes = [
+        rng.poisson(ndimage.gaussian_filter(image, 0.01 + 1.2 * abs(z - SHARP_AT)) + 50)
+        for z in range(N_PLANES)
+    ]
+    tifffile.imwrite(path, np.stack(planes).astype(np.uint16), metadata={"axes": "ZYX"})
+    return path
+
+
+@pytest.fixture
+def cell_stack_path(tmp_path):
+    return _cell_like_stack(tmp_path / "cells.tiff")
+
+
+ALL_METRICS = ("brenner", "dct", "vollath_f4", "intensity")
+
+
+def test_all_four_metrics_are_scored_on_every_run(stack_path):
+    assert set(_scored(stack_path)["metrics"]) == set(ALL_METRICS)
+
+
+@pytest.mark.parametrize("metric", ALL_METRICS)
+def test_every_metric_peaks_on_the_sharp_plane_of_a_cell_like_stack(cell_stack_path, metric):
+    result = _scored(cell_stack_path, metric=metric)
+    assert result["metric"] == metric
+    assert int(np.argmax(result["metrics"][metric]["scores"])) == SHARP_AT
+    assert result["peak_index"] == pytest.approx(SHARP_AT, abs=0.3)
+
+
+def test_vollath_f4_sees_no_focus_in_pure_noise(stack_path):
+    """White noise is uncorrelated with its neighbour, so F4 stays near zero
+    on the sharp plane and the blurred planes score higher. This is the
+    metric working as designed, and why the cell-like stack exists."""
+    f4 = _scored(stack_path)["metrics"]["vollath_f4"]["scores"]
+    assert int(np.argmax(f4)) != SHARP_AT
+
+
+def test_intensity_percentile_is_recorded_and_checked(cell_stack_path):
+    result = _scored(cell_stack_path, metric="intensity", intensity_percentile=95)
+    assert result["settings"]["intensity_percentile"] == 95.0
+    with pytest.raises(ValueError, match="intensity_percentile"):
+        _scored(cell_stack_path, intensity_percentile=100)
+
+
+def test_an_unknown_metric_is_refused(stack_path):
+    with pytest.raises(ValueError, match="metric must be one of"):
+        _scored(stack_path, metric="laplacian")
+
+
 def test_both_metrics_peak_on_the_sharp_plane(stack_path):
     result = _scored(stack_path)
     assert result["n_planes"] == N_PLANES
@@ -187,9 +250,42 @@ def test_skipping_nothing_lets_the_artefact_win(stack_with_a_bright_edge):
     assert result["considered"] == (0, N_PLANES - 1)
 
 
-def test_skipping_more_than_the_stack_holds_is_refused(stack_path):
-    with pytest.raises(ValueError, match="leaves no plane to choose from"):
-        _scored(stack_path, skip_ends=5)
+def test_skipping_more_than_the_stack_holds_is_clamped_and_reported(stack_path):
+    """A short stack is scored with what it can spare rather than refused,
+    and the record says how many planes were really skipped."""
+    result = _scored(stack_path, skip_ends=5)
+    assert result["settings"]["skip_ends"] == 5
+    assert result["settings"]["skip_ends_applied"] == 4
+    assert result["considered"] == (4, 4)
+    assert result["peak_index"] == pytest.approx(SHARP_AT, abs=0.3)
+
+
+def test_a_constant_background_offset_changes_no_metrics_verdict(tmp_path):
+    """A brighter background is not sharper. Every metric but intensity must
+    give the same ranking with 2000 counts added to every pixel, and the
+    entropy metric the same score, since it leaves the mean out."""
+    from score_focus import run as score
+
+    dark = _cell_like_stack(tmp_path / "dark.tiff")
+    planes = tifffile.imread(dark)
+    tifffile.imwrite(tmp_path / "bright.tiff", (planes + 2000).astype(np.uint16), metadata={"axes": "ZYX"})
+    a = _scored(dark)["metrics"]
+    b = _scored(tmp_path / "bright.tiff")["metrics"]
+    for name in ("brenner", "dct", "vollath_f4"):
+        assert int(np.argmax(a[name]["scores"])) == int(np.argmax(b[name]["scores"])) == SHARP_AT
+    assert a["dct"]["scores"] == pytest.approx(b["dct"]["scores"], rel=1e-6)
+    assert a["brenner"]["scores"] == pytest.approx(b["brenner"]["scores"], rel=1e-6)
+
+
+def test_a_true_maximum_on_the_first_allowed_plane_is_found(tmp_path):
+    """The sharp plane sits exactly at ``skip_ends``. It is bracketed by
+    lower neighbours, so it is a peak and gets a height, even though the
+    refined index may drift a little into the skipped planes."""
+    stack = _write_stack(tmp_path / "early.tiff", lambda z: abs(z - 2))
+    result = _scored(stack, skip_ends=2)
+    assert result["found"] is True
+    assert result["peak_index"] == pytest.approx(2, abs=0.3)
+    assert result["peak_z_um"] is None  # no heights were given, so a plane index only
 
 
 @pytest.mark.pooch
@@ -235,7 +331,10 @@ def test_an_artefact_frame_would_beat_real_focus_on_brenner(tmp_path):
     An unsettled first plane is not in focus on anything, but its edges are
     harder than tissue. At the same dynamic range as the field it replaces it
     still out-scores true focus on brenner by a wide margin, so nothing but
-    excluding it keeps it from being chosen. DCT entropy is not fooled.
+    excluding it keeps it from being chosen. The spectral entropy is fooled
+    too, since white noise has the flattest spectrum of all; no sharpness
+    measure tells noise from detail, which is why the ends are skipped for
+    every metric alike.
     """
     ndimage = pytest.importorskip("scipy.ndimage")
     data = pytest.importorskip("skimage.data")
@@ -257,7 +356,8 @@ def test_an_artefact_frame_would_beat_real_focus_on_brenner(tmp_path):
     dct = np.asarray(result["metrics"]["dct"]["scores"])
     lo, hi = result["considered"]
     assert brenner[0] > 10 * brenner[lo:hi + 1].max()
-    assert dct[0] < dct[lo:hi + 1].max()
+    assert dct[0] > dct[lo:hi + 1].max()
+    assert int(np.argmax(dct[lo:hi + 1])) + lo == int(np.argmax(brenner[lo:hi + 1])) + lo
     assert result["peak_z_um"] == pytest.approx(108.0, abs=0.25)
 
 
@@ -291,7 +391,7 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
     assert found["n_planes"] == 9
     assert tuple(found["considered"]) == (2, 6)
     assert found["peak_z_um"] == pytest.approx(108.0)
-    assert set(found["metrics"]) == {"brenner", "dct"}
+    assert set(found["metrics"]) == set(ALL_METRICS)
 
 
 def test_a_channel_is_taken_from_a_four_axis_stack(tmp_path):
