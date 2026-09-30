@@ -22,6 +22,38 @@ SHARP_AT = 4
 N_PLANES = 9
 
 
+def _mitosis_field() -> np.ndarray:
+    """A real microscopy field from scikit-image's sample data, as float64.
+
+    The image is downloaded on first use and cached. Without a network the
+    test that needs it is skipped, not failed: a missing download says
+    nothing about the focus step.
+    """
+    data = pytest.importorskip("skimage.data")
+    try:
+        return data.human_mitosis().astype(np.float64)
+    except Exception as exc:
+        pytest.skip(f"skimage sample image human_mitosis unavailable: {exc}")
+
+
+def _require_focus_environment() -> None:
+    """Skip unless conda and the ZMART--focus--main environment both exist.
+
+    The engine runs score_focus inside that environment, which
+    environments/setup_env.py creates. Without it the test is skipped, not
+    failed.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "engine"))
+    from conda_utils import env_exists, get_conda_info
+
+    try:
+        info = get_conda_info()
+    except Exception:
+        pytest.skip("conda is not installed")
+    if not env_exists(info, "ZMART--focus--main"):
+        pytest.skip("ZMART--focus--main not found; run focus/environments/setup_env.py")
+
+
 def _blurred(image: np.ndarray, radius: int) -> np.ndarray:
     """A cheap separable box blur, so the test needs no scipy.ndimage."""
     out = image.astype(np.float64)
@@ -264,8 +296,6 @@ def test_a_constant_background_offset_changes_no_metrics_verdict(tmp_path):
     """A brighter background is not sharper. Every metric but intensity must
     give the same ranking with 2000 counts added to every pixel, and the
     entropy metric the same score, since it leaves the mean out."""
-    from score_focus import run as score
-
     dark = _cell_like_stack(tmp_path / "dark.tiff")
     planes = tifffile.imread(dark)
     tifffile.imwrite(tmp_path / "bright.tiff", (planes + 2000).astype(np.uint16), metadata={"axes": "ZYX"})
@@ -299,9 +329,7 @@ def test_real_pixels_find_focus_between_planes(tmp_path, true_focus_um):
     which is the only case where the parabola earns its place.
     """
     ndimage = pytest.importorskip("scipy.ndimage")
-    data = pytest.importorskip("skimage.data")
-
-    image = data.human_mitosis().astype(np.float64)
+    image = _mitosis_field()
     rng = np.random.default_rng(0)
     z_um = [100.0 + 2.0 * i for i in range(15)]
     planes = [
@@ -337,9 +365,7 @@ def test_an_artefact_frame_would_beat_real_focus_on_brenner(tmp_path):
     every metric alike.
     """
     ndimage = pytest.importorskip("scipy.ndimage")
-    data = pytest.importorskip("skimage.data")
-
-    image = data.human_mitosis().astype(np.float64)
+    image = _mitosis_field()
     rng = np.random.default_rng(0)
     z_um = [100.0 + 2.0 * i for i in range(15)]
     planes = [ndimage.gaussian_filter(image, 0.35 * abs(z - 108.0)) for z in z_um]
@@ -371,6 +397,7 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
     survive the trip back from a worker subprocess. This is the one that says
     the YAML is usable.
     """
+    _require_focus_environment()
     stack = np.stack([
         np.full((32, 32), 100, dtype=np.uint16) if z != 4
         else np.random.default_rng(0).integers(0, 4096, size=(32, 32)).astype(np.uint16)

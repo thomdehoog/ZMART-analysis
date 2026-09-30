@@ -55,7 +55,7 @@ from engine import (
     WorkerTimeoutError, StepExecutionError, ScopeError,
 )
 from engine.engine import get_step_settings
-from engine.pipeline import split_phases, parse_yaml, StepConfig, Phase
+from engine.pipeline import split_phases
 
 # All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
@@ -726,8 +726,9 @@ class TestPool(unittest.TestCase):
         path = _temp_step("""
             import time
             def run(pd, state, **p):
-                time.sleep(0.3)
-                pd["done"] = True
+                pd["start"] = time.time()
+                time.sleep(1.5)
+                pd["end"] = time.time()
                 return pd
         """)
         pool = WorkerPool()
@@ -737,17 +738,21 @@ class TestPool(unittest.TestCase):
             r = pool.execute(None, path, {}, {}, max_workers=4, timeout=15)
             results.append(r)
 
-        t0 = time.monotonic()
         threads = [threading.Thread(target=run_one) for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=30)
-        elapsed = time.monotonic() - t0
         pool.shutdown_all()
 
         self.assertEqual(len(results), 4)
-        self.assertLess(elapsed, 1.0,
+        # All four were running at one moment: the last to start began
+        # before the first to finish ended. Measured from inside the steps,
+        # so the time it takes to start a worker process does not count;
+        # a wall-clock limit failed on slow two-core machines.
+        last_start = max(r["start"] for r in results)
+        first_end = min(r["end"] for r in results)
+        self.assertLess(last_start, first_end,
                         "max_workers=4 should allow parallel execution")
 
 
