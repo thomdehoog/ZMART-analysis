@@ -1,30 +1,86 @@
 # Smart Analysis
 
-A Python pipeline engine for scientific image analysis workflows. Define multi-step processing pipelines in YAML, and let the engine handle execution, data flow, and environment isolation.
+Smart Analysis is the analysis part of **ZMART**, ZMB's Microscopy-Agnostic
+Research Toolkit for smart microscopy, developed at the Center for Microscopy
+and Image Analysis (ZMB), University of Zurich. It is a small pipeline engine
+for scientific image analysis: you describe a multi-step analysis in a YAML
+file, and the engine runs the steps in order, passes the data between them, and
+gives each step the Python environment it needs.
 
 ## The Problem
 
-Scientific analysis pipelines often combine tools with conflicting dependencies. A typical workflow might need scikit-image for preprocessing, PyTorch for deep learning, and specialized packages for feature extraction. These tools ship native libraries that can interfere with each other, leading to crashes that are hard to diagnose and harder to fix.
+Scientific analysis pipelines combine tools with conflicting dependencies. A
+typical workflow needs scikit-image for preprocessing, PyTorch for deep
+learning, and specialised packages for feature extraction. These tools ship
+native libraries that interfere with each other, leading to crashes that are
+hard to diagnose and harder to fix.
 
-The common workarounds are either to find one environment that satisfies all dependencies, a time-consuming trial-and-error process that is not always possible, or to run each tool in a separate script, save intermediate results to disk, and stitch everything together manually. Both approaches are fragile, hard to reproduce, and painful to modify.
+The usual workarounds are either to hunt for one environment that satisfies
+every dependency, a trial-and-error process that is not always possible, or to
+run each tool in its own script, save intermediate results to disk, and stitch
+everything together by hand. Both are fragile, hard to reproduce, and painful to
+change. For smart microscopy, where the analysis has to run reliably between
+two acquisitions, that is not good enough.
 
 ## The Solution
 
-Smart Analysis solves this with three ideas:
+Smart Analysis separates the analysis from the environment it runs in with
+three ideas:
 
-1. **YAML defined pipelines.** Each step is a simple Python function. The pipeline order and parameters are defined in YAML, not code. Changing your workflow means editing a config file, not rewriting a script.
+1. **Pipelines defined in YAML.** Each step is a plain Python function. The
+   order of the steps and their parameters live in a YAML file, not in code.
+   Changing your workflow means editing a config file, not rewriting a script.
 
-2. **Automatic environment switching.** Each step can declare which conda environment it needs. The engine handles subprocess spawning, data serialization, and result collection transparently.
+2. **Automatic environment switching.** Each step can declare which conda
+   environment it needs. The engine starts the subprocess, hands the data
+   over, and collects the result. You never see any of that.
 
-3. **Shared data dictionary.** A single `pipeline_data` dictionary flows through every step. Each step reads what it needs from previous steps and adds its own results. No manual file I/O between steps.
+3. **One shared data dictionary.** A single `pipeline_data` dictionary flows
+   through every step. Each step reads what it needs from the steps before it
+   and adds its own results. There is no manual file handling between steps.
+
+### The vocabulary
+
+Everything you write and everything you call:
+
+```python
+# A step: one Python file with a METADATA dict and a run function
+METADATA = {"description": "...", "version": "1.0", "environment": "local"}
+
+def run(pipeline_data: dict, **params) -> dict:
+    ...                          # read earlier results, add your own
+    return pipeline_data
+```
+
+```yaml
+# A pipeline: the steps in order, with their parameters
+metadata:
+  functions_dir: "../steps"
+
+my-workflow:
+  - preprocess: {sigma: 1.0}
+  - segment:    {diameter: null}
+```
+
+```python
+# Running it
+from engine import run_pipeline
+
+result = run_pipeline(yaml_path, label, input_data)
+result["segment"]                # the output of any step, by its name
+```
+
+That is the whole surface: a step, a pipeline, and one call to run it.
 
 ## How It Works
 
-You define your workflow in YAML. The engine reads it and executes each step in order, passing a shared data dictionary between them.
+You define your workflow in YAML. The engine reads it and executes each step in
+order, passing the shared data dictionary between them. Where a step runs
+depends on what it declares.
 
 ### Mode 1: All steps local (same process)
 
-All steps share the same process and memory. Fast, no serialization overhead.
+All steps share the same process and memory. Fast, with no serialisation.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
@@ -37,7 +93,9 @@ All steps share the same process and memory. Fast, no serialization overhead.
 
 ### Mode 2: Pipeline level environment (one subprocess)
 
-All steps run together in a single subprocess, in a different conda env than the orchestrator. Useful when the entire workflow needs packages not available in the orchestrator env.
+All steps run together in a single subprocess, in a different conda
+environment than the one you started from. Useful when the whole workflow
+needs packages you do not have in your main environment.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
@@ -55,7 +113,9 @@ All steps run together in a single subprocess, in a different conda env than the
 
 ### Mode 3: Step level environment (per step subprocess)
 
-Individual steps get their own subprocess. The engine serializes pipeline_data between processes automatically. Use when a specific step has dependencies that conflict with other steps.
+One step gets its own subprocess. The engine serialises `pipeline_data` in and
+out automatically. Use this when a single step has dependencies that conflict
+with the others.
 
 ```
   ┌────────────────────────────────────────────────────────────────┐
@@ -72,7 +132,8 @@ Individual steps get their own subprocess. The engine serializes pipeline_data b
 
 ### Mode 4: Mixed (nested environments)
 
-The pipeline runs in one env, but individual steps can switch to yet another env. The engine handles the nesting.
+The pipeline runs in one environment, and a step inside it switches to yet
+another. The engine handles the nesting.
 
 ```
   ┌──────────────────────────────────────────────────────────────┐
@@ -92,7 +153,10 @@ The pipeline runs in one env, but individual steps can switch to yet another env
   └──────────────────────────────────────────────────────────────┘
 ```
 
-### YAML examples
+### Choosing a mode
+
+The mode is not a setting you pick; it follows from where you put the
+`environment` key.
 
 ```yaml
 # Mode 1: no environment key, everything runs locally
@@ -128,16 +192,34 @@ METADATA = {
 }
 ```
 
+### What is no longer your problem
+
+Because the engine is this simple, a whole class of problems stops being yours
+as soon as you write against it:
+
+- **In a step**, you never think about other steps' dependencies. You import
+  what you need inside `run`, read from `pipeline_data`, and add your result.
+- **In a pipeline**, you never write glue code. The order and the parameters
+  are the YAML file, and swapping a step or a parameter is a one-line edit.
+- **Between steps**, you never save and reload intermediate files by hand. The
+  engine moves `pipeline_data` across process boundaries for you.
+
 ## Quick Start
+
+### Install
 
 ```bash
 git clone https://github.com/thomdehoog/smart-analysis.git
 cd smart-analysis
 ```
 
+The engine itself needs Python 3.10 or newer and PyYAML. Conda is needed only
+when a step or a pipeline asks for its own environment.
+
 ### Writing a step
 
-Every step is a Python file with two things: a `METADATA` dict and a `run` function.
+Every step is a Python file with two things: a `METADATA` dict and a `run`
+function.
 
 ```python
 # steps/my_step.py
@@ -207,11 +289,12 @@ result = run_pipeline(
 )
 ```
 
-## Environment switching
+`result` is the final `pipeline_data`: the run's `metadata`, the original
+`input`, and one entry per step under the step's name.
 
-This is the core feature. Scientific Python has a dependency conflict problem. Packages like PyTorch, TensorFlow, and scipy ship native libraries that can interfere with each other. The engine isolates steps in separate conda environments when needed.
+### Setting up environments
 
-### Environment naming convention
+Environments follow one naming convention, so a name tells you what it is for:
 
 ```
 SMART--{workflow}--{step}
@@ -221,16 +304,16 @@ SMART--rare_event_selection--segment    isolated env for a specific step
 SMART--basic_test--env_a                test environment A
 ```
 
-### Environment setup
-
-Each workflow includes setup and cleanup scripts.
+Each workflow includes a setup and a cleanup script:
 
 ```bash
 python workflows/rare_event_selection/environments/setup_env.py
 python workflows/rare_event_selection/environments/clean_env.py
 ```
 
-The setup script auto detects your GPU (NVIDIA CUDA, Apple MPS, or CPU), picks the right PyTorch build, installs all packages via pip (avoiding conda/pip DLL conflicts), and runs diagnostics to verify everything works.
+The setup script detects your GPU (NVIDIA CUDA, Apple MPS, or CPU), picks the
+right PyTorch build, installs all packages through pip to avoid conda/pip
+library conflicts, and runs diagnostics to check that everything works.
 
 ## Project structure
 
@@ -268,29 +351,34 @@ smart-analysis/
 
 ## Testing
 
-The test suite sets up environments, runs all tests, and cleans up automatically.
+The test suite sets up its environments, runs every test, and cleans up
+afterwards.
 
 ```bash
 python workflows/basic_test/run_all.py
 ```
 
-The test suite covers:
+It covers local execution, data flow between steps, step level and pipeline
+level environment switching, nested switching, data survival across
+serialisation, pickle transfer, error handling, and missing-step detection.
 
-- Local step execution
-- Data flow between steps
-- Step level environment switching
-- Pipeline level environment switching
-- Nested environment switching
-- Data survival across serialization
-- Pickle transfer mode
-- Error handling
-- Missing step detection
+## Status
+
+This is a release candidate. The step format, the YAML layout and
+`run_pipeline` are stable in spirit, and small changes may happen before 1.0.
+If you build a workflow on it, please open an issue so we can keep the contract
+honest together.
 
 ## Requirements
 
 - Python 3.10+
-- PyYAML (auto installed by test suite if missing)
-- Conda (for environment switching)
+- PyYAML (installed automatically by the test suite if missing)
+- Conda, only for environment switching
+
+## Author
+
+Thom de Hoog, Center for Microscopy and Image Analysis (ZMB), University of
+Zurich (thom.dehoog@zmb.uzh.ch, thomdehoog@gmail.com).
 
 ## License
 
