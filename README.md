@@ -180,6 +180,7 @@ my-workflow:
 # Mode 2: pipeline level environment
 metadata:
   environment: "SMART--my_workflow--main"
+  data_transfer: "pickle"     # results may hold images and arrays
   functions_dir: "../steps"
 
 my-workflow:
@@ -196,6 +197,14 @@ METADATA = {
     "data_transfer": "file_paths",  # or "pickle" for complex objects
 }
 ```
+
+When a step or a whole pipeline runs in another environment, its result has
+to travel back. `data_transfer: "file_paths"`, the default, sends it as JSON,
+which carries numbers, strings, lists and dictionaries, so the step should
+store file paths rather than the data itself. `data_transfer: "pickle"` sends
+it through a pickle file and carries anything Python can hold, including
+images and NumPy arrays. If a result cannot travel as JSON, the engine stops
+with a message that says so and names the fix.
 
 ### What is no longer your problem
 
@@ -334,10 +343,10 @@ smart-analysis/
             environments/
                 setup_env.py
                 clean_env.py
-            pipelines/         # 9 test pipelines
-            steps/             # 8 test steps
-            test_engine.py     # the 9 pipelines as pytest tests
-            run_all.py         # the same 9, as a printed report
+            pipelines/         # 11 test pipelines
+            steps/             # 9 test steps
+            test_engine.py     # the 11 pipelines as pytest tests
+            run_all.py         # the same 11, as a printed report
 
         rare_event_selection/  # example: microscopy cell analysis
             environments/
@@ -345,6 +354,7 @@ smart-analysis/
                 clean_env.py
             pipelines/
             steps/
+            tests/             # the empty-field case, no conda needed
             run_pipeline.py
 
     docs/
@@ -365,13 +375,16 @@ pip install pytest
 pytest
 ```
 
-It covers the engine's helpers (conda discovery, GPU detection) and nine
-pipelines run through the real engine: local execution, data flow between
+It covers the engine's helpers (conda discovery, GPU detection), eleven
+pipelines run through the real engine (local execution, data flow between
 steps, step level and pipeline level environment switching, nested switching,
-data survival across serialisation, pickle transfer, error handling, and
-missing-step detection. The test environments are created before the first
-test that needs them and removed afterwards; set `SMART_KEEP_ENVS=1` to keep
-them between runs.
+data survival across serialisation, pickle transfer at step and pipeline
+level, error handling, and missing-step detection), the public import, and
+the example workflow's handling of a field with no cells. Each pipeline test
+checks what the steps reported: that they ran, in which process, and in which
+environment. The test environments are created before the first test that
+needs them; afterwards the suite removes only the environments it created
+itself. Set `SMART_KEEP_ENVS=1` to keep those between runs.
 
 Without conda, the tests that need it are skipped rather than failed, so the
 suite still gives an honest result. The older runner,

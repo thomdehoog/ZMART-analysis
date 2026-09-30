@@ -9,6 +9,9 @@ metadata:
   verbose: 3
   functions_dir: "../steps"
   environment: "SMART--rare_event_selection--main"
+  # The steps keep the image, the masks and the measurements in
+  # pipeline_data, so the result comes back from the environment by pickle.
+  data_transfer: "pickle"
 
 rare-event-selection:
   - preprocess:

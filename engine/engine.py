@@ -30,7 +30,6 @@ import sys
 import yaml
 import importlib.util
 import subprocess
-from conda_utils import CONDA_CMD
 import json
 import pickle
 import tempfile
@@ -38,6 +37,16 @@ import types
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any
+
+# The engine is normally imported as a package (``from engine import
+# run_pipeline``), where the relative import is the right one. The scripts
+# in workflows/ and the subprocesses the engine starts put engine/ itself on
+# sys.path and import this file as a top-level module; there the relative
+# import has no parent package, so we fall back to the absolute one.
+try:
+    from .conda_utils import CONDA_CMD
+except ImportError:
+    from conda_utils import CONDA_CMD
 
 # Resolved once at import time. Used wherever the engine needs to
 # reference its own location (subprocess scripts, path setup, etc.).
@@ -162,8 +171,16 @@ params = json.loads({repr(json.dumps(params))})
 result = module.run(pipeline_data, **params)
 
 # Output
+try:
+    encoded = json.dumps(result)
+except TypeError as exc:
+    raise TypeError(
+        "the step's result contains data that JSON cannot carry between "
+        "processes (" + str(exc) + "). Set data_transfer to 'pickle' in the "
+        "step's METADATA, or store file paths instead of the data itself."
+    ) from None
 print("__RESULT_START__")
-print(json.dumps(result))
+print(encoded)
 print("__RESULT_END__")
 '''
     
@@ -389,7 +406,8 @@ def run_pipeline(yaml_path: str, label: str, input_data: Optional[Dict] = None) 
         engine_log(f"[engine] Re-running entire pipeline in '{pipeline_env}'...")
         
         return _run_pipeline_in_environment(
-            yaml_path, label, input_data, pipeline_env
+            yaml_path, label, input_data, pipeline_env,
+            data_transfer=yaml_metadata.get('data_transfer', 'file_paths'),
         )
     
     # Initialize pipeline_data with new structure
@@ -403,7 +421,7 @@ def run_pipeline(yaml_path: str, label: str, input_data: Optional[Dict] = None) 
             "verbose": verbose,
             # Include other YAML metadata fields
             **{k: v for k, v in yaml_metadata.items() 
-               if k not in ('verbose', 'functions_dir', 'environment')}
+               if k not in ('verbose', 'functions_dir', 'environment', 'data_transfer')}
         },
         "input": input_data or {}
     }
@@ -453,13 +471,22 @@ def run_pipeline(yaml_path: str, label: str, input_data: Optional[Dict] = None) 
 
 def _run_pipeline_in_environment(yaml_path: Path, label: str, 
                                   input_data: Optional[Dict], 
-                                  environment: str) -> dict:
+                                  environment: str,
+                                  data_transfer: str = "file_paths") -> dict:
     """
     Re-run the entire pipeline in a different Conda environment.
     
     This is called when the YAML metadata specifies a pipeline-level environment
-    that differs from the current environment.
+    that differs from the current environment. The result has to travel back
+    from that environment to this one. With ``data_transfer: "file_paths"``
+    (the default) it travels as JSON, which carries numbers, strings, lists and
+    dictionaries but not images or arrays; a pipeline whose steps keep such
+    data in ``pipeline_data`` sets ``data_transfer: "pickle"`` in its YAML
+    metadata, and the result travels through a pickle file instead.
     """
+    if data_transfer == "pickle":
+        return _run_pipeline_in_environment_pickle(yaml_path, label, input_data, environment)
+
     # Serialize input_data for the subprocess
     input_json = json.dumps(input_data) if input_data else 'None'
     
@@ -480,12 +507,62 @@ result = run_pipeline(
     input_data=input_data
 )
 
+try:
+    encoded = json.dumps(result)
+except TypeError as exc:
+    raise TypeError(
+        "the pipeline's result contains data that JSON cannot carry between "
+        "environments (" + str(exc) + "). Set data_transfer: 'pickle' in the "
+        "pipeline's YAML metadata, or store file paths instead of the data itself."
+    ) from None
 print("__RESULT_START__")
-print(json.dumps(result))
+print(encoded)
 print("__RESULT_END__")
 '''
     
     return _execute_script(script, environment, timeout=600)
+
+
+def _run_pipeline_in_environment_pickle(yaml_path: Path, label: str,
+                                         input_data: Optional[Dict],
+                                         environment: str) -> dict:
+    """Re-run the pipeline in another environment, returning the result by pickle."""
+    with tempfile.NamedTemporaryFile(mode='wb', suffix='.pkl', delete=False) as f:
+        pickle.dump({'input_data': input_data}, f)
+        data_file = f.name
+    result_file = tempfile.mktemp(suffix='.pkl')
+
+    script = f'''
+import sys
+import pickle
+
+sys.path.insert(0, {repr(ENGINE_DIR)})
+
+from engine import run_pipeline
+
+with open({repr(data_file)}, 'rb') as f:
+    input_data = pickle.load(f)['input_data']
+
+result = run_pipeline(
+    yaml_path={repr(str(yaml_path))},
+    label={repr(label)},
+    input_data=input_data
+)
+
+with open({repr(result_file)}, 'wb') as f:
+    pickle.dump(result, f)
+
+print("__PICKLE_DONE__")
+'''
+    try:
+        _execute_script(script, environment, expect_json=False, timeout=600)
+        with open(result_file, 'rb') as f:
+            return pickle.load(f)
+    finally:
+        if os.path.exists(data_file):
+            os.unlink(data_file)
+        if os.path.exists(result_file):
+            os.unlink(result_file)
 
 
 if __name__ == "__main__":
