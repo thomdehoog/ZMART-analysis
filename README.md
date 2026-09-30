@@ -14,9 +14,9 @@ gives each step the Python environment it needs.
 
 ## The Problem
 
-An analysis for smart microscopy has to run reliably between two
-acquisitions, on whatever image just came off the microscope. Three things
-get in the way:
+An analysis for smart microscopy has to run on whatever image just came off
+the microscope, decide something, and hand the answer back before the next
+acquisition. Three things get in the way:
 
 1. **Conflicting dependencies.** A typical workflow needs scikit-image for
    preprocessing, PyTorch for deep learning, and specialised packages for
@@ -24,15 +24,16 @@ get in the way:
    each other, and finding one environment that satisfies all of them is
    trial and error that does not always end.
 
-2. **The workflow lives inside a script.** The order of the steps and their
-   parameters are buried in code, so changing one setting means editing and
-   re-reading the whole script, and nobody else can see at a glance what the
-   analysis does.
+2. **On-the-fly analysis across different microscopes.** The same analysis
+   has to run between acquisitions on a confocal, a light-sheet or a
+   widefield system, each with its own computer and its own installed
+   software. An analysis written for one machine, in one script, does not
+   travel to the next.
 
-3. **Hand-stitched intermediate files.** The usual escape from the first
-   problem is to run each tool in its own script, save the results to disk,
-   and load them again in the next one. Every hand-off is a place for a
-   mismatch, and the result is hard to reproduce and painful to change.
+3. **Reproducibility.** When steps are run by hand, with intermediate files
+   saved and reloaded along the way, it is hard to say afterwards exactly
+   which steps ran, with which parameters, in which environment. The result
+   cannot be trusted, and cannot be repeated.
 
 ## The Solution
 
