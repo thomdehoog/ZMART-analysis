@@ -4,62 +4,23 @@
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-ZMART Analysis runs image-analysis pipelines while a microscope is still
-acquiring, fast enough for the results to decide what to image next. It is
-the analysis half of ZMART, the microscopy toolkit of the Center for
-Microscopy and Image Analysis (ZMB), University of Zurich; the other half,
-[ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy), drives
-the microscope.
+ZMART Analysis is the analysis engine of ZMART, ZMB's Microscopy-Agnostic
+Research Toolkit, developed at the Center for Microscopy and Image Analysis
+(ZMB), University of Zurich. It analyses images while the microscope is
+still acquiring them, and its results decide what the experiment images
+next. Its partner, [ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy),
+drives the microscope.
 
 ## The problems it solves
 
-1. **Reproducible, shareable analysis.** A pipeline is a YAML recipe that
-   names every step and every parameter. Sharing the recipe shares exactly
-   what was done, and every result records the environment, the Python
-   version and the package versions each step ran with.
-2. **Tools that cannot share an environment.** Cellpose pins one torch,
-   another model pins another, and neither agrees with the plotting
-   library. Each step file names the conda environment it needs, so a tool
-   anyone brings to the facility becomes a step without breaking the
-   others. Steps that name none simply run in the environment you started
-   from.
-3. **Analysis fast enough for live acquisition.** Each environment gets a
-   worker process that stays alive between jobs, with its model already
-   loaded, so a tile is analysed the moment it lands instead of waiting for
-   a fresh start. The recipe sets how many workers a step may use in
-   parallel: one for a GPU model, many for CPU work.
-4. **Analysis over a group, a compartment, a carrier.** Data is submitted
-   while it is acquired. A step can be scoped so that it runs once a whole
-   compartment is done, on everything collected for it, and a later step
-   once the whole carrier is done. Per-object measurements, then a
-   population per compartment, then the compartments of a carrier
-   compared.
-
-## What it does not do
-
-- It does not move the microscope or read the camera. ZMART Microscopy does
-  that and calls this.
-- It is not a cluster scheduler or a queue service. It runs on the
-  acquisition PC, or one machine beside it.
-- It does not store results. Steps write files next to the data; the
-  engine keeps nothing once you have collected a result.
-- It does not run untrusted code. Step files are Python written by the
-  workflow author and run with that author's rights.
-
-## The workflows that ship
-
-| Workflow | What it answers | Environment |
-|---|---|---|
-| `focus/` | Where in a z-stack the sample is sharp. Four sharpness measures are scored on every stack; the recipe chooses which one decides. | `ZMART--focus--main` |
-| `object_analysis/` | Which objects are in an image, and their size, shape, intensity and texture, as one table. Cellpose for the robust path, a watershed detector for the fast one. The scoped recipe adds a population per compartment and a comparison of the compartments per carrier. | `ZMART--object_analysis--cellpose`, `--classical` |
-| `population/` | A two-axis picture of a whole population, by principal components or UMAP, with the explained variance so the picture can be read. | `ZMART--population--main` |
-| `driver_configuration/` | How the camera's pixels map onto the stage, and where two objectives look relative to each other, measured from images. | `ZMART--driver_configuration--main` |
-
-Each workflow folder holds `pipelines/` (the recipes), `steps/` (one Python
-file per step), `tests/`, and `environments/setup_env.py`, which creates the
-conda environment the steps name. The image reader every step shares is
-`workflows/_image_io.py`; the sharpness measures are in
-`workflows/_focus_metrics.py`.
+1. **Reproducibility.** An analysis is written down as a recipe that
+   anyone can read, share and run again.
+2. **Compatibility.** Tools that need conflicting software can still be
+   used together in one analysis.
+3. **Real-time analysis.** Results arrive while the microscope is still
+   working, fast enough to act on.
+4. **Scope.** Some questions are about one tile, others about a whole
+   compartment or carrier; each is answered as soon as its data is complete.
 
 ## Install
 
@@ -69,145 +30,112 @@ cd ZMART-analysis
 conda create -n zmart-analysis python=3.12 -y
 conda activate zmart-analysis
 python -m pip install -e ".[test]"
-python workflows/focus/environments/setup_env.py        # one per workflow you use
-pytest -m "not cellpose and not conda_env and not pooch"
+python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
-Python 3.10 or newer, and conda, because that is how a step gets its own
-environment.
+Python 3.10 or newer and conda are needed. Conda is how each step gets its
+own software environment.
 
-## A first pipeline
+## 1. Reproducibility
 
-A pipeline is a recipe, one or more steps, and a few lines that submit
-work. This one doubles a number.
-
-`pipeline.yaml`:
+An analysis is a YAML recipe: the steps, in order, with every parameter
+written out. The recipe is the record of what was done. Share the file, and
+a colleague runs exactly the same analysis.
 
 ```yaml
-metadata:
-  functions_dir: "./steps"
-
-hello:
-  - double_it:
-      max_workers: 4       # up to four of these at once
+focus:
+  - score_focus:
+      metric: brenner      # brenner | dct | vollath_f4 | intensity
+      channel: 0
+      skip_ends: 2
 ```
 
-`steps/double_it.py`:
+Every result also records, for each step, the software environment it ran
+in, the Python version, and the versions of the packages it used. The
+recipe says what was asked for, and the result says what actually ran.
+
+## 2. Compatibility
+
+Image-analysis tools often cannot be installed side by side. Cellpose needs
+one version of torch, another model needs another, and neither agrees with
+the plotting library. Here each step runs in its own conda environment, named
+at the top of the step file:
+
+```python
+METADATA = {"environment": "ZMART--object_analysis--cellpose"}
+```
+
+Steps that name no environment run in the one you started from. So you can
+keep everything in one environment, and split off only the step that
+conflicts. A tool someone brings to the facility becomes one more step,
+without breaking the others.
+
+## 3. Real-time analysis
+
+Starting a program and loading a deep-learning model onto the GPU can take
+many seconds. That is too slow to repeat for every tile. Instead, each
+environment gets a worker that starts once and stays running. The engine
+sends it tile after tile, and the model it loaded for the first tile is
+still there for the next:
 
 ```python
 def run(pipeline_data, state, **params):
-    n = pipeline_data["input"]["n"]
-    pipeline_data["doubled"] = n * 2
-    return pipeline_data
-```
-
-`run.py`:
-
-```python
-import time
-from engine import Engine
-
-with Engine() as engine:
-    engine.register("hello", "pipeline.yaml")
-    engine.submit("hello", {"n": 21})
-    while not (results := engine.results("hello")):
-        time.sleep(0.05)
-
-print(results[0]["doubled"])  # 42
-```
-
-`state` is a dictionary that survives from one call to the next inside a
-worker. Put a loaded model in it on the first call and every later call
-reuses it; that is what keeps the worker warm.
-
-## A step in its own environment
-
-The step file names the environment it needs, beside the imports that need
-it. The recipe never does: it describes only the analysis.
-
-```python
-METADATA = {"environment": "ZMART--object_analysis--cellpose", "max_workers": 1}
-
-def run(pipeline_data, state, **params):
-    from cellpose import models
-    if "model" not in state:
-        state["model"] = models.CellposeModel(gpu=params.get("gpu", False))
+    if "model" not in state:          # only on the first tile
+        state["model"] = load_the_model()
     ...
 ```
 
-The engine reads `METADATA` without importing the file, so the heavy
-imports happen only inside the worker, in the right environment. A step
-that should run somewhere else is a separate step file: the watershed
-detector, `detect_objects_fast`, names the light classical environment
-while `detect_objects` names the Cellpose one.
+The recipe also says how many copies of a step may run at the same time:
+one for a model on the GPU, many for work on the processor.
 
-## Steps over a group, a compartment, a carrier
+```yaml
+  - detect_objects_fast:
+      max_workers: 12
+```
+
+## 4. Scope
 
 A sample is divided into four levels, narrowest first: a **tile**, a
-**group** (a tile set), a **compartment** and a **carrier**. Each is a plain
-number, so a compartment can be a well of a plate, a region of a slide or a
-stretch of a cleared sample, and the same recipe serves them all.
-
-Give a step a `scope`, and it waits until the caller says that unit is
-complete, then runs once over everything collected for it. The scoped
-recipe of object analysis, `object_analysis_scoped.yaml`, works this way:
+**group** of tiles, a **compartment** and a **carrier**. Each is a plain
+number, so a compartment can be a well of a plate, a region of a slide or
+part of a cleared sample. A step with a `scope` waits until the acquisition
+says that unit is complete, then runs once on everything collected for it:
 
 ```yaml
 object_analysis:
-  - detect_objects:           # every tile, as soon as it lands
+  - detect_objects:            # every tile, as soon as it lands
   - extract_classical_features:
   - build_object_table:
-  - summarise_population:     # once per compartment: its objects as a population
+  - summarise_population:      # each compartment, once it is complete
       scope: compartment
-  - compare_populations:      # once per carrier: the compartments side by side
+  - compare_populations:       # each carrier, once it is complete
       scope: carrier
 ```
 
 ```python
-engine.submit("scoped", tile, scope={"carrier": 1, "compartment": 3, "group": 2})
-...
+engine.submit("scoped", tile, scope={"carrier": 1, "compartment": 3})
 engine.submit("scoped", last_tile, scope={"carrier": 1, "compartment": 3},
               complete="compartment")
-...
-engine.submit("scoped", very_last_tile, scope={"carrier": 1, "compartment": 96},
-              complete=["compartment", "carrier"])
 ```
 
 The engine never guesses when a unit is done. The acquisition knows, and
-says so. A unit is matched together with every wider level, because
-numbers repeat: compartment 3 of carrier 1 never mixes with compartment 3
-of carrier 2, so two carriers can be acquired at once.
+says so.
 
-## Reading the results
+## Documentation
 
-`engine.results(name)` returns every finished job since you last asked,
-each a dictionary with the step outputs under the step's name, and a
-`provenance` entry per step naming its environment, Python version, a
-fingerprint of every installed package, and the versions of the packages
-the step imported. Failures
-are listed by `engine.status(name)`, with the step and the error. Steps
-that write files put them in an `analysis/` folder beside the `data/`
-folder the image came from.
+- [How the engine works](docs/how-the-engine-works.md): recipes, workers,
+  scopes, and what the engine reports.
+- [Writing a step](docs/writing-a-step.md): the one function a step needs,
+  and how to give it its own environment.
+- [Folder structure](docs/folder-structure.md): where recipes, steps, tests
+  and environments live.
+- The workflows that ship, each with its own notes:
+  [focus](workflows/focus/pipelines/focus.yaml),
+  [object analysis](workflows/object_analysis/README.md),
+  [population](workflows/population/pipelines/population_plots.yaml) and
+  [driver configuration](workflows/driver_configuration/pipelines/orientation.yaml).
 
-## Testing
+## Citing and license
 
-```bash
-pytest -m "not cellpose and not conda_env and not pooch"   # what CI runs
-pytest workflows/focus                                      # one workflow
-pytest                                                      # everything, given the environments
-```
-
-Tests marked `cellpose` need Cellpose and torch in the active environment,
-`conda_env` need the workflow environments, and `pooch` download public
-sample images. All three skip cleanly when what they need is missing.
-
-## Citing
-
-See [CITATION.cff](CITATION.cff). The sharpness measures follow Brenner
-(1976), Vollath (1987) and the comparison in Pertuz, Puig and Garcia
-(2013); object detection uses Cellpose (Stringer et al. 2021) and
-scikit-image; population layouts use scikit-learn and umap-learn.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+See [CITATION.cff](CITATION.cff) for how to cite ZMART Analysis. It is
+released under the MIT license; see [LICENSE](LICENSE).
