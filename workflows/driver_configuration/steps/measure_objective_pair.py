@@ -43,8 +43,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _image_io import as_plane as _plane  # noqa: E402
-from _focus_metrics import _brenner  # noqa: E402
+from shared.image_io import as_plane as _plane  # noqa: E402
+from shared.focus_metrics import brenner  # noqa: E402
 from scipy.ndimage import zoom
 from skimage.registration import phase_cross_correlation
 
@@ -71,7 +71,7 @@ def sharp_height_um(stack, z_um) -> dict:
     z = np.asarray(z_um, dtype=float)
     if len(planes) != len(z):
         raise ValueError(f"{len(planes)} planes but {len(z)} heights")
-    scores = np.array([_brenner(p) for p in planes])
+    scores = np.array([brenner(p) for p in planes])
     best = int(np.argmax(scores))
     peak_z = float(z[best])
     # A peak on the first or last plane is not a peak: the stack did not reach

@@ -103,5 +103,6 @@ def test_double_it():
     assert out["double_it"]["value"] == 42
 ```
 
-Each workflow keeps its tests in its own `tests/` folder. See
+Each workflow keeps its tests in its own `tests/` folder; the engine's own
+tests are in `tests/` at the top of the repository. See
 [Folder structure](folder-structure.md).

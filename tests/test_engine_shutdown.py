@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from engine import Engine
-import engine._pipeline as pipeline_module
+import engine.engine as engine_module
 
 
 pytestmark = pytest.mark.adversarial
@@ -37,7 +37,7 @@ def test_many_concurrent_duplicate_registrations_have_one_winner(tmp_path):
     yaml_path = _workflow_files(tmp_path)
     parse_started = threading.Event()
     release_parse = threading.Event()
-    real_parse_yaml = pipeline_module.parse_yaml
+    real_parse_yaml = engine_module.parse_yaml
     barrier = threading.Barrier(33)
     outcomes = []
     outcomes_lock = threading.Lock()
@@ -59,7 +59,7 @@ def test_many_concurrent_duplicate_registrations_have_one_winner(tmp_path):
             outcomes.append(outcome)
 
     engine = Engine(max_concurrent=1)
-    with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+    with patch("engine.engine.parse_yaml", blocked_parse_yaml):
         threads = [threading.Thread(target=register) for _ in range(32)]
         for thread in threads:
             thread.start()
@@ -85,7 +85,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
     yaml_path = _workflow_files(tmp_path)
     release_parse = threading.Event()
     all_parsers_started = threading.Event()
-    real_parse_yaml = pipeline_module.parse_yaml
+    real_parse_yaml = engine_module.parse_yaml
     entered = 0
     entered_lock = threading.Lock()
     errors = []
@@ -109,7 +109,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
                 errors.append(exc)
 
     engine = Engine(max_concurrent=1)
-    with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+    with patch("engine.engine.parse_yaml", blocked_parse_yaml):
         threads = [
             threading.Thread(target=register, args=(index,))
             for index in range(registration_count)

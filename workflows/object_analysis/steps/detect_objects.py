@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _image_io import (  # noqa: E402
+from shared.image_io import (  # noqa: E402
     load_channels,
     load_plane,
 )

@@ -1,13 +1,12 @@
 """
-Unit tests for image_io.
+Unit tests for workflows/shared/image_io.py, the image reader every step uses.
 
 Builds synthetic OME-Zarr positions in both NGFF 0.4 (Zarr v2) and NGFF
 0.5 (Zarr v3, sharded) and checks that planes, metadata and physical
 coordinates come back the same either way.
 
 Run from an environment with ngio installed:
-    python test_image_io.py
-    python -m pytest test_image_io.py -v
+    python -m pytest tests/test_image_io.py -v
 """
 
 import json
@@ -19,8 +18,9 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
+# The shared helpers live in workflows/shared, one folder up and across.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows"))
+from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
 
 
 PIXEL_SIZE = 0.325

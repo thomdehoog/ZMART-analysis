@@ -42,7 +42,7 @@ Repository = "https://github.com/thomdehoog/ZMART-analysis"
 include = ["engine*"]
 
 [tool.pytest.ini_options]
-testpaths = ["engine", "workflows"]
+testpaths = ["tests", "workflows"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
