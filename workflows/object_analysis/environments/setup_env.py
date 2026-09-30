@@ -84,6 +84,10 @@ STEP_PROFILES = {
             "imagecodecs",
             "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
             "ome-types",     # OME-XML metadata
+            # The well and plate summaries (object_analysis_plate.yaml):
+            # tables, median imputation, robust scaling and PCA.
+            "pandas",
+            "scikit-learn",
         ],
         "diagnostics": [
             (

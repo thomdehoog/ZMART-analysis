@@ -7,12 +7,25 @@ object_analysis.yaml:       detect_objects -> extract_classical_features -> buil
 object_analysis_fast.yaml:  the same, detection placed in the classical environment (method: fast),
                             features without the per-object texture crops (glrlm, lbp, fft)
 object_detection.yaml:      detect_objects   (persist_only: masks and checkpoint, no features)
+object_analysis_plate.yaml: the three steps per tile, then
+                            summarise_well  (scope: well)  population, profile and PCA of one well
+                            summarise_plate (scope: plate) the wells compared, odd ones flagged
 ```
 
-A step file names the environment its heaviest caller needs; `detect_objects`
-names the cellpose one. A pipeline may place a step elsewhere with
-`environment:` on the step, which is how the fast pipeline runs the watershed
-in the classical environment and never spawns the torch worker. Both answer
+The plate recipe is for runs that tell the engine when a well and a plate
+are complete. Each well's population is described once all its tiles are
+measured: per-feature medians and quartiles, the well's profile (the median
+of each feature), and principal components with their explained variance.
+Each plate then lays its well profiles side by side and gives every well a
+robust z-score per feature, flagging wells more than `outlier_z` spreads
+from the plate's median well. These are the default aggregation and
+normalisation of image-based profiling (pycytominer's `aggregate` and
+`mad_robustize`), computed with pandas, numpy and scikit-learn in the
+classical environment.
+
+Each step file names its own environment: `detect_objects` the Cellpose one,
+`detect_objects_fast` the classical one, so the fast pipeline never spawns
+the torch worker. A recipe does not set environments. Both pipelines answer
 under `pipeline_data["object_analysis"]`.
 
 ## Environments
