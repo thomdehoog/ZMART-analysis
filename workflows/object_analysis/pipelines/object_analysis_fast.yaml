@@ -1,9 +1,9 @@
 # Object-centered analysis for one acquired image tile, the fast way.
 #
-# The same three steps as object_analysis.yaml with detection placed in the
-# classical environment: the watershed needs scipy and scikit-image and no
-# torch, and a cold press through the cellpose environment was paying the
-# torch worker's spawn for it. Every parameter is the same and can be
+# The same three steps as object_analysis.yaml, with detection done by
+# detect_objects_fast: a watershed that needs scipy and scikit-image and no
+# torch, so its step file names the classical environment and never starts
+# a torch worker. Every parameter is the same and can be
 # overridden per submission the same way; the table lands under the same
 # name, `object_analysis`, so whoever reads it does not know which way it
 # was found.
@@ -19,10 +19,8 @@ metadata:
 # robust pipeline keeps the step files' own width of one, since every
 # Cellpose worker holds a model on the card.
 object_analysis:
-  - detect_objects:
-      environment: ZMART--object_analysis--classical
+  - detect_objects_fast:  # QuPath-style watershed; Cellpose is in object_analysis.yaml
       max_workers: 12
-      method: fast       # QuPath-style watershed; robust (Cellpose) needs object_analysis.yaml
       threshold: 100     # a nucleus's mean above background, in counts
       channels: null
       channel_axis: null

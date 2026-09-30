@@ -193,7 +193,7 @@ class Engine:
                     if step.name not in step_settings:
                         step_path = functions_dir / f"{step.name}.py"
                         settings = get_step_settings(step_path)
-                        env = step.environment or settings["environment"]
+                        env = settings["environment"]
                         if env is not None and env == self._default_env:
                             env = None
                         settings["environment"] = env

@@ -65,6 +65,59 @@ def _load_module(step_path):
     return module
 
 
+def _environment_record():
+    """What this worker's environment is, measured once when it starts.
+
+    ``environment`` is the conda environment's name, ``python`` the
+    interpreter version, and ``fingerprint`` a short hash of every installed
+    package and its version. Two results with the same fingerprint ran on
+    identical environments; a changed fingerprint means something was
+    installed, removed or upgraded in between.
+    """
+    import hashlib
+    import platform
+    from importlib import metadata
+
+    installed = sorted(
+        f"{(dist.metadata['Name'] or '').lower()}=={dist.version}"
+        for dist in metadata.distributions()
+    )
+    return {
+        "environment": os.environ.get("CONDA_DEFAULT_ENV")
+        or os.path.basename(sys.prefix),
+        "python": platform.python_version(),
+        "fingerprint": hashlib.sha256("\n".join(installed).encode()).hexdigest()[:16],
+    }
+
+
+def _loaded_package_versions(module_to_dists):
+    """The version of every installed package this worker has imported.
+
+    Only what was actually loaded, so a step's record names cellpose and
+    torch and numpy, not the two hundred packages that sit unused in the
+    environment. The standard library is not a package and is not listed.
+    """
+    from importlib import metadata
+
+    versions = {}
+    for top in {name.split(".")[0] for name in list(sys.modules)}:
+        for dist in module_to_dists.get(top, ()):
+            try:
+                versions[dist.lower()] = metadata.version(dist)
+            except metadata.PackageNotFoundError:
+                pass
+    return dict(sorted(versions.items()))
+
+
+def _stamp(result, step_name, env_record, module_to_dists):
+    """Add this step's provenance to its result, when the result is a dict."""
+    if isinstance(result, dict):
+        record = dict(env_record)
+        record["packages"] = _loaded_package_versions(module_to_dists)
+        result.setdefault("provenance", {})[step_name] = record
+    return result
+
+
 def _parent_alive(parent_pid):
     """Check if the parent process is still running.
 
@@ -147,6 +200,12 @@ def main():
     module_cache = {}
     state_dicts = {}
     request_count = 0
+    # Measured once per worker: the environment cannot change under a
+    # running interpreter in any way that would matter to the record.
+    from importlib import metadata
+
+    env_record = _environment_record()
+    module_to_dists = metadata.packages_distributions()
 
     try:
         while True:
@@ -183,6 +242,9 @@ def main():
 
             try:
                 result = module.run(pipeline_data, state, **params)
+                result = _stamp(
+                    result, os.path.splitext(step_name)[0], env_record, module_to_dists
+                )
                 response = ("ok", result)
                 logger.info("Request #%d completed", request_count)
             except Exception:

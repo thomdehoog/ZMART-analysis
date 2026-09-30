@@ -48,15 +48,15 @@ logger = logging.getLogger(__name__)
 class StepConfig:
     """Configuration for one step in a pipeline phase.
 
-    ``environment`` is the pipeline's word on where the step runs, and
-    overrides the step file's own METADATA when given. A step file names the
-    environment its heaviest caller needs; a pipeline that uses the same step
-    for lighter work (a watershed where the file expects Cellpose) places it
-    somewhere cheaper without a second copy of the file.
+    Where a step runs is not configured here. The step file names its own
+    conda environment in ``METADATA``, beside the imports that need it, so a
+    recipe describes only the analysis: the steps, their order, their
+    parameters and their scopes. Which environment each step actually used,
+    and the package versions in it, is recorded in every result under
+    ``provenance``.
     """
     name: str
     params: dict
-    environment: str | None = None
     #: The pipeline's word on how many of this step may run at once, over
     #: the step file's own METADATA. A step file is written for its heaviest
     #: caller; a pipeline whose work is light (a watershed, not Cellpose)
@@ -114,8 +114,9 @@ def split_phases(steps_config):
     first scope are Phase 0 (immediate). Each subsequent scope starts
     a new phase.
 
-    ``scope``, ``environment`` and ``max_workers`` are the engine's keys on a
-    step and are taken off before the rest reaches the step as its params.
+    ``scope`` and ``max_workers`` are the engine's keys on a step and are
+    taken off before the rest reaches the step as its params. An
+    ``environment`` key is refused: the step file owns its environment.
     """
     phases = []
     current_steps = []
@@ -125,7 +126,13 @@ def split_phases(steps_config):
         name = list(step_dict.keys())[0]
         raw_params = dict(step_dict[name] or {})
         scope = raw_params.pop("scope", None)
-        environment = raw_params.pop("environment", None)
+        if "environment" in raw_params:
+            raise ValueError(
+                f"Step '{name}' sets 'environment' in the pipeline YAML. The "
+                "step file owns its environment: set it in the step's "
+                "METADATA, or write a separate step file for a different "
+                "environment."
+            )
         max_workers = raw_params.pop("max_workers", None)
 
         if scope is not None:
@@ -136,7 +143,7 @@ def split_phases(steps_config):
 
         current_steps.append(
             StepConfig(
-                name=name, params=raw_params, environment=environment,
+                name=name, params=raw_params,
                 max_workers=int(max_workers) if max_workers is not None else None,
             )
         )
