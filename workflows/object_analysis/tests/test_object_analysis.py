@@ -203,14 +203,13 @@ def test_the_pipelines_register(tmp_path):
         engine.register("detection", str(DETECTION_YAML))
         engine.register("fast", str(FAST_YAML))
         placed = {
-            name: engine._pipelines[name].step_settings["detect_objects"]["environment"]
-            for name in ("classical", "fast")
+            "classical": engine._pipelines["classical"].step_settings["detect_objects"]["environment"],
+            "fast": engine._pipelines["fast"].step_settings["detect_objects_fast"]["environment"],
         }
     finally:
         engine.shutdown()
-    # The fast pipeline is the same three steps with detection placed in the
-    # classical environment: a watershed needs no torch, and a cold press
-    # was paying the vision worker's spawn for one.
+    # Each detector's step file names its own environment: the watershed
+    # needs no torch, so it never starts the Cellpose worker.
     assert placed["classical"] == "ZMART--object_analysis--cellpose"
     assert placed["fast"] == "ZMART--object_analysis--classical"
 
@@ -221,10 +220,34 @@ def test_the_fast_pipeline_answers_under_the_same_name():
 
     fast = yaml.safe_load(FAST_YAML.read_text())
     steps = [next(iter(step)) for step in fast["object_analysis"]]
-    assert steps == ["detect_objects", "extract_classical_features", "build_object_table"]
-    detect = fast["object_analysis"][0]["detect_objects"]
-    assert detect["method"] == "fast"
-    assert detect["environment"] == "ZMART--object_analysis--classical"
+    assert steps == ["detect_objects_fast", "extract_classical_features", "build_object_table"]
+    assert "environment" not in (fast["object_analysis"][0]["detect_objects_fast"] or {})
+
+
+def test_the_fast_detector_runs_the_watershed_and_answers_as_detect_objects(tmp_path):
+    """The fast step fixes the method and leaves its detection where the
+    feature step looks for it, so the rest of the pipeline is unchanged."""
+    import tifffile
+
+    sys.path.insert(0, str(WORKFLOW / "steps"))
+    from detect_objects_fast import run as fast_run
+
+    yy, xx = np.mgrid[0:96, 0:96]
+    plane = np.zeros((96, 96))
+    for cy, cx in [(24, 24), (24, 72), (72, 24), (72, 72)]:
+        plane += 1500.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 6.0 ** 2))
+    path = tmp_path / "field.tif"
+    tifffile.imwrite(path, plane.astype(np.uint16))
+    data = {
+        "input": _payload(path, source_image_size_px=[96, 96]),
+        "metadata": {"verbose": 0},
+    }
+    out = fast_run(data, {}, threshold=100, diameter=12, output_dir=str(tmp_path))
+    detection = out["detect_objects"]
+    assert detection["detector_params"]["method"] == "fast"
+    assert detection["n_objects"] == 4
+    with pytest.raises(ValueError, match="only runs the fast detector"):
+        fast_run(data, {}, method="robust")
 
 
 def test_the_fast_pipeline_leaves_out_the_per_object_texture_crops():

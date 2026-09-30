@@ -4,35 +4,35 @@
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-ZMART Analysis runs image analysis while a microscope is still acquiring,
-and hands the numbers back fast enough to decide what to image next. It is
+ZMART Analysis runs image-analysis pipelines while a microscope is still
+acquiring, fast enough for the results to decide what to image next. It is
 the analysis half of ZMART, the microscopy toolkit of the Center for
-Microscopy and Image Analysis (ZMB), University of Zurich. The other half,
-[ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy), moves
-the stage and captures the images.
+Microscopy and Image Analysis (ZMB), University of Zurich; the other half,
+[ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy), drives
+the microscope.
 
-## Why it exists
+## The problems it solves
 
-Adaptive microscopy needs analysis in the loop: detect the cells in an
-overview, pick the interesting ones, and go back to image them at high
-resolution, all in one session. Five things kept getting in the way at the
-facility, and each one became a design rule here.
-
-1. **A run must be repeatable.** Every pipeline is a YAML recipe that names
-   its steps and every parameter. Register the recipe, submit data, and the
-   same recipe gives the same analysis next month.
-2. **Tools do not share an environment.** Cellpose pins one version of
-   torch, another model pins another, and neither agrees with the plotting
-   library. Each step can name its own conda environment, so any tool a
-   user brings to the facility becomes a step without breaking the others.
-3. **Analysis must keep up with acquisition.** Worker processes stay warm
-   between jobs, with the model already loaded, so a tile is scored the
-   moment it lands rather than after a fresh start each time.
-4. **CPU work should run in parallel.** The recipe says how many workers a
-   step may use. GPU steps stay at one; feature extraction fans out.
-5. **Some steps belong to a larger unit than one image.** A step can be
-   scoped to run once per field, once per well, or once per plate, after
-   every image in that unit has been analysed.
+1. **Reproducible, shareable analysis.** A pipeline is a YAML recipe that
+   names every step and every parameter. Sharing the recipe shares exactly
+   what was done, and every result records the environment, the Python
+   version and the package versions each step ran with.
+2. **Tools that cannot share an environment.** Cellpose pins one torch,
+   another model pins another, and neither agrees with the plotting
+   library. Each step file names the conda environment it needs, so a tool
+   anyone brings to the facility becomes a step without breaking the
+   others. Steps that name none simply run in the environment you started
+   from.
+3. **Analysis fast enough for live acquisition.** Each environment gets a
+   worker process that stays alive between jobs, with its model already
+   loaded, so a tile is analysed the moment it lands instead of waiting for
+   a fresh start. The recipe sets how many workers a step may use in
+   parallel: one for a GPU model, many for CPU work.
+4. **Analysis over a field, a well, a plate.** Data is submitted while it
+   is acquired. A step can be scoped so that it runs once a whole well is
+   done, on everything collected for it, and a later step once the whole
+   plate is done. Per-object measurements, then population statistics per
+   well, then one summary per plate.
 
 ## What it does not do
 
@@ -121,7 +121,8 @@ reuses it; that is what keeps the worker warm.
 
 ## A step in its own environment
 
-Name the environment in the step file, or override it in the recipe:
+The step file names the environment it needs, beside the imports that need
+it. The recipe never does: it describes only the analysis.
 
 ```python
 METADATA = {"environment": "ZMART--object_analysis--cellpose", "max_workers": 1}
@@ -134,7 +135,10 @@ def run(pipeline_data, state, **params):
 ```
 
 The engine reads `METADATA` without importing the file, so the heavy
-imports happen only inside the worker, in the right environment.
+imports happen only inside the worker, in the right environment. A step
+that should run somewhere else is a separate step file: the watershed
+detector, `detect_objects_fast`, names the light classical environment
+while `detect_objects` names the Cellpose one.
 
 ## Steps over a field, a well, a plate
 
@@ -162,7 +166,10 @@ says so.
 ## Reading the results
 
 `engine.results(name)` returns every finished job since you last asked,
-each a dictionary with the step outputs under the step's name. Failures
+each a dictionary with the step outputs under the step's name, and a
+`provenance` entry per step naming its environment, Python version, a
+fingerprint of every installed package, and the versions of the packages
+the step imported. Failures
 are listed by `engine.status(name)`, with the step and the error. Steps
 that write files put them in an `analysis/` folder beside the `data/`
 folder the image came from.

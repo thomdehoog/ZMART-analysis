@@ -18,7 +18,6 @@ metadata:
 
 population_plots:
   - plot_population:
-      environment: ZMART--population--main
       components: 50       # UMAP is laid out from this many principal components
       neighbours: 15
       min_dist: 0.1

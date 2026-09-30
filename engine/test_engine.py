@@ -278,16 +278,16 @@ class TestPhases(unittest.TestCase):
         self.assertEqual(len(phases), 1)
         self.assertEqual(phases[0].scope, "region")
 
-    def test_a_pipeline_may_place_a_step_in_another_environment(self):
-        """``environment`` on a YAML step is the engine's, not the step's params."""
-        steps = [{"step": {"environment": "other-env", "sigma": 1.0}}]
-        phases = split_phases(steps)
-        self.assertEqual(phases[0].steps[0].environment, "other-env")
-        self.assertEqual(phases[0].steps[0].params, {"sigma": 1.0})
+    def test_a_pipeline_may_not_set_a_steps_environment(self):
+        """The step file owns its environment; a recipe that tries to set
+        one is refused with a message saying where it belongs."""
+        with self.assertRaisesRegex(ValueError, "step file owns its environment"):
+            split_phases([{"step": {"environment": "other-env", "sigma": 1.0}}])
 
-    def test_a_step_without_the_key_runs_where_its_file_says(self):
-        phases = split_phases([{"step": {"sigma": 1.0}}])
-        self.assertIsNone(phases[0].steps[0].environment)
+    def test_a_steps_params_do_not_include_the_engine_keys(self):
+        phases = split_phases([{"step": {"max_workers": 3, "sigma": 1.0}}])
+        self.assertEqual(phases[0].steps[0].params, {"sigma": 1.0})
+        self.assertEqual(phases[0].steps[0].max_workers, 3)
 
 
 # ---- Worker (protocol) -----------------------------------------------
@@ -817,29 +817,25 @@ class TestEngineRegister(unittest.TestCase):
             self.assertEqual(sum(errors), 7)
             self.assertIn("dup", e._pipelines)
 
-    def test_the_yaml_environment_overrides_the_step_files(self):
-        """A step file names the environment it usually runs in; a pipeline
-        may put it elsewhere. The file here pins an environment that does
-        not exist, and only the YAML's word for the orchestrator's own gets
-        it to run at all."""
+    def test_every_result_records_where_each_step_ran(self):
+        """Provenance: each step's result names its environment, the Python
+        it ran on, a fingerprint of every installed package, and the
+        version of each package it actually imported."""
         _temp_step("""
-            import sys
-            METADATA = {"environment": "no-such-env"}
+            import yaml
             def run(pd, state, **p):
-                pd["executable"] = sys.executable
+                pd["seen"] = True
                 return pd
-        """, name="reg_env_override")
+        """, name="reg_provenance")
         from engine import Engine
         with Engine() as e:
-            yaml = _temp_yaml(
-                "wf:\n  - reg_env_override:\n"
-                f"      environment: {e._default_env}"
-            )
-            e.register("test", yaml)
-            self.assertIsNone(e._pipelines["test"].step_settings["reg_env_override"]["environment"])
+            e.register("test", _temp_yaml("wf:\n  - reg_provenance:"))
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=30)
-        self.assertEqual(results[0]["executable"], sys.executable)
+        record = results[0]["provenance"]["reg_provenance"]
+        self.assertEqual(set(record), {"environment", "python", "fingerprint", "packages"})
+        self.assertEqual(len(record["fingerprint"]), 16)
+        self.assertIn("pyyaml", record["packages"])
 
 
 # ---- Engine (submit) -------------------------------------------------
