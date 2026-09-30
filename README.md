@@ -180,7 +180,7 @@ my-workflow:
 # Mode 2: pipeline level environment
 metadata:
   environment: "SMART--my_workflow--main"
-  data_transfer: "pickle"     # results may hold images and arrays
+  data_transfer: "pickle"     # only if the caller has the packages the results need
   functions_dir: "../steps"
 
 my-workflow:
@@ -203,8 +203,14 @@ to travel back. `data_transfer: "file_paths"`, the default, sends it as JSON,
 which carries numbers, strings, lists and dictionaries, so the step should
 store file paths rather than the data itself. `data_transfer: "pickle"` sends
 it through a pickle file and carries anything Python can hold, including
-images and NumPy arrays. If a result cannot travel as JSON, the engine stops
-with a message that says so and names the fix.
+images and NumPy arrays, on one condition: the calling environment must also
+have the packages those objects come from (NumPy, for an array), because
+pickle needs them to rebuild the objects. If a result cannot travel as JSON,
+or arrives as pickle needing a package the caller lacks, the engine stops with
+a message that says so and names the fix. The example workflow takes the
+simplest route: its last step writes the masks and measurements to files and
+keeps only their paths, so its result travels as JSON and a caller with
+nothing but PyYAML can read it.
 
 ### What is no longer your problem
 
@@ -343,10 +349,10 @@ smart-analysis/
             environments/
                 setup_env.py
                 clean_env.py
-            pipelines/         # 11 test pipelines
-            steps/             # 9 test steps
-            test_engine.py     # the 11 pipelines as pytest tests
-            run_all.py         # the same 11, as a printed report
+            pipelines/         # 12 test pipelines
+            steps/             # 10 test steps
+            test_engine.py     # the 12 pipelines as pytest tests
+            run_all.py         # the same 12, as a printed report
 
         rare_event_selection/  # example: microscopy cell analysis
             environments/
@@ -375,12 +381,14 @@ pip install pytest
 pytest
 ```
 
-It covers the engine's helpers (conda discovery, GPU detection), eleven
+It covers the engine's helpers (conda discovery, GPU detection), twelve
 pipelines run through the real engine (local execution, data flow between
 steps, step level and pipeline level environment switching, nested switching,
 data survival across serialisation, pickle transfer at step and pipeline
-level, error handling, and missing-step detection), the public import, and
-the example workflow's handling of a field with no cells. Each pipeline test
+level including a real NumPy array, both ways pickle transfer can fail,
+error handling, and missing-step detection), the public import, and the
+example workflow's handling of a field with no cells. The example-workflow
+tests need NumPy and scikit-image and skip without them. Each pipeline test
 checks what the steps reported: that they ran, in which process, and in which
 environment. The test environments are created before the first test that
 needs them; afterwards the suite removes only the environments it created
@@ -403,6 +411,8 @@ honest together.
 - Python 3.12+
 - PyYAML (installed automatically by the test suite if missing)
 - Conda, only for environment switching
+- For the tests: pytest; the example-workflow tests also need NumPy and
+  scikit-image, and skip without them
 
 ## Author
 

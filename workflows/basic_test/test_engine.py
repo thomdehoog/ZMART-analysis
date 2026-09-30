@@ -44,6 +44,7 @@ ENV_A, ENV_B, ENV_C = (PREFIX + name for name in ("env_a", "env_b", "env_c"))
 NEEDS_CONDA = {
     "step_env", "pipeline_env", "combined", "data_survival", "pickle",
     "pipeline_env_pickle", "pipeline_env_json_limit",
+    "pipeline_env_array",
 }
 
 BY_NAME = {name: (yaml_file, should_pass) for name, yaml_file, should_pass, _ in TESTS}
@@ -185,11 +186,34 @@ def test_pipeline_env_pickle(request):
     assert step["payload"] == b"\x00\x01\x02smart"
 
 
+def test_pipeline_env_array(request):
+    # A real array, not just bytes: pickle rebuilds it here only because this
+    # environment has NumPy too. Without NumPy the test cannot mean anything.
+    np = pytest.importorskip("numpy")
+    result = _run("pipeline_env_array", request)
+    step = result["step_array"]
+    assert step["environment_name"] == ENV_B
+    assert step["process_id"] != os.getpid()
+    assert np.array_equal(step["array"], np.arange(12, dtype=np.float32).reshape(3, 4))
+
+
 def test_pipeline_env_json_limit(request):
     # Same step, but the pipeline did not ask for pickle: the engine must say
     # plainly what went wrong and how to fix it, not fail with a bare TypeError.
     with pytest.raises(RuntimeError, match="data_transfer: 'pickle'"):
         _run("pipeline_env_json_limit", request)
+
+
+def test_pickled_result_needing_a_missing_package_is_explained(tmp_path):
+    # A pickle that refers to a package this environment does not have, as a
+    # NumPy array does when the caller lacks NumPy. The engine must name the
+    # package and the fix, not fail with a bare import error. No conda needed.
+    from engine.engine import _load_pickled_result
+
+    result_file = tmp_path / "result.pkl"
+    result_file.write_bytes(b"\x80\x02cno_such_package_xyz\nThing\nq\x00)\x81q\x01.")
+    with pytest.raises(RuntimeError, match="'no_such_package_xyz'.*not available in the calling"):
+        _load_pickled_result(str(result_file), "SMART--basic_test--env_b")
 
 
 # --- the public entry point ---------------------------------------------------
