@@ -59,8 +59,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.focus_metrics import DEFAULT_INTENSITY_PERCENTILE, METRICS, intensity  # noqa: E402
-from shared.image_io import load_plane  # noqa: E402
+from zmart_shared.focus_metrics import DEFAULT_INTENSITY_PERCENTILE, METRICS, intensity  # noqa: E402
+from zmart_shared.image_io import load_plane  # noqa: E402
 
 
 METADATA = {

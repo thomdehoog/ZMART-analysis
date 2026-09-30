@@ -28,8 +28,8 @@ Structure
 
 Usage
 -----
-    python -m pytest engine/test_engine.py -v
-    python -m pytest engine/test_engine.py -k Scopes -v
+    python -m pytest tests/test_engine.py -v
+    python -m pytest tests/test_engine.py -k Scopes -v
 """
 
 import atexit

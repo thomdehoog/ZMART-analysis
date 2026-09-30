@@ -1,5 +1,5 @@
 """
-Unit tests for workflows/shared/image_io.py, the image reader every step uses.
+Unit tests for workflows/zmart_shared/image_io.py, the image reader every step uses.
 
 Builds synthetic OME-Zarr positions in both NGFF 0.4 (Zarr v2) and NGFF
 0.5 (Zarr v3, sharded) and checks that planes, metadata and physical
@@ -18,9 +18,9 @@ from pathlib import Path
 
 import numpy as np
 
-# The shared helpers live in workflows/shared, one folder up and across.
+# The shared helpers live in workflows/zmart_shared, one folder up and across.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows"))
-from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
+from zmart_shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
 
 
 PIXEL_SIZE = 0.325
