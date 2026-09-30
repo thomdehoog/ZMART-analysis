@@ -130,7 +130,7 @@ says so.
 - [Folder structure](docs/folder-structure.md): where recipes, steps, tests
   and environments live.
 - The workflows that ship, each with its own notes:
-  [focus](workflows/focus/pipelines/focus.yaml),
+  [focus](workflows/focus/README.md),
   [object analysis](workflows/object_analysis/README.md), with its
   population summaries and plots, and
   [driver configuration](workflows/driver_configuration/pipelines/orientation.yaml).

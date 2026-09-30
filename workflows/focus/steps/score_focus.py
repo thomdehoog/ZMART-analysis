@@ -59,8 +59,8 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from _focus_metrics import DEFAULT_INTENSITY_PERCENTILE, METRICS, _intensity  # noqa: E402
-from _image_io import load_plane  # noqa: E402
+from shared.focus_metrics import DEFAULT_INTENSITY_PERCENTILE, METRICS, intensity  # noqa: E402
+from shared.image_io import load_plane  # noqa: E402
 
 
 METADATA = {
@@ -86,7 +86,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     # ``intensity`` needs its percentile, so it joins the table here rather
     # than in METRICS, whose entries take a plane and nothing else.
     measures = dict(METRICS)
-    measures["intensity"] = lambda plane: _intensity(plane, percentile)
+    measures["intensity"] = lambda plane: intensity(plane, percentile)
     if metric not in measures:
         raise ValueError(f"metric must be one of {tuple(measures)}, got {metric!r}.")
     if skip_ends < 0:

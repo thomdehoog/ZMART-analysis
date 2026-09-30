@@ -1,6 +1,12 @@
 """
-Internal pipeline state and YAML parsing.
+Pipeline -- how a recipe is read and how its jobs are tracked.
 
+Not part of the public API; the Engine uses it. It reads a recipe (YAML),
+splits its steps into phases at scope boundaries, and keeps track of which
+jobs are waiting for which scope to complete.
+
+Internal pipeline state and YAML parsing.
+-----------------------------------------
 Not part of the public API. Used by the Engine to manage registered
 pipelines, track jobs, handle scope completion, and accumulate results.
 
@@ -34,6 +40,9 @@ compartments even while another carrier is still being acquired. A carrier
 step also waits for any of its compartments still being analysed, because
 the signal that closes a carrier can arrive from another thread before that
 compartment's step has finished.
+
+
+ScopeError
 """
 
 from __future__ import annotations
@@ -459,3 +468,7 @@ class PipelineState:
                 "failed": len(self._failures),
                 "failures": list(self._failures),
             }
+
+
+class ScopeError(Exception):
+    """Invalid scope configuration, missing results, or bad completion signal."""

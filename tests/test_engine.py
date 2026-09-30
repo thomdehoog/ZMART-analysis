@@ -47,21 +47,15 @@ from pathlib import Path
 
 import pytest
 
-# Ensure the engine package is importable
-ENGINE_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(ENGINE_DIR.parent))
+# The engine package sits one folder up, at the root of the repository.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from engine._loader import get_step_settings
-from engine._run import split_phases, parse_yaml, StepConfig, Phase
-from engine._errors import (
+from engine import (
     WorkerError, WorkerSpawnError, WorkerCrashedError,
     WorkerTimeoutError, StepExecutionError, ScopeError,
 )
-
-# Test fixtures
-BASIC_TEST = ENGINE_DIR.parent / "workflows" / "basic_test"
-STEPS_DIR = BASIC_TEST / "steps"
-PIPELINES_DIR = BASIC_TEST / "pipelines"
+from engine.engine import get_step_settings
+from engine.pipeline import split_phases, parse_yaml, StepConfig, Phase
 
 # All temp files go here; cleaned up on exit
 _TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
@@ -296,7 +290,7 @@ class TestPhases(unittest.TestCase):
 class TestWorkerProtocol(unittest.TestCase):
 
     def test_execute_returns_result(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             def run(pd, state, **p):
                 pd["ran"] = True
@@ -313,7 +307,7 @@ class TestWorkerProtocol(unittest.TestCase):
         self.assertEqual(result["input"], 1)
 
     def test_different_steps_same_worker(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path_a = _temp_step("""
             def run(pd, state, **p): pd["from"] = "a"; return pd
         """)
@@ -330,7 +324,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_module_caching(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             _n = 0
             def run(pd, state, **p):
@@ -350,7 +344,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_state_dict_persists(self):
         """State dict persists across calls for the same step."""
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             def run(pd, state, **p):
                 state.setdefault("count", 0)
@@ -371,7 +365,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_state_dict_isolated_per_step(self):
         """Different steps get separate state dicts."""
-        from engine._worker import Worker
+        from engine.workers import Worker
         path_a = _temp_step("""
             def run(pd, state, **p):
                 state.setdefault("key", "a")
@@ -394,7 +388,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_persistent_reuses_process(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -408,7 +402,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_shutdown_and_respawn(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -423,7 +417,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_complex_types(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("def run(pd, state, **p): return pd")
         data = {
             "tuple": (1, 2), "set": {3, 4}, "bytes": b"\xff",
@@ -439,7 +433,7 @@ class TestWorkerProtocol(unittest.TestCase):
         self.assertEqual(r["nested"]["a"][2]["b"], 2.5)
 
     def test_worker_status(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         w = Worker(environment=None, connect_timeout=10)
         s = w.status
         self.assertEqual(s["state"], "stopped")
@@ -452,7 +446,7 @@ class TestWorkerProtocol(unittest.TestCase):
 class TestWorkerErrorPaths(unittest.TestCase):
 
     def test_crash_raises_worker_crashed(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             import os
             def run(pd, state, **p): os._exit(1)
@@ -463,7 +457,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         w.shutdown()
 
     def test_timeout_raises_worker_timeout_error(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             import time
             def run(pd, state, **p): time.sleep(30); return pd
@@ -477,7 +471,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         w.shutdown()
 
     def test_step_error_has_traceback(self):
-        from engine._worker import Worker
+        from engine.workers import Worker
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("test")
         """)
@@ -492,7 +486,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         # Orphan detection must watch the engine PID explicitly, because a
         # conda-env worker's real parent is the `conda run` wrapper.
         import subprocess as _sp
-        from engine import _worker
+        from engine import workers
 
         captured = {}
         real_popen = _sp.Popen
@@ -503,13 +497,13 @@ class TestWorkerErrorPaths(unittest.TestCase):
             # we only care about the command that would have been run.
             raise OSError("blocked for test")
 
-        w = _worker.Worker(environment=None, connect_timeout=1)
-        _worker.subprocess.Popen = fake_popen
+        w = workers.Worker(environment=None, connect_timeout=1)
+        workers.subprocess.Popen = fake_popen
         try:
             with self.assertRaises(WorkerSpawnError):
                 w.ensure_running()
         finally:
-            _worker.subprocess.Popen = real_popen
+            workers.subprocess.Popen = real_popen
             w.shutdown()
 
         cmd = captured["cmd"]
@@ -525,7 +519,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         # os.getppid(), which is the conda-wrapper failure mode.
         import subprocess as _sp
         from multiprocessing.connection import Listener
-        from engine._worker import WORKER_SCRIPT
+        from engine.workers import WORKER_SCRIPT
 
         authkey = os.urandom(16)
         listener = Listener(("localhost", 0), authkey=authkey)
@@ -617,7 +611,7 @@ class TestPool(unittest.TestCase):
         width was seen first, so a pipeline that asked for eight got one, or
         the other way round, depending on registration order.
         """
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         pool = WorkerPool()
         try:
             one = pool._get_semaphore("/steps/detect.py", 1)
@@ -629,7 +623,7 @@ class TestPool(unittest.TestCase):
             pool.shutdown_all(now=True)
 
     def test_per_env_worker_reuse(self):
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -641,7 +635,7 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
     def test_shutdown_before_use(self):
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool()
         pool.shutdown_all()
@@ -649,7 +643,7 @@ class TestPool(unittest.TestCase):
             pool.execute(None, path, {}, {}, timeout=10)
 
     def test_error_through_pool(self):
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("pool err")
         """)
@@ -660,7 +654,7 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
     def test_reaper_removes_idle(self):
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=0.2)
         pool.execute(None, path, {}, {}, timeout=10)
@@ -681,8 +675,8 @@ class TestPool(unittest.TestCase):
         imports are the cost it exists to avoid paying twice; a press five
         minutes after the last one found them reaped and paid it again.
         """
-        from engine._pool import WorkerPool
-        from engine._worker import Worker
+        from engine.workers import WorkerPool
+        from engine.workers import Worker
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=None)
         pool.execute(None, path, {}, {}, timeout=10)
@@ -698,7 +692,7 @@ class TestPool(unittest.TestCase):
 
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("""
             import time
             def run(pd, state, **p):
@@ -728,7 +722,7 @@ class TestPool(unittest.TestCase):
 
     def test_semaphore_allows_parallelism(self):
         """max_workers=4 allows parallel execution."""
-        from engine._pool import WorkerPool
+        from engine.workers import WorkerPool
         path = _temp_step("""
             import time
             def run(pd, state, **p):
@@ -1457,14 +1451,14 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_concurrent_registration_reserves_pipeline_name(self):
         """Only one parser may build a given pipeline name at a time."""
-        import engine._pipeline as pipeline_module
+        import engine.engine as engine_module
         from engine import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="reg_race")
         yaml = _temp_yaml("wf:\n  - reg_race:")
         parse_started = threading.Event()
         release_parse = threading.Event()
-        real_parse_yaml = pipeline_module.parse_yaml
+        real_parse_yaml = engine_module.parse_yaml
         errors = []
 
         def blocked_parse_yaml(path):
@@ -1474,7 +1468,7 @@ class TestEngineLifecycle(unittest.TestCase):
             return real_parse_yaml(path)
 
         e = Engine()
-        with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+        with patch("engine.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
                 target=lambda: _capture_exception(
                     errors, lambda: e.register("test", yaml)
@@ -1494,14 +1488,14 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_registration_cannot_complete_after_shutdown_starts(self):
         """A registration parsing during shutdown must not become visible."""
-        import engine._pipeline as pipeline_module
+        import engine.engine as engine_module
         from engine import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="reg_shutdown")
         yaml = _temp_yaml("wf:\n  - reg_shutdown:")
         parse_started = threading.Event()
         release_parse = threading.Event()
-        real_parse_yaml = pipeline_module.parse_yaml
+        real_parse_yaml = engine_module.parse_yaml
         errors = []
 
         def blocked_parse_yaml(path):
@@ -1511,7 +1505,7 @@ class TestEngineLifecycle(unittest.TestCase):
             return real_parse_yaml(path)
 
         e = Engine()
-        with patch("engine._pipeline.parse_yaml", blocked_parse_yaml):
+        with patch("engine.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
                 target=lambda: _capture_exception(
                     errors, lambda: e.register("late", yaml)
@@ -1931,8 +1925,8 @@ class TestTheBrake(unittest.TestCase):
     """
 
     def test_a_shutdown_now_puts_a_busy_worker_down_at_once(self):
-        from engine._worker import Worker
-        from engine._errors import WorkerCrashedError
+        from engine.workers import Worker
+        from engine import WorkerCrashedError
         pid_file = os.path.join(_TEMP_DIR, f"busy_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=10)
@@ -1952,8 +1946,8 @@ class TestTheBrake(unittest.TestCase):
 
     def test_a_shutdown_now_puts_the_whole_tree_down(self):
         """Under a wrapper, as `conda run` is, the grandchild dies too."""
-        import engine._worker as worker_module
-        from engine._worker import Worker
+        import engine.workers as worker_module
+        from engine.workers import Worker
         wrapper = _temp_step("""
             import subprocess, sys
             # What `conda run -n <env> python` does: start the interpreter as a
@@ -2012,9 +2006,9 @@ class TestTheBrake(unittest.TestCase):
         interpreter it started a moment later running -- two orphans after
         every early press.
         """
-        import engine._worker as worker_module
-        from engine._worker import Worker
-        from engine._errors import WorkerCrashedError, WorkerSpawnError
+        import engine.workers as worker_module
+        from engine.workers import Worker
+        from engine import WorkerCrashedError, WorkerSpawnError
         wrapper = _temp_step("""
             import subprocess, sys, time
             # An activation takes its time before the interpreter is started.
@@ -2054,9 +2048,9 @@ class TestTheBrake(unittest.TestCase):
         conda, its interpreter, the activation shell and the worker -- came
         up afterwards and stayed, segmenting a field nobody wanted.
         """
-        import engine._worker as worker_module
-        from engine._worker import Worker
-        from engine._errors import WorkerCrashedError, WorkerSpawnError
+        import engine.workers as worker_module
+        from engine.workers import Worker
+        from engine import WorkerCrashedError, WorkerSpawnError
         pid_file = os.path.join(_TEMP_DIR, f"late_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=20)

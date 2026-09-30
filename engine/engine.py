@@ -1,6 +1,12 @@
 """
-Engine -- Central orchestrator for the v4 pipeline engine.
+Engine -- what you call to run analyses.
 
+You register a recipe, submit images to it, and collect the results. The
+Engine never runs step code itself: it reads each step's METADATA without
+running the file, and hands the work to workers (see workers.py).
+
+Engine -- Central orchestrator for the v4 pipeline engine.
+----------------------------------------------------------
 Four core methods plus shutdown:
 
     engine = Engine()
@@ -19,10 +25,20 @@ Thread safety
 - _lock protects _pipelines dict and _accepting flag.
 - Each PipelineState has its own lock for internal state.
 - submit() and results() can be called from different threads safely.
+
+
+Step METADATA extraction via AST parsing.
+-----------------------------------------
+Reads a step file's METADATA dict without executing any code. Used by the
+engine at register() time to determine execution requirements for each step.
+
+The engine never imports or executes step files. All step execution happens
+in worker subprocesses running in the correct conda environment.
 """
 
 from __future__ import annotations
 
+import ast
 import heapq
 import logging
 import os
@@ -32,9 +48,8 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from ._loader import get_step_settings
-from ._pool import WorkerPool
-from ._run import PipelineState, parse_yaml, split_phases
+from .pipeline import PipelineState, parse_yaml, split_phases
+from .workers import WorkerPool
 
 logger = logging.getLogger(__name__)
 
@@ -560,3 +575,48 @@ class Engine:
         with self._lock:
             n = len(self._pipelines)
         return f"Engine(pipelines={n}, pool={self._pool!r})"
+
+
+def get_step_settings(step_path: Path) -> dict:
+    """
+    Extract execution settings from a step file without running it.
+
+    Parses the file's AST to read the METADATA dict literal.
+    No module code is executed.
+
+    Returns
+    -------
+    dict
+        - environment : str or None
+            Conda environment name. None means orchestrator's environment.
+        - max_workers : int
+            Maximum parallel workers for this step. Default 1.
+    """
+    metadata = _extract_metadata(step_path) or {}
+    settings = {
+        "environment": metadata.get("environment", None),
+        "max_workers": metadata.get("max_workers", 1),
+    }
+    logger.debug("Step settings for %s: environment=%s, max_workers=%d",
+                 step_path.name, settings["environment"],
+                 settings["max_workers"])
+    return settings
+
+
+def _extract_metadata(step_path: Path) -> dict:
+    """Extract the METADATA dict literal from a step file via AST."""
+    with open(step_path) as f:
+        tree = ast.parse(f.read())
+
+    for node in ast.iter_child_nodes(tree):
+        if (isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "METADATA"):
+            result = ast.literal_eval(node.value)
+            logger.debug("Extracted METADATA from %s (line %d): %s",
+                         step_path.name, node.lineno, result)
+            return result
+
+    logger.debug("No METADATA found in %s, using defaults", step_path.name)
+    return {}

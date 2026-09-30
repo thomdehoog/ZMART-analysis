@@ -26,7 +26,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.fft import dctn
 
-def _brenner(plane: np.ndarray) -> float:
+def brenner(plane: np.ndarray) -> float:
     """Mean squared difference between pixels two apart, along both axes.
 
     Brenner (1976) used one axis and a threshold on the difference; this is
@@ -40,7 +40,7 @@ def _brenner(plane: np.ndarray) -> float:
     return float(np.mean(across * across) + np.mean(down * down))
 
 
-def _dct_entropy(plane: np.ndarray) -> float:
+def dct_entropy(plane: np.ndarray) -> float:
     """Shannon entropy, in bits, of the normalised DCT energy without the DC term.
 
     The (0, 0) coefficient is the plane's mean brightness squared and carries
@@ -60,7 +60,7 @@ def _dct_entropy(plane: np.ndarray) -> float:
     return float(-np.sum(share * np.log2(share)))
 
 
-def _vollath_f4(plane: np.ndarray) -> float:
+def vollath_f4(plane: np.ndarray) -> float:
     """Vollath's F4 autocorrelation measure, along both axes, per pixel.
 
     F4 = mean(I(x) * I(x+1)) - mean(I(x) * I(x+2)), both means over the same
@@ -77,7 +77,7 @@ def _vollath_f4(plane: np.ndarray) -> float:
     return float(across + down)
 
 
-def _intensity(plane: np.ndarray, percentile: float) -> float:
+def intensity(plane: np.ndarray, percentile: float) -> float:
     """Mean of the pixels at or above the given percentile of brightness.
 
     Not the plain mean, so a flat background does not dilute the signal, and
@@ -90,7 +90,7 @@ def _intensity(plane: np.ndarray, percentile: float) -> float:
 
 #: The metrics on offer, by the name the YAML uses. Adding one is adding an
 #: entry here; every entry is scored on every run.
-METRICS = {"brenner": _brenner, "dct": _dct_entropy, "vollath_f4": _vollath_f4}
+METRICS = {"brenner": brenner, "dct": dct_entropy, "vollath_f4": vollath_f4}
 
 #: Default for ``intensity_percentile``: the brightest one percent of pixels.
 DEFAULT_INTENSITY_PERCENTILE = 99.0

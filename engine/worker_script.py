@@ -55,7 +55,7 @@ from multiprocessing.connection import Client
 
 
 def _load_module(step_path):
-    """Load a step module via exec. Mirrors _loader pattern."""
+    """Load a step module via exec. Mirrors how the engine reads a step (engine.py, get_step_settings)."""
     name = os.path.splitext(os.path.basename(step_path))[0]
     namespace = {"__name__": name, "__file__": step_path}
     with open(step_path) as f:

@@ -2,7 +2,7 @@
 
 Run from a conda-enabled terminal::
 
-    pytest engine/test_conda_utils.py -v
+    pytest tests/test_conda_utils.py -v
 """
 
 import unittest

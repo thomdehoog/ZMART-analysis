@@ -18,23 +18,23 @@ API
 
 Architecture
 ------------
-    _loader.py        AST-based METADATA extraction (no code execution)
-    _run.py           Internal pipeline state, scope tracking, YAML parsing
-    _pipeline.py      Engine orchestrator (register, submit, status, results)
-    _pool.py          WorkerPool with per-env pools and per-step concurrency
-    _worker.py        Per-environment subprocess lifecycle
-    worker_script.py  Runs inside target conda env (self-contained)
-    _errors.py        WorkerError + ScopeError hierarchies
+    engine.py         the Engine: register, submit, status, results
+    pipeline.py       reads a recipe, splits it into phases, tracks scopes
+    workers.py        the worker processes that run the steps, and their errors
+    worker_script.py  runs inside a step's conda environment; imports nothing
+                      from the engine, so it works in any environment
+    conda_utils.py    finds conda, and creates or removes a workflow's
+                      environments for its setup_env.py and clean_env.py
 """
 
-from ._pipeline import Engine
-from ._errors import (
+from .engine import Engine
+from .pipeline import ScopeError
+from .workers import (
     WorkerError,
     WorkerSpawnError,
     WorkerCrashedError,
     WorkerTimeoutError,
     StepExecutionError,
-    ScopeError,
 )
 
 __version__ = "4.0.0"
