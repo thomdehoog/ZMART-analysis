@@ -1,5 +1,10 @@
 # Smart Analysis
 
+[![python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![dependencies](https://img.shields.io/badge/dependencies-PyYAML-brightgreen)](requirements.txt)
+[![tests](https://img.shields.io/badge/tests-pytest-blue)](#testing)
+
 Smart Analysis is the analysis part of **ZMART**, ZMB's Microscopy-Agnostic
 Research Toolkit for smart microscopy, developed at the Center for Microscopy
 and Image Analysis (ZMB), University of Zurich. It is a small pipeline engine
