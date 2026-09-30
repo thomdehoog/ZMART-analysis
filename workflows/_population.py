@@ -76,7 +76,9 @@ def conditioned(frame, features: list[str]) -> np.ndarray:
 
     if not features:
         return np.empty((len(frame), 0))
-    raw = np.asarray(frame[features], dtype=np.float64)
+    # A copy, not a view: pandas 3 hands out read-only views of its columns,
+    # and the next line writes into the array.
+    raw = np.array(frame[features], dtype=np.float64)
     raw[~np.isfinite(raw)] = np.nan
     filled = SimpleImputer(strategy="median").fit_transform(raw)
     scaled = RobustScaler(quantile_range=(25.0, 75.0)).fit_transform(filled)
