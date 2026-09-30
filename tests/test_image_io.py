@@ -9,7 +9,6 @@ Run from an environment with ngio installed:
     python -m pytest tests/test_image_io.py -v
 """
 
-import json
 import shutil
 import sys
 import tempfile

@@ -1,5 +1,5 @@
 """
-_image_io -- image loading shared by every workflow step.
+image_io -- image loading shared by every workflow step.
 
 One copy, imported by the steps (they put ``workflows/`` on ``sys.path``),
 so a fix to how a plane is read reaches focus scoring, object detection and

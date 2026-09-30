@@ -1,4 +1,4 @@
-"""_focus_metrics -- the sharpness measures every focus-related step shares.
+"""focus_metrics -- the sharpness measures every focus-related step shares.
 
 Each measure takes one 2-D plane as float64 and returns one number that is
 larger when the plane is sharper. ``score_focus`` scores a whole z-stack with
