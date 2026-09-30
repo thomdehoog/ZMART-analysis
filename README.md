@@ -14,18 +14,25 @@ gives each step the Python environment it needs.
 
 ## The Problem
 
-Scientific analysis pipelines combine tools with conflicting dependencies. A
-typical workflow needs scikit-image for preprocessing, PyTorch for deep
-learning, and specialised packages for feature extraction. These tools ship
-native libraries that interfere with each other, leading to crashes that are
-hard to diagnose and harder to fix.
+An analysis for smart microscopy has to run reliably between two
+acquisitions, on whatever image just came off the microscope. Three things
+get in the way:
 
-The usual workarounds are either to hunt for one environment that satisfies
-every dependency, a trial-and-error process that is not always possible, or to
-run each tool in its own script, save intermediate results to disk, and stitch
-everything together by hand. Both are fragile, hard to reproduce, and painful to
-change. For smart microscopy, where the analysis has to run reliably between
-two acquisitions, that is not good enough.
+1. **Conflicting dependencies.** A typical workflow needs scikit-image for
+   preprocessing, PyTorch for deep learning, and specialised packages for
+   feature extraction. These tools ship native libraries that interfere with
+   each other, and finding one environment that satisfies all of them is
+   trial and error that does not always end.
+
+2. **The workflow lives inside a script.** The order of the steps and their
+   parameters are buried in code, so changing one setting means editing and
+   re-reading the whole script, and nobody else can see at a glance what the
+   analysis does.
+
+3. **Hand-stitched intermediate files.** The usual escape from the first
+   problem is to run each tool in its own script, save the results to disk,
+   and load them again in the next one. Every hand-off is a place for a
+   mismatch, and the result is hard to reproduce and painful to change.
 
 ## The Solution
 
