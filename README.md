@@ -5,12 +5,16 @@
 [![dependencies](https://img.shields.io/badge/dependencies-PyYAML-brightgreen)](requirements.txt)
 [![tests](https://img.shields.io/badge/tests-pytest-blue)](#testing)
 
+<img src="docs/zmart-analysis-icon.png" align="left" width="150" alt="ZMART Analysis">
+
 Smart Analysis is the analysis part of **ZMART**, ZMB's Microscopy-Agnostic
 Research Toolkit for smart microscopy, developed at the Center for Microscopy
 and Image Analysis (ZMB), University of Zurich. It is a small pipeline engine
 for scientific image analysis: you describe a multi-step analysis in a YAML
 file, and the engine runs the steps in order, passes the data between them, and
 gives each step the Python environment it needs.
+
+<br clear="left"/>
 
 ## The Problem
 
