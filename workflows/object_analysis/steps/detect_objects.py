@@ -1030,14 +1030,6 @@ def _cellpose_eval_kwargs(
     return kwargs
 
 
-def _none_or_int(value):
-    return None if value is None else int(value)
-
-
-def _none_or_float(value):
-    return None if value is None else float(value)
-
-
 REQUIRED_OBJECT_COLUMNS = (
     "label",
     "centroid_row_px",

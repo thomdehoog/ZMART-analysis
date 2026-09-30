@@ -7,8 +7,8 @@ loaded for the first tile is still there for the next one. This module holds
 one worker (Worker), the pool that keeps workers per environment
 (WorkerPool), and the errors a worker can raise.
 
-Exception hierarchy for the pipeline engine.
---------------------------------------------
+Errors a worker can raise
+-------------------------
 WorkerError (base for all subprocess issues)
     +-- WorkerSpawnError      subprocess failed to start or connect
     +-- WorkerCrashedError    subprocess died during execution
@@ -17,7 +17,7 @@ WorkerError (base for all subprocess issues)
     +-- StepExecutionError    step's run() raised an exception
                               (includes .remote_traceback from subprocess)
 
-    ScopeError                invalid scope configuration or completion
+ScopeError, for an invalid scope configuration, lives in pipeline.py.
 
 All step execution goes through worker subprocesses. StepExecutionError
 covers step failures raised by user code. WorkerSpawnError,

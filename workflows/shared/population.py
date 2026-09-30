@@ -1,4 +1,4 @@
-"""_population -- how a population of objects is summarised, in one place.
+"""population -- how a population of objects is summarised, in one place.
 
 Shared by the scoped well summary in object analysis and by the on-demand
 population plots, so a well's principal components mean the same thing in
