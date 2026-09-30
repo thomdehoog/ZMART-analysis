@@ -1,6 +1,6 @@
 # Smart Analysis
 
-[![python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/downloads/)
+[![python](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![dependencies](https://img.shields.io/badge/dependencies-PyYAML-brightgreen)](requirements.txt)
 [![tests](https://img.shields.io/badge/tests-pytest-blue)](#testing)
@@ -218,7 +218,7 @@ git clone https://github.com/thomdehoog/smart-analysis.git
 cd smart-analysis
 ```
 
-The engine itself needs Python 3.10 or newer and PyYAML. Conda is needed only
+The engine itself needs Python 3.12 or newer and PyYAML. Conda is needed only
 when a step or a pipeline asks for its own environment.
 
 ### Writing a step
@@ -387,7 +387,7 @@ honest together.
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.12+
 - PyYAML (installed automatically by the test suite if missing)
 - Conda, only for environment switching
 
