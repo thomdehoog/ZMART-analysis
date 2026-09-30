@@ -208,7 +208,11 @@ def test_pickled_result_needing_a_missing_package_is_explained(tmp_path):
     # A pickle that refers to a package this environment does not have, as a
     # NumPy array does when the caller lacks NumPy. The engine must name the
     # package and the fix, not fail with a bare import error. No conda needed.
-    from engine.engine import _load_pickled_result
+    # Take the helper from whichever module run_pipeline was loaded from, so
+    # this works whether the engine came in as a package or as a plain module.
+    import inspect
+
+    _load_pickled_result = inspect.getmodule(run_pipeline)._load_pickled_result
 
     result_file = tmp_path / "result.pkl"
     result_file.write_bytes(b"\x80\x02cno_such_package_xyz\nThing\nq\x00)\x81q\x01.")
