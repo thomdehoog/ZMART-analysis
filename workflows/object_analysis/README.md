@@ -10,6 +10,7 @@ object_detection.yaml:      detect_objects   (persist_only: masks and checkpoint
 object_analysis_scoped.yaml: the three steps per tile, then
                              summarise_population (scope: compartment) its objects as a population
                              compare_populations  (scope: carrier)     the compartments side by side
+population_plots.yaml:      plot_population  (on the operator's ask) a PCA or UMAP of a detected population
 ```
 
 The scoped recipe is for runs that tell the engine when a compartment and a
@@ -25,6 +26,17 @@ scikit-learn in the classical environment. The two steps read their level
 from the recipe, so `scope: group` and `scope: compartment` summarise per
 tile set instead.
 
+The population plot is the one recipe here that does not run per tile. Once
+a whole overview has been detected and its object table written, the
+operator can ask for a plot of that population: the first two principal
+components, or a UMAP laid out from the first fifty. Objects that are alike
+stand together in the plot, whatever mix of features makes them alike, so
+the population's own structure can be gated on as well as single features.
+It uses the same conditioning and PCA as the compartment summary
+(`workflows/_population.py`), so a principal component means the same thing
+in both. A UMAP over half a million objects takes minutes, which is why it
+runs on request and never during detection.
+
 Each step file names its own environment: `detect_objects` the Cellpose one,
 `detect_objects_fast` the classical one, so the fast pipeline never spawns
 the torch worker. A recipe does not set environments. Both pipelines answer
@@ -37,7 +49,14 @@ One environment per model, and one for everything classical:
 ```text
 ZMART--object_analysis--classical   scipy, scikit-image, the readers: the fast detector and the features
 ZMART--object_analysis--cellpose    torch and Cellpose, the readers: the robust detector
+ZMART--object_analysis--umap        pandas, scikit-learn, umap-learn: the population plot
 ```
+
+Create each with `python environments/setup_env.py --step <name>`. The
+`umap` one has no readers and no torch: `plot_population` reads the object
+table the other steps wrote, not the images. It is kept apart from the
+classical environment because umap-learn brings the numba compiler with it,
+which the classical steps have no use for.
 
 The rule: a model environment holds one model and the readers (tifffile,
 ngio, ome-types), never the features. Cellpose pins one torch, StarDist pins

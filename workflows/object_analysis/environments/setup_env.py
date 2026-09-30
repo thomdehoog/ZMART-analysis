@@ -123,6 +123,39 @@ STEP_PROFILES = {
             ("OME-XML metadata", "import ome_types; print('OK')"),
         ],
     },
+    "umap": {
+        "description": "the population plots (plot_population): PCA and UMAP",
+        "install_torch": False,
+        # Only plot_population runs here. It reads the object table the
+        # other steps wrote, so it needs no image readers and no torch; it
+        # gets its own environment because umap-learn brings numba along,
+        # a heavy compiler the classical steps have no use for.
+        "pip_packages": [
+            "pyyaml",
+            "numpy",
+            "pandas",        # the population table
+            "scikit-learn",  # principal components
+            "umap-learn",    # the UMAP layout, through numba and pynndescent
+        ],
+        "diagnostics": [
+            ("principal components", "from sklearn.decomposition import PCA; print('OK')"),
+            ("UMAP", "import umap; print('umap ' + umap.__version__)"),
+            (
+                "plots a small population",
+                # ``__STEPS__`` is replaced with this workflow's steps
+                # directory before the check runs.
+                "import sys, csv, tempfile, numpy as np; from pathlib import Path; "
+                "d = Path(tempfile.mkdtemp()) / 'overview_abc123_objects.csv'; "
+                "rng = np.random.default_rng(0); "
+                "rows = [['id', 'area', 'solidity']] + [[f'c{i}', rng.normal(), rng.normal()] for i in range(40)]; "
+                "csv.writer(d.open('w', newline='')).writerows(rows); "
+                "sys.path.insert(0, r'__STEPS__'); "
+                "from plot_population import run; "
+                "got = run(dict(input=dict(table=str(d), kind='umap', ids=None), metadata=dict(verbose=0)), dict()); "
+                "print('OK' if got['plot_population']['objects'] == 40 else 'FAIL')",
+            ),
+        ],
+    },
 }
 
 
@@ -540,10 +573,14 @@ def _run_torch_backend_check(conda: str, env_name: str, gpu: str) -> None:
 
 if __name__ == "__main__":
     profile = _selected_profile()
+    steps = str(Path(__file__).resolve().parents[1] / "steps")
     setup_workflow_env(
         workflow=WORKFLOW,
         pip_packages=profile["pip_packages"],
-        diagnostics=profile["diagnostics"],
+        diagnostics=[
+            (label, code.replace("__STEPS__", steps))
+            for label, code in profile["diagnostics"]
+        ],
         python_version=PYTHON_VERSION,
         install_torch=profile["install_torch"],
         default_step="cellpose",
