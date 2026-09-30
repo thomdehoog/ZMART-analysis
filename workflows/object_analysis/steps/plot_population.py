@@ -48,7 +48,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from zmart_shared.population import conditioned, measured_columns, principal_components  # noqa: E402
+from shared.population import conditioned, measured_columns, principal_components  # noqa: E402
 
 METADATA = {
     "description": "Principal components or a UMAP of a discovered population",
@@ -126,7 +126,7 @@ def _read_population(table: Path, ids):
 
 
 def _conditioned(frame, enough_measured: float) -> tuple[np.ndarray, list[str], list[str]]:
-    """``(matrix, ids, features)``, conditioned as ``zmart_shared/population.py`` does it."""
+    """``(matrix, ids, features)``, conditioned as ``shared/population.py`` does it."""
     ids = [str(one) for one in frame["id"]]
     features = measured_columns(frame, enough_measured)
     return conditioned(frame, features), ids, features

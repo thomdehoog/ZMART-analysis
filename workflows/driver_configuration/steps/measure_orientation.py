@@ -53,7 +53,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from zmart_shared.image_io import as_plane as _plane  # noqa: E402
+from shared.image_io import as_plane as _plane  # noqa: E402
 from skimage.registration import phase_cross_correlation
 
 METADATA = {

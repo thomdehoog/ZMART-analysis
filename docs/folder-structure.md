@@ -9,7 +9,7 @@ ZMART-analysis/
 │   ├── worker_script.py        runs inside each step's conda environment
 │   └── conda_utils.py          finds conda; creates and removes environments
 ├── workflows/
-│   ├── zmart_shared/           helpers more than one workflow uses
+│   ├── shared/           helpers more than one workflow uses
 │   │   ├── image_io.py         reads a plane from OME-Zarr or OME-TIFF
 │   │   ├── focus_metrics.py    the sharpness measures
 │   │   └── population.py       how a population of objects is summarised
@@ -26,7 +26,7 @@ A few files are called `__init__.py`. Python needs that exact name, two
 underscores on each side, to treat a folder as a package it can import
 from. `engine/__init__.py` is the one you meet: it is where
 `from engine import Engine` comes from, and it lists what the engine offers.
-The other one, in `workflows/zmart_shared/`, only describes its folder.
+The other one, in `workflows/shared/`, only describes its folder.
 
 ## A workflow folder
 
@@ -52,9 +52,7 @@ and the steps it uses always sit in the same workflow.
 
 ## The shared helpers
 
-The files in `workflows/zmart_shared/` are used by more than one workflow. The
-name carries the project in it so it cannot be confused with any other
-package called `shared` that happens to be installed. A step
+The files in `workflows/shared/` are used by more than one workflow. A step
 imports them after adding `workflows/` to Python's search path:
 
 ```python
@@ -62,7 +60,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from zmart_shared.image_io import load_plane
+from shared.image_io import load_plane
 ```
 
 Keeping one copy means a fix reaches every step that uses it.

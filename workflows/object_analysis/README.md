@@ -33,7 +33,7 @@ components, or a UMAP laid out from the first fifty. Objects that are alike
 stand together in the plot, whatever mix of features makes them alike, so
 the population's own structure can be gated on as well as single features.
 It uses the same conditioning and PCA as the compartment summary
-(`workflows/zmart_shared/population.py`), so a principal component means the same thing
+(`workflows/shared/population.py`), so a principal component means the same thing
 in both. A UMAP over half a million objects takes minutes, which is why it
 runs on request and never during detection.
 
