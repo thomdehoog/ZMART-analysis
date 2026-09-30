@@ -54,7 +54,7 @@ METADATA = {
     "description": "Principal components or a UMAP of a discovered population",
     "version": "1.0",
     "max_workers": 1,
-    "environment": "ZMART--population--main",
+    "environment": "ZMART--object_analysis--umap",
 }
 
 #: The two plots there are, and the columns each lands as.

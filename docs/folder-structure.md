@@ -9,7 +9,6 @@ ZMART-analysis/
 │   ├── _population.py          how a population of objects is summarised
 │   ├── focus/
 │   ├── object_analysis/
-│   ├── population/
 │   └── driver_configuration/
 ├── docs/                       these pages
 ├── conftest.py                 shared test settings

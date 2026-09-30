@@ -131,8 +131,8 @@ says so.
   and environments live.
 - The workflows that ship, each with its own notes:
   [focus](workflows/focus/pipelines/focus.yaml),
-  [object analysis](workflows/object_analysis/README.md),
-  [population](workflows/population/pipelines/population_plots.yaml) and
+  [object analysis](workflows/object_analysis/README.md), with its
+  population summaries and plots, and
   [driver configuration](workflows/driver_configuration/pipelines/orientation.yaml).
 
 ## Citing and license
