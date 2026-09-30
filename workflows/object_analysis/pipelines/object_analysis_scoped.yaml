@@ -1,0 +1,67 @@
+# Object analysis per tile, then a population per compartment, then the
+# compartments of each carrier compared.
+#
+# A sample is divided into four levels, narrowest first: tile, group (a tile
+# set), compartment, carrier. Each is a plain number in the capture label
+# (K<carrier>_M<compartment>_G<group>_P<tile>), so the same recipe serves a
+# plate, a slide or a light-sheet sample.
+#
+# Every tile runs the three per-tile steps as soon as it lands. When the
+# acquisition says a compartment is complete, summarise_population describes
+# its objects; when it says the carrier is complete, compare_populations
+# lays the compartments side by side.
+#
+#   engine.submit("scoped", tile, scope={"carrier": 1, "compartment": 3, "group": 2})
+#   engine.submit("scoped", last_tile_of_3, scope={"carrier": 1, "compartment": 3},
+#                 complete="compartment")
+#   engine.submit("scoped", last_tile_of_carrier, scope={"carrier": 1, "compartment": 96},
+#                 complete=["compartment", "carrier"])
+#
+# A compartment is matched together with its carrier, so two carriers can be
+# acquired at once. To summarise per group instead, give summarise_population
+# `scope: group` and compare_populations `scope: compartment`.
+#
+# Tiles are kept in memory until their compartment is complete, so this
+# recipe is for runs that close their compartments. For tile-by-tile
+# analysis with no summary, use object_analysis.yaml.
+
+metadata:
+  purpose: "Object analysis per tile, population per compartment, comparison per carrier"
+  version: "1.0"
+  verbose: 1
+  functions_dir: "../steps"
+
+object_analysis:
+  - detect_objects:
+      channels: null
+      channel_axis: null
+      cellprob_threshold: 0.0
+      flow_threshold: 0.4
+      niter: null
+      diameter: null
+      segmentation_binning: 1
+      border_margin_px: null
+      min_area_px: null
+      max_area_px: null
+      min_equivalent_diameter_um: null
+      max_equivalent_diameter_um: null
+      gpu: true
+
+  - extract_classical_features:
+      extras: [all]           # the same feature families as object_analysis.yaml
+      intensity_scale: null   # the camera's full range; see object_analysis.yaml
+
+  - build_object_table:
+
+  - summarise_population:
+      scope: compartment
+      enough_measured: 0.5    # a feature measured for fewer objects stays out
+      enough_objects: 10      # fewer objects than this: summary, but no PCA
+      components: 10
+      seed: 0
+      output_dir: null        # a folder for carrier<k>_compartment<m>_objects.csv
+
+  - compare_populations:
+      scope: carrier
+      outlier_z: 3            # a compartment this many spreads from the median one is flagged
+      output_dir: null        # a folder for carrier<k>_compartment_profiles.csv

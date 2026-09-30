@@ -943,51 +943,50 @@ class TestEngineSubmit(unittest.TestCase):
 
 class TestEngineScopes(unittest.TestCase):
 
-    def test_two_plates_at_once_keep_their_wells_apart(self):
-        """Tiles of two plates arrive interleaved. Each well is summed per
-        well, then each plate sums only its own wells, even though the
-        plate step runs after a well step that belongs to the other plate."""
+    def test_two_carriers_at_once_keep_their_compartments_apart(self):
+        """Tiles of two carriers arrive interleaved, with the same
+        compartment numbers on both. Each compartment is summed, then each
+        carrier sums only its own compartments."""
         _temp_step("""
             def run(pd, state, **p):
                 pd["value"] = pd["input"]["value"]
                 return pd
-        """, name="plates_tile")
+        """, name="carriers_tile")
         _temp_step("""
             import time
             def run(pd, state, **p):
-                time.sleep(0.2)   # a slow well, so a plate signal can overtake it
-                return {"well_sum": sum(r["value"] for r in pd["results"]),
-                        "well": pd["metadata"]["scope"]["well"]}
-        """, name="plates_well")
+                time.sleep(0.2)   # a slow compartment, so a carrier signal could overtake it
+                return {"compartment_sum": sum(r["value"] for r in pd["results"]),
+                        "compartment": pd["metadata"]["scope"]["compartment"]}
+        """, name="carriers_compartment")
         _temp_step("""
             def run(pd, state, **p):
-                return {"plate_sum": sum(r["well_sum"] for r in pd["results"]),
-                        "wells": sorted(r["well"] for r in pd["results"]),
-                        "plate": pd["metadata"]["scope"]["plate"]}
-        """, name="plates_plate")
+                return {"carrier_sum": sum(r["compartment_sum"] for r in pd["results"]),
+                        "compartments": sorted(r["compartment"] for r in pd["results"]),
+                        "carrier": pd["metadata"]["scope"]["carrier"]}
+        """, name="carriers_carrier")
         yaml = _temp_yaml(
-            "wf:\n  - plates_tile:\n"
-            "  - plates_well:\n      scope: well\n"
-            "  - plates_plate:\n      scope: plate"
+            "wf:\n  - carriers_tile:\n"
+            "  - carriers_compartment:\n      scope: compartment\n"
+            "  - carriers_carrier:\n      scope: carrier"
         )
         from engine import Engine
         with Engine(max_concurrent=8) as e:
             e.register("test", yaml)
-            layout = [("P1", "A1", 1), ("P2", "A1", 100), ("P1", "A2", 2),
-                      ("P2", "A2", 200)]
-            for plate, well, value in layout:
+            layout = [(1, 1, 1), (2, 1, 100), (1, 2, 2), (2, 2, 200)]
+            for carrier, compartment, value in layout:
                 for _ in range(3):
-                    e.submit("test", {"value": value}, scope={"plate": plate, "well": well})
-                e.submit("test", {"value": 0}, scope={"plate": plate, "well": well},
-                         complete="well")
-            e.submit("test", {"value": 0}, scope={"plate": "P1", "well": "A2"}, complete="plate")
-            e.submit("test", {"value": 0}, scope={"plate": "P2", "well": "A2"}, complete="plate")
+                    e.submit("test", {"value": value}, scope={"carrier": carrier, "compartment": compartment})
+                e.submit("test", {"value": 0}, scope={"carrier": carrier, "compartment": compartment},
+                         complete="compartment")
+            e.submit("test", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
+            e.submit("test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier")
             results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
-        plates = {r["plate"]: r for r in results if "plate_sum" in r}
-        self.assertEqual(plates["P1"]["plate_sum"], 3 * 1 + 3 * 2)
-        self.assertEqual(plates["P2"]["plate_sum"], 3 * 100 + 3 * 200)
-        self.assertEqual(plates["P1"]["wells"], ["A1", "A2"])
-        self.assertEqual(plates["P2"]["wells"], ["A1", "A2"])
+        carriers = {r["carrier"]: r for r in results if "carrier_sum" in r}
+        self.assertEqual(carriers[1]["carrier_sum"], 3 * 1 + 3 * 2)
+        self.assertEqual(carriers[2]["carrier_sum"], 3 * 100 + 3 * 200)
+        self.assertEqual(carriers[1]["compartments"], [1, 2])
+        self.assertEqual(carriers[2]["compartments"], [1, 2])
 
 
     def test_scope_collects_results(self):

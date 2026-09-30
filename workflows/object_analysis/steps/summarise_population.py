@@ -1,23 +1,29 @@
-"""summarise_well -- the population of one well, once the well is complete.
+"""summarise_population -- the objects of one completed unit, as a population.
 
-A scoped step: it runs once per well, after every tile of that well has been
-through detection and measurement, and it receives all of their object
-tables together. It joins them into one population and describes it:
+A scoped step. It runs once a unit of the sample is complete -- a group (a
+tile set), a compartment, or a carrier, whichever scope the recipe gives it
+-- and receives the object tables of every tile in that unit. It joins them
+into one population and describes it:
 
-- how many tiles and objects the well has, and how many tiles failed;
+- how many tiles and objects the unit has, and how many tiles failed;
 - for every measured feature, the median, quartiles, mean and spread;
-- the well's profile: the median of each feature over its objects, which is
-  what a plate-level comparison works on;
+- the unit's profile: the median of each feature over its objects, which is
+  what ``compare_populations`` works on one level up;
 - the first principal components of the population, with the share of the
   spread each carries and the features that pull on them.
+
+Nothing here knows what the unit is. A compartment may be a well of a plate,
+a region of a slide, or a stretch of a cleared sample; it is a number
+either way.
 
 The conditioning and the PCA are those of ``workflows/_population.py``, the
 same the on-demand population plots use.
 
 Takes ``pipeline_data["results"]``, one tile result each, as the engine hands
-a scoped step. Publishes ``pipeline_data["well_population"]`` and, when
+a scoped step. Publishes ``pipeline_data["population"]`` and, when
 ``output_dir`` is given, writes the joined object table and its principal
-components as CSV files named after the plate and well.
+components as CSV files named after the unit, for example
+``carrier1_compartment3_objects.csv``.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ from _population import (  # noqa: E402
 )
 
 METADATA = {
-    "description": "Summarise the object population of one complete well",
+    "description": "Summarise the object population of one completed unit",
     "version": "1.0",
     "max_workers": 4,
     "environment": "ZMART--object_analysis--classical",
@@ -45,7 +51,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     import pandas as pd
 
     meta = pipeline_data.get("metadata", {})
-    scope = meta.get("scope", {}) or {}
+    level = meta.get("scope_level")
+    scope = _unit_of(meta.get("scope", {}) or {}, level)
     tiles = pipeline_data.get("results", [])
     enough_measured = float(params.get("enough_measured", 0.5))
     enough_objects = int(params.get("enough_objects", 10))
@@ -78,8 +85,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     return {
         "metadata": meta,
-        "well_population": {
-            "scope": dict(scope),
+        "population": {
+            "level": level,
+            "scope": scope,
             "n_tiles": len(tiles),
             "n_failed_tiles": len(pipeline_data.get("failures", [])),
             "n_objects": int(len(population)),
@@ -92,10 +100,30 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     }
 
 
+#: The levels a sample is divided into, widest first. The tile is the
+#: narrowest and needs no scope: every per-tile step already runs on one.
+LEVELS = ("carrier", "compartment", "group")
+
+
+def _unit_of(scope: dict, level: str | None) -> dict:
+    """The part of a submit's scope that names this unit: its own level and
+    every wider one. A tile's group says nothing about its compartment's
+    population, so narrower levels are left out."""
+    if level not in LEVELS:
+        return dict(scope)
+    wider = LEVELS[: LEVELS.index(level) + 1]
+    return {k: scope[k] for k in wider if k in scope}
+
+
+def unit_name(scope: dict) -> str:
+    """A file-name stem for a unit, such as ``carrier1_compartment3``."""
+    return "_".join(f"{k}{scope[k]}" for k in LEVELS if k in scope) or "all"
+
+
 def _write(folder: Path, scope: dict, population, components) -> dict:
     """The joined table, and its first two components, as CSV files."""
     folder.mkdir(parents=True, exist_ok=True)
-    stem = "_".join(str(scope[k]) for k in ("plate", "well") if k in scope) or "well"
+    stem = unit_name(scope)
     written = {"objects": folder / f"{stem}_objects.csv"}
     population.to_csv(written["objects"], index=False)
     if components is not None:

@@ -242,7 +242,7 @@ class Engine:
             Input data for the pipeline.
         scope : dict, optional
             Labels which scope group this job belongs to.
-            E.g., {"group": "R3", "carrier": "plate1"}.
+            E.g., {"carrier": 1, "compartment": 3, "group": 2}.
         priority : int, optional
             Higher = more urgent. Default is FIFO (submission order).
         complete : str or list, optional
@@ -277,8 +277,8 @@ class Engine:
                     [complete] if isinstance(complete, str) else list(complete)
                 )
                 # Each level is marked as running here, synchronously, so a
-                # later signal for a wider scope (a plate) cannot overtake a
-                # narrower one (a well) that was submitted before it.
+                # later signal for a wider scope (a carrier) cannot overtake
+                # a narrower one (a compartment) submitted before it.
                 tokens = [
                     state.begin_scoped(state.get_triggered_phase_idx(level), scope)
                     for level in complete_levels
@@ -456,7 +456,7 @@ class Engine:
             return
 
         # The unit being closed: this level's value and every wider level's,
-        # since a well name repeats on every plate.
+        # since compartment 3 exists on every carrier.
         value = state.scope_key(level, scope)
 
         # Wait for all matching Phase 0 futures to complete
