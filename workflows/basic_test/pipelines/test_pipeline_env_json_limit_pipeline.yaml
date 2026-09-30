@@ -1,0 +1,10 @@
+metadata:
+  purpose: "Test that JSON transfer refuses non-JSON data with a clear message"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+  environment: "SMART--basic_test--env_b"
+
+pipeline-env-json-limit-test:
+  - step_bytes:
+      note: "Stores bytes in env_b without pickle transfer; must fail clearly"

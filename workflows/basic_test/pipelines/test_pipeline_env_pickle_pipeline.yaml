@@ -1,0 +1,11 @@
+metadata:
+  purpose: "Test pipeline-level environment switching with pickle transfer"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+  environment: "SMART--basic_test--env_b"
+  data_transfer: "pickle"
+
+pipeline-env-pickle-test:
+  - step_bytes:
+      note: "Stores bytes in env_b; the result must come back intact"

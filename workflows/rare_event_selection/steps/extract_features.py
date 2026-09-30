@@ -30,16 +30,25 @@ def run(pipeline_data: dict, **params) -> dict:
         'major_axis_length', 'minor_axis_length',
     ])
 
-    # Select by percentile threshold
+    # Select by percentile threshold. A field with no cells is a normal
+    # outcome for a rare-event search, not an error: it gives an empty
+    # selection, and the acquisition loop simply moves on.
     values = props[select_by]
-    threshold = float(np.percentile(values, percentile))
-    selected_mask = values >= threshold
-    selected_labels = props['label'][selected_mask]
+    if len(values) == 0:
+        threshold = None
+        selected_labels = props['label']
+    else:
+        threshold = float(np.percentile(values, percentile))
+        selected_mask = values >= threshold
+        selected_labels = props['label'][selected_mask]
 
     if verbose >= 2:
         print(f"  [extract_features] Measured {len(props['label'])} cells")
-        print(f"  [extract_features] Selection: {select_by} >= {threshold:.0f} "
-              f"(p{percentile}) -> {len(selected_labels)} cells")
+        if threshold is None:
+            print("  [extract_features] No cells found, so nothing is selected")
+        else:
+            print(f"  [extract_features] Selection: {select_by} >= {threshold:.0f} "
+                  f"(p{percentile}) -> {len(selected_labels)} cells")
 
     pipeline_data["extract_features"] = {
         "properties": props,

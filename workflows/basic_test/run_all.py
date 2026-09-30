@@ -63,6 +63,16 @@ TESTS = [
      True,
      "Pickle data transfer between envs"),
 
+    ("pipeline_env_pickle",
+     "pipelines/test_pipeline_env_pickle_pipeline.yaml",
+     True,
+     "Pipeline level env with pickle transfer returns non-JSON data"),
+
+    ("pipeline_env_json_limit",
+     "pipelines/test_pipeline_env_json_limit_pipeline.yaml",
+     False,
+     "Pipeline level env with JSON transfer refuses non-JSON data clearly"),
+
     ("error",
      "pipelines/test_error_pipeline.yaml",
      False,
