@@ -331,7 +331,8 @@ smart-analysis/
                 clean_env.py
             pipelines/         # 9 test pipelines
             steps/             # 8 test steps
-            run_all.py
+            test_engine.py     # the 9 pipelines as pytest tests
+            run_all.py         # the same 9, as a printed report
 
         rare_event_selection/  # example: microscopy cell analysis
             environments/
@@ -344,6 +345,7 @@ smart-analysis/
     docs/
         Pipeline_Engine_Documentation.md
 
+    pytest.ini
     requirements.txt
     LICENSE
     .gitignore
@@ -351,16 +353,25 @@ smart-analysis/
 
 ## Testing
 
-The test suite sets up its environments, runs every test, and cleans up
-afterwards.
+One command from the repository root runs every test:
 
 ```bash
-python workflows/basic_test/run_all.py
+pip install pytest
+pytest
 ```
 
-It covers local execution, data flow between steps, step level and pipeline
-level environment switching, nested switching, data survival across
-serialisation, pickle transfer, error handling, and missing-step detection.
+It covers the engine's helpers (conda discovery, GPU detection) and nine
+pipelines run through the real engine: local execution, data flow between
+steps, step level and pipeline level environment switching, nested switching,
+data survival across serialisation, pickle transfer, error handling, and
+missing-step detection. The test environments are created before the first
+test that needs them and removed afterwards; set `SMART_KEEP_ENVS=1` to keep
+them between runs.
+
+Without conda, the tests that need it are skipped rather than failed, so the
+suite still gives an honest result. The older runner,
+`python workflows/basic_test/run_all.py`, does the same nine pipelines with a
+printed report.
 
 ## Status
 

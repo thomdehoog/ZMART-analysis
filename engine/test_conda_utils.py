@@ -21,6 +21,21 @@ from conda_utils import (
 )
 
 
+def _conda_available() -> bool:
+    """True when conda can be reached; the conda tests skip cleanly otherwise."""
+    try:
+        get_conda_info()
+        return True
+    except Exception:
+        return False
+
+
+needs_conda = unittest.skipUnless(
+    _conda_available(), "conda is not installed; skipping the tests that need it"
+)
+
+
+@needs_conda
 class TestGetCondaInfo(unittest.TestCase):
     """Tests for get_conda_info()."""
 
@@ -54,6 +69,7 @@ class TestGetCondaInfo(unittest.TestCase):
         self.assertTrue(Path(info["root_prefix"]).exists())
 
 
+@needs_conda
 class TestGetCondaExe(unittest.TestCase):
     """Tests for get_conda_exe()."""
 
@@ -72,6 +88,7 @@ class TestGetCondaExe(unittest.TestCase):
         )
 
 
+@needs_conda
 class TestEnvExists(unittest.TestCase):
     """Tests for env_exists()."""
 
@@ -87,6 +104,7 @@ class TestEnvExists(unittest.TestCase):
         self.assertFalse(env_exists(info, "this_env_does_not_exist_12345"))
 
 
+@needs_conda
 class TestListEnvsByPrefix(unittest.TestCase):
     """Tests for list_envs_by_prefix()."""
 
