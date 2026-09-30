@@ -16,7 +16,7 @@ Nothing here knows what the unit is. A compartment may be a well of a plate,
 a region of a slide, or a stretch of a cleared sample; it is a number
 either way.
 
-The conditioning and the PCA are those of ``workflows/shared/population.py``, the
+The conditioning and the PCA are those of ``workflows/zmart_shared/population.py``, the
 same the on-demand population plots use.
 
 Takes ``pipeline_data["results"]``, one tile result each, as the engine hands
@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.population import (  # noqa: E402
+from zmart_shared.population import (  # noqa: E402
     conditioned,
     feature_summary,
     measured_columns,

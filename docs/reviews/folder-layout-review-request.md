@@ -16,8 +16,8 @@ against `release-candidate`. It is one commit, bd9a0c8. Do not push or merge any
    diagnostic one-liners. The copy kept is the one from the setup scripts (it has `--override-channels -c
    conda-forge`); the older copies in the clean scripts were never called.
 4. **Shared helpers.** `workflows/_image_io.py`, `_focus_metrics.py` and `_population.py` moved to
-   `workflows/shared/` (with an `__init__.py`). Imports changed from `from _image_io import` to
-   `from shared.image_io import`. In `focus_metrics.py`, `_brenner`, `_dct_entropy`, `_vollath_f4` and
+   `workflows/zmart_shared/` (with an `__init__.py`). Imports changed from `from _image_io import` to
+   `from zmart_shared.image_io import`. In `focus_metrics.py`, `_brenner`, `_dct_entropy`, `_vollath_f4` and
    `_intensity` lost their leading underscore.
 5. **Docs and leftovers.** `workflows/focus/FOCUS_METRICS_OPTIONS.md` became `workflows/focus/README.md`, rewritten.
    The repo-root `__init__.py`, `workflows/__init__.py` and `workflows/driver_configuration/__init__.py` were
@@ -33,9 +33,9 @@ against `release-candidate`. It is one commit, bd9a0c8. Do not push or merge any
   `workers.py` uses `ENGINE_DIR = Path(__file__).parent` to find `worker_script.py`; confirm that still resolves.
 - **Tests that patch module attributes.** Tests patch `engine.engine.parse_yaml` and `workers.subprocess.Popen`.
   Confirm each patch hits the name the code actually looks up at run time.
-- **Steps running inside a worker.** Steps do `sys.path.insert(0, <workflows>)` and then `from shared.X import`.
+- **Steps running inside a worker.** Steps do `sys.path.insert(0, <workflows>)` and then `from zmart_shared.X import`.
   Could a package called `shared` already installed in a user's conda environment shadow ours? Is
-  `workflows/shared/__init__.py` enough to make ours win? Check `engine/worker_script.py`: it loads steps by path,
+  `workflows/zmart_shared/__init__.py` enough to make ours win? Check `engine/worker_script.py`: it loads steps by path,
   so confirm nothing there assumed the old `_image_io` names.
 - **Environment scripts.** Run each `setup_env.py --help` and `clean_env.py --help` from outside the repo.
   `setup_env.py` must still import `conda_utils` by path, so `conda_utils.py` has to keep importing only the
