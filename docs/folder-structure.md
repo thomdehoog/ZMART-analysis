@@ -18,8 +18,7 @@ ZMART-analysis/
 
 ## A workflow folder
 
-A workflow has up to four parts. Every one has recipes, steps and tests; the
-`environments/` folder is there when its steps name an environment of their own:
+Every workflow has the same four parts:
 
 ```text
 workflows/object_analysis/
