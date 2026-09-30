@@ -35,7 +35,7 @@ ENVIRONMENTS = {
     "env_c": {"python": "3.12", "description": "Test environment C"},
 }
 
-PIP_PACKAGES = ["pyyaml"]
+PIP_PACKAGES = ["pyyaml", "numpy"]
 
 WIDTH = 70
 

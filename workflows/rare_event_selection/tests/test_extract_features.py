@@ -6,11 +6,12 @@ Cellpose or a conda environment.
 """
 
 import importlib.util
+import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 
+np = pytest.importorskip("numpy")
 pytest.importorskip("skimage")
 
 STEPS = Path(__file__).parent.parent / "steps"
@@ -43,6 +44,7 @@ def test_no_cells_gives_an_empty_selection(tmp_path):
     data = _load("feedback").run(data, output_dir=str(tmp_path))
     assert data["feedback"]["n_selected"] == 0
     assert Path(data["feedback"]["filepath"]).exists()
+    json.dumps(data)  # the result holds only plain values and paths
 
 
 def test_cells_are_still_selected_when_present(tmp_path):
@@ -57,3 +59,6 @@ def test_cells_are_still_selected_when_present(tmp_path):
     data = _load("feedback").run(data, output_dir=str(tmp_path))
     assert data["feedback"]["n_selected"] == 1
     assert data["feedback"]["cells"][0]["label"] == 2
+    json.dumps(data)  # arrays have become files, so the result travels as JSON
+    assert np.load(data["feedback"]["masks_path"]).max() == 2
+    assert Path(data["feedback"]["properties_path"]).read_text().startswith("label,")

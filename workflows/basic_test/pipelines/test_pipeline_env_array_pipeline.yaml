@@ -1,0 +1,11 @@
+metadata:
+  purpose: "Test that a NumPy array comes back from a pipeline-level environment"
+  version: "1.0"
+  verbose: 3
+  functions_dir: "../steps"
+  environment: "SMART--basic_test--env_b"
+  data_transfer: "pickle"
+
+pipeline-env-array-test:
+  - step_array:
+      note: "Stores an array in env_b; the caller must get it back intact"

@@ -228,12 +228,7 @@ print("__PICKLE_DONE__")
     
     try:
         _execute_script(script, environment, expect_json=False)
-        
-        # Read result from pickle file
-        with open(result_file, 'rb') as f:
-            result = pickle.load(f)
-        
-        return result
+        return _load_pickled_result(result_file, environment)
         
     finally:
         # Cleanup temp files
@@ -241,6 +236,27 @@ print("__PICKLE_DONE__")
             os.unlink(data_file)
         if os.path.exists(result_file):
             os.unlink(result_file)
+
+
+def _load_pickled_result(result_file: str, environment: str) -> dict:
+    """Read a result another environment wrote by pickle.
+
+    Pickle records which package each object came from, and rebuilding the
+    object needs that package here too: a NumPy array needs NumPy in the
+    calling environment, not only in the one that made it. When a package is
+    missing, say so plainly instead of leaving a bare import error.
+    """
+    with open(result_file, 'rb') as f:
+        try:
+            return pickle.load(f)
+        except (ModuleNotFoundError, AttributeError) as exc:
+            missing = getattr(exc, 'name', None) or str(exc)
+            raise RuntimeError(
+                f"the result from environment '{environment}' contains objects that "
+                f"need the package '{missing}', which is not available in the calling "
+                f"environment ({os.path.basename(sys.prefix)}). Install that package here "
+                f"as well, or have the last step store file paths instead of the objects."
+            ) from exc
 
 
 def _execute_script(script: str, environment: str = None, 
@@ -556,8 +572,7 @@ print("__PICKLE_DONE__")
 '''
     try:
         _execute_script(script, environment, expect_json=False, timeout=600)
-        with open(result_file, 'rb') as f:
-            return pickle.load(f)
+        return _load_pickled_result(result_file, environment)
     finally:
         if os.path.exists(data_file):
             os.unlink(data_file)

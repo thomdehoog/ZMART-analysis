@@ -68,6 +68,11 @@ TESTS = [
      True,
      "Pipeline level env with pickle transfer returns non-JSON data"),
 
+    ("pipeline_env_array",
+     "pipelines/test_pipeline_env_array_pipeline.yaml",
+     True,
+     "Pipeline level env with pickle transfer returns a NumPy array"),
+
     ("pipeline_env_json_limit",
      "pipelines/test_pipeline_env_json_limit_pipeline.yaml",
      False,
