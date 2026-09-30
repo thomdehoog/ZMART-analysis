@@ -20,11 +20,20 @@ Subsequent phases wait for scope completion signals.
 Scope matching
 --------------
 When complete="X" is signaled from a submit with scope={"X": val}:
-  - If "X" is a key in jobs' scope dicts: match by value (scope["X"] == val)
+  - If "X" is a key in the scope dicts: match by value (scope["X"] == val),
+    together with the value of every wider level (see scope_key)
   - If "X" is not a key: collect everything from the previous phase
 
 This means "all" is not special -- it works because no job has "all" as a
 scope key, so the engine collects everything.
+
+The same matching holds at every level, not only the first. A well result
+remembers the scope of the submit that completed it, for example
+{"well": "B3", "plate": "P1"}, so a plate step collects only the wells of
+its own plate even while another plate is still being acquired. A plate
+step also waits for any well of its plate that is still being analysed,
+because the signal that closes a plate can arrive from another thread
+before that well's step has finished.
 """
 
 from __future__ import annotations
@@ -39,6 +48,21 @@ from pathlib import Path
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+# -- Scope identity ----------------------------------------------------
+
+
+def _matches(entry_scope, key):
+    """Whether a job's scope belongs to the unit *key* names.
+
+    *key* is a dict such as {"well": "A1", "plate": "P1"}: the level being
+    completed and every wider level. All of them must agree, because a well
+    name like A1 repeats on every plate. ``None`` matches everything.
+    """
+    if key is None:
+        return True
+    return all(entry_scope.get(k) == v for k, v in key.items())
 
 
 # -- Data structures ---------------------------------------------------
@@ -184,8 +208,12 @@ class PipelineState:
         # Phase 0 results: [(submission_idx, scope_dict, result)]
         self._phase0_results = []
 
-        # Phase N>0 results: phase_idx -> [result]
+        # Phase N>0 results: phase_idx -> [(scope_dict, result)]
         self._phase_results = defaultdict(list)
+
+        # Scoped phases still running: phase_idx -> [(scope_dict, Event)].
+        # A later phase waits on the ones that belong to its scope value.
+        self._scoped_in_flight = defaultdict(list)
 
         # Completed results queue (drained by engine.results())
         self._results_queue = queue.Queue()
@@ -262,6 +290,23 @@ class PipelineState:
                 "error": "Cancelled during engine shutdown",
             })
 
+    def scope_key(self, level, scope):
+        """The identity of the unit *level* closes, from a submit's scope.
+
+        The level's own value together with the value of every wider level
+        in this pipeline (the scope levels of later phases) that the scope
+        names. Completing well A1 of {"plate": "P1", "well": "A1"} is well
+        A1 *of plate P1*. ``None`` when the scope does not name the level,
+        which collects everything (the "all" case).
+        """
+        if level not in scope:
+            return None
+        levels = [phase.scope for phase in self.phases if phase.scope]
+        wider = levels[levels.index(level) + 1:] if level in levels else []
+        key = {level: scope[level]}
+        key.update({w: scope[w] for w in wider if w in scope})
+        return key
+
     def get_triggered_phase_idx(self, level):
         """Find the phase index triggered by a scope level."""
         for i, phase in enumerate(self.phases):
@@ -281,13 +326,54 @@ class PipelineState:
         """
         prev_idx = phase_idx - 1
 
+        if prev_idx > 0:
+            self._wait_for_scoped(prev_idx, level, value)
+
         with self._lock:
             if prev_idx == 0:
                 return self._collect_phase0(level, value)
-            else:
-                results = list(self._phase_results[prev_idx])
-                self._phase_results[prev_idx].clear()
-                return results, []
+            matching, remaining = [], []
+            for entry in self._phase_results[prev_idx]:
+                entry_scope, result = entry
+                if _matches(entry_scope, value):
+                    matching.append(result)
+                else:
+                    remaining.append(entry)
+            self._phase_results[prev_idx] = remaining
+            return matching, []
+
+    def begin_scoped(self, phase_idx, scope):
+        """Mark a scoped phase as running for *scope*; returns its token.
+
+        A level with no phase in this pipeline gets a token that marks
+        nothing, so the caller can treat every level alike.
+        """
+        done = threading.Event()
+        if phase_idx is not None:
+            with self._lock:
+                self._scoped_in_flight[phase_idx].append((dict(scope), done))
+        return phase_idx, done
+
+    def end_scoped(self, token):
+        """Mark a scoped phase as finished, whether it succeeded or not."""
+        phase_idx, done = token
+        if phase_idx is not None:
+            with self._lock:
+                self._scoped_in_flight[phase_idx] = [
+                    entry for entry in self._scoped_in_flight[phase_idx]
+                    if entry[1] is not done
+                ]
+        done.set()
+
+    def _wait_for_scoped(self, phase_idx, level, value):
+        """Wait until every running phase *phase_idx* of this scope is done."""
+        with self._lock:
+            waiting = [
+                done for entry_scope, done in self._scoped_in_flight[phase_idx]
+                if _matches(entry_scope, value)
+            ]
+        for done in waiting:
+            done.wait()
 
     def _collect_phase0(self, level, value):
         """Collect Phase 0 results matching scope criteria.
@@ -299,7 +385,7 @@ class PipelineState:
             remaining = []
             for entry in self._phase0_results:
                 idx, scope, result = entry
-                if scope.get(level) == value:
+                if _matches(scope, value):
                     matching.append((idx, result))
                 else:
                     remaining.append(entry)
@@ -315,7 +401,7 @@ class PipelineState:
         failures = []
         remaining_failures = []
         for f in self._failures:
-            if value is not None and f["scope"].get(level) == value:
+            if value is not None and _matches(f["scope"], value):
                 failures.append(f)
             elif value is None:
                 failures.append(f)
@@ -325,10 +411,10 @@ class PipelineState:
 
         return results, failures
 
-    def store_phase_result(self, phase_idx, result):
-        """Store a scoped phase result for the next phase."""
+    def store_phase_result(self, phase_idx, result, scope):
+        """Store a scoped phase result, with its scope, for the next phase."""
         with self._lock:
-            self._phase_results[phase_idx].append(result)
+            self._phase_results[phase_idx].append((dict(scope), result))
 
     def get_matching_futures(self, level, value):
         """Get Phase 0 futures matching a scope level and value."""
@@ -336,7 +422,7 @@ class PipelineState:
             if value is not None:
                 return [
                     f for f, scope, _ in self._job_entries
-                    if scope.get(level) == value
+                    if _matches(scope, value)
                 ]
             else:
                 return [f for f, _, _ in self._job_entries]
@@ -347,7 +433,7 @@ class PipelineState:
             if value is not None:
                 self._job_entries = [
                     (f, s, idx) for f, s, idx in self._job_entries
-                    if s.get(level) != value
+                    if not _matches(s, value)
                 ]
             else:
                 self._job_entries = []

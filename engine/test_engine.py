@@ -943,6 +943,53 @@ class TestEngineSubmit(unittest.TestCase):
 
 class TestEngineScopes(unittest.TestCase):
 
+    def test_two_plates_at_once_keep_their_wells_apart(self):
+        """Tiles of two plates arrive interleaved. Each well is summed per
+        well, then each plate sums only its own wells, even though the
+        plate step runs after a well step that belongs to the other plate."""
+        _temp_step("""
+            def run(pd, state, **p):
+                pd["value"] = pd["input"]["value"]
+                return pd
+        """, name="plates_tile")
+        _temp_step("""
+            import time
+            def run(pd, state, **p):
+                time.sleep(0.2)   # a slow well, so a plate signal can overtake it
+                return {"well_sum": sum(r["value"] for r in pd["results"]),
+                        "well": pd["metadata"]["scope"]["well"]}
+        """, name="plates_well")
+        _temp_step("""
+            def run(pd, state, **p):
+                return {"plate_sum": sum(r["well_sum"] for r in pd["results"]),
+                        "wells": sorted(r["well"] for r in pd["results"]),
+                        "plate": pd["metadata"]["scope"]["plate"]}
+        """, name="plates_plate")
+        yaml = _temp_yaml(
+            "wf:\n  - plates_tile:\n"
+            "  - plates_well:\n      scope: well\n"
+            "  - plates_plate:\n      scope: plate"
+        )
+        from engine import Engine
+        with Engine(max_concurrent=8) as e:
+            e.register("test", yaml)
+            layout = [("P1", "A1", 1), ("P2", "A1", 100), ("P1", "A2", 2),
+                      ("P2", "A2", 200)]
+            for plate, well, value in layout:
+                for _ in range(3):
+                    e.submit("test", {"value": value}, scope={"plate": plate, "well": well})
+                e.submit("test", {"value": 0}, scope={"plate": plate, "well": well},
+                         complete="well")
+            e.submit("test", {"value": 0}, scope={"plate": "P1", "well": "A2"}, complete="plate")
+            e.submit("test", {"value": 0}, scope={"plate": "P2", "well": "A2"}, complete="plate")
+            results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
+        plates = {r["plate"]: r for r in results if "plate_sum" in r}
+        self.assertEqual(plates["P1"]["plate_sum"], 3 * 1 + 3 * 2)
+        self.assertEqual(plates["P2"]["plate_sum"], 3 * 100 + 3 * 200)
+        self.assertEqual(plates["P1"]["wells"], ["A1", "A2"])
+        self.assertEqual(plates["P2"]["wells"], ["A1", "A2"])
+
+
     def test_scope_collects_results(self):
         """Scoped step receives accumulated results from all jobs."""
         _temp_step("""

@@ -276,11 +276,18 @@ class Engine:
                 complete_levels = (
                     [complete] if isinstance(complete, str) else list(complete)
                 )
+                # Each level is marked as running here, synchronously, so a
+                # later signal for a wider scope (a plate) cannot overtake a
+                # narrower one (a well) that was submitted before it.
+                tokens = [
+                    state.begin_scoped(state.get_triggered_phase_idx(level), scope)
+                    for level in complete_levels
+                ]
                 # Process levels sequentially in one thread so that
                 # chained scopes (e.g., ["group", "all"]) execute in order.
                 self._scope_executor.submit(
                     self._handle_scope_complete_chain, state,
-                    complete_levels, scope,
+                    complete_levels, scope, tokens,
                 )
 
     def status(self, name=None):
@@ -370,18 +377,21 @@ class Engine:
 
     # -- Internal: scope completion chain --------------------------------
 
-    def _handle_scope_complete_chain(self, state, levels, scope):
+    def _handle_scope_complete_chain(self, state, levels, scope, tokens):
         """Process multiple scope completion levels sequentially.
 
         Each level must complete before the next starts, so chained
-        scopes like ["group", "all"] execute in the correct order.
+        scopes like ["group", "all"] execute in the correct order. Every
+        level's running mark is cleared when it finishes, whatever happens.
         """
-        for level in levels:
+        for level, token in zip(levels, tokens):
             try:
                 self._handle_scope_complete(state, level, scope)
             except Exception as e:
                 logger.error("Scope chain failed at level '%s': %s",
                              level, e)
+            finally:
+                state.end_scoped(token)
 
     # -- Internal: Phase 0 execution -----------------------------------
 
@@ -445,8 +455,9 @@ class Engine:
                            level, state.name)
             return
 
-        # Determine the scope value for matching
-        value = scope.get(level) if level in scope else None
+        # The unit being closed: this level's value and every wider level's,
+        # since a well name repeats on every plate.
+        value = state.scope_key(level, scope)
 
         # Wait for all matching Phase 0 futures to complete
         matching_futures = state.get_matching_futures(level, value)
@@ -476,7 +487,7 @@ class Engine:
             # Store for next phase if there is one
             next_phase = phase_idx + 1
             if next_phase < len(state.phases):
-                state.store_phase_result(phase_idx, result)
+                state.store_phase_result(phase_idx, result, scope)
 
             # Publish scoped result
             state.publish_result(dict(result), phase_idx, scope, level)

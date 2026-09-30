@@ -42,9 +42,13 @@ Publishes under ``pipeline_data["plot_population"]``::
 from __future__ import annotations
 
 import csv
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from _population import conditioned, measured_columns, principal_components  # noqa: E402
 
 METADATA = {
     "description": "Principal components or a UMAP of a discovered population",
@@ -56,9 +60,6 @@ METADATA = {
 #: The two plots there are, and the columns each lands as.
 KINDS = {"pca": ("pca_1", "pca_2"), "umap": ("umap_1", "umap_2")}
 
-#: Columns of the population table that are not measurements of the object.
-NOT_MEASURED = {"field", "position_label", "id", "x_um", "y_um", "intensity", "r", "label"}
-NOT_MEASURED_PREFIXES = ("bbox_", "centroid_", "weighted_centroid", "stage_", "bg_global_mean")
 
 
 def run(pipeline_data: dict, state: dict, **params) -> dict:
@@ -81,26 +82,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         raise ValueError("no feature was measured widely enough to plot the objects on")
     seed = int(params.get("seed", 0))
 
-    from sklearn.decomposition import PCA
-
-    room = min(int(params.get("components", 50)), matrix.shape[0], matrix.shape[1])
-    pca = PCA(n_components=room, random_state=seed)
-    components = pca.fit_transform(matrix)
-    explained = [float(v) for v in pca.explained_variance_ratio_]
-    # The two axes an operator sees are only as honest as the share of the
-    # spread they carry, and which features pull on them. Both go out with
-    # the plot so the picture can be read rather than trusted.
-    loadings = {
-        f"pca_{axis + 1}": {
-            feature: float(weight)
-            for feature, weight in sorted(
-                zip(features, pca.components_[axis]), key=lambda fw: -abs(fw[1])
-            )[:5]
-        }
-        for axis in range(min(2, components.shape[1]))
-    }
-    if components.shape[1] < 2:
-        components = np.hstack([components, np.zeros((components.shape[0], 1))])
+    components, explained, loadings = principal_components(
+        matrix, features, seed=seed, n_components=int(params.get("components", 50))
+    )
     stem = table.name.removesuffix("_objects.csv")
     written = {"pca": _write(table.with_name(f"{stem}_pca.csv"), ids, KINDS["pca"], components[:, :2])}
     umap_settings = None
@@ -141,51 +125,11 @@ def _read_population(table: Path, ids):
     return frame.reset_index(drop=True)
 
 
-def _measured(name: str) -> bool:
-    return name not in NOT_MEASURED and not name.startswith(NOT_MEASURED_PREFIXES)
-
-
 def _conditioned(frame, enough_measured: float) -> tuple[np.ndarray, list[str], list[str]]:
-    """``(matrix, ids, features)``: one row an object in the table's order,
-    one column a measurement worth keeping, each centred on its median and
-    scaled by its interquartile spread.
-
-    The centring and scaling are scikit-learn's ``RobustScaler`` and the
-    missing values its ``SimpleImputer`` with the median, so the conditioning
-    is the documented, citable one rather than a private variant. Two rules
-    are ours: a column measured for fewer than ``enough_measured`` of the
-    objects stays out, and a column with the same number for every object is
-    dropped, because it says nothing about any of them.
-    """
-    from sklearn.impute import SimpleImputer
-    from sklearn.preprocessing import RobustScaler
-
+    """``(matrix, ids, features)``, conditioned as ``_population`` does it."""
     ids = [str(one) for one in frame["id"]]
-    kept = []
-    for name in sorted(name for name in frame.columns if _measured(name)):
-        column = np.asarray(frame[name], dtype=np.float64)
-        finite = np.isfinite(column)
-        if not finite.size or finite.mean() < enough_measured:
-            continue
-        quarter, three_quarters = np.percentile(column[finite], [25, 75])
-        if three_quarters - quarter == 0.0 and column[finite].std() == 0.0:
-            continue  # the same number for every object says nothing
-        kept.append(name)
-    if not kept:
-        return np.empty((len(ids), 0)), ids, kept
-    raw = np.asarray(frame[kept], dtype=np.float64)
-    raw[~np.isfinite(raw)] = np.nan
-    filled = SimpleImputer(strategy="median").fit_transform(raw)
-    # RobustScaler leaves a zero interquartile range unscaled; for such a
-    # column (rare, but a feature that is constant for three quarters of the
-    # objects does it) fall back to the standard deviation, as before.
-    scaled = RobustScaler(quantile_range=(25.0, 75.0)).fit_transform(filled)
-    q1, q3 = np.percentile(filled, [25, 75], axis=0)
-    flat = (q3 - q1) == 0.0
-    if flat.any():
-        std = filled[:, flat].std(axis=0)
-        scaled[:, flat] = (filled[:, flat] - np.median(filled[:, flat], axis=0)) / std
-    return scaled, ids, kept
+    features = measured_columns(frame, enough_measured)
+    return conditioned(frame, features), ids, features
 
 
 def _write(path: Path, ids: list[str], columns: tuple[str, str], values: np.ndarray) -> Path:

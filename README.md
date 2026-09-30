@@ -50,7 +50,7 @@ the microscope.
 | Workflow | What it answers | Environment |
 |---|---|---|
 | `focus/` | Where in a z-stack the sample is sharp. Four sharpness measures are scored on every stack; the recipe chooses which one decides. | `ZMART--focus--main` |
-| `object_analysis/` | Which objects are in an image, and their size, shape, intensity and texture, as one table. Cellpose for the robust path, a watershed detector for the fast one. | `ZMART--object_analysis--cellpose`, `--classical` |
+| `object_analysis/` | Which objects are in an image, and their size, shape, intensity and texture, as one table. Cellpose for the robust path, a watershed detector for the fast one. The plate recipe adds a population summary per well and a comparison of the wells per plate. | `ZMART--object_analysis--cellpose`, `--classical` |
 | `population/` | A two-axis picture of a whole population, by principal components or UMAP, with the explained variance so the picture can be read. | `ZMART--population--main` |
 | `driver_configuration/` | How the camera's pixels map onto the stage, and where two objectives look relative to each other, measured from images. | `ZMART--driver_configuration--main` |
 
@@ -143,25 +143,33 @@ while `detect_objects` names the Cellpose one.
 ## Steps over a field, a well, a plate
 
 Give a step a `scope`, and it waits until the caller says that unit is
-complete, then runs once over everything collected for it:
+complete, then runs once over everything collected for it. The plate
+recipe of object analysis, `object_analysis_plate.yaml`, works this way:
 
 ```yaml
-overview:
-  - detect_objects:
-  - summarise_well:
+object_analysis:
+  - detect_objects:        # every tile, as soon as it lands
+  - extract_classical_features:
+  - build_object_table:
+  - summarise_well:        # once per well: the population, its profile, its PCA
       scope: well
-  - summarise_plate:
+  - summarise_plate:       # once per plate: the wells compared, odd ones flagged
       scope: plate
 ```
 
 ```python
-engine.submit("overview", tile, scope={"well": "B3", "plate": "P1"})
+engine.submit("plate", tile, scope={"plate": "P1", "well": "B3"})
 ...
-engine.submit("overview", last_tile, scope={"well": "B3", "plate": "P1"}, complete="well")
+engine.submit("plate", last_tile, scope={"plate": "P1", "well": "B3"}, complete="well")
+...
+engine.submit("plate", very_last_tile, scope={"plate": "P1", "well": "H12"},
+              complete=["well", "plate"])
 ```
 
 The engine never guesses when a well is done. The acquisition knows, and
-says so.
+says so. A well is matched together with its plate, because well names
+repeat on every plate, so two plates can be acquired at once without their
+wells mixing.
 
 ## Reading the results
 
