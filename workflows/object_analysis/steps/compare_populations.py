@@ -30,7 +30,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from zmart_shared.population import MAD_TO_SD, robust_z  # noqa: E402
+from shared.population import MAD_TO_SD, robust_z  # noqa: E402
 from summarise_population import LEVELS, unit_name  # noqa: E402
 
 METADATA = {
