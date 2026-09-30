@@ -27,13 +27,13 @@ When complete="X" is signaled from a submit with scope={"X": val}:
 This means "all" is not special -- it works because no job has "all" as a
 scope key, so the engine collects everything.
 
-The same matching holds at every level, not only the first. A well result
-remembers the scope of the submit that completed it, for example
-{"well": "B3", "plate": "P1"}, so a plate step collects only the wells of
-its own plate even while another plate is still being acquired. A plate
-step also waits for any well of its plate that is still being analysed,
-because the signal that closes a plate can arrive from another thread
-before that well's step has finished.
+The same matching holds at every level, not only the first. A compartment
+result remembers the scope of the submit that completed it, for example
+{"carrier": 1, "compartment": 3}, so a carrier step collects only its own
+compartments even while another carrier is still being acquired. A carrier
+step also waits for any of its compartments still being analysed, because
+the signal that closes a carrier can arrive from another thread before that
+compartment's step has finished.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ logger = logging.getLogger(__name__)
 def _matches(entry_scope, key):
     """Whether a job's scope belongs to the unit *key* names.
 
-    *key* is a dict such as {"well": "A1", "plate": "P1"}: the level being
-    completed and every wider level. All of them must agree, because a well
-    name like A1 repeats on every plate. ``None`` matches everything.
+    *key* is a dict such as {"compartment": 3, "carrier": 1}: the level being
+    completed and every wider level. All of them must agree, because
+    compartment 3 exists on every carrier. ``None`` matches everything.
     """
     if key is None:
         return True
@@ -295,8 +295,8 @@ class PipelineState:
 
         The level's own value together with the value of every wider level
         in this pipeline (the scope levels of later phases) that the scope
-        names. Completing well A1 of {"plate": "P1", "well": "A1"} is well
-        A1 *of plate P1*. ``None`` when the scope does not name the level,
+        names. Completing compartment 3 of {"carrier": 1, "compartment": 3}
+        is compartment 3 *of carrier 1*. ``None`` when the scope does not name the level,
         which collects everything (the "all" case).
         """
         if level not in scope:

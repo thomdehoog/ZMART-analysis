@@ -28,11 +28,12 @@ the microscope.
    loaded, so a tile is analysed the moment it lands instead of waiting for
    a fresh start. The recipe sets how many workers a step may use in
    parallel: one for a GPU model, many for CPU work.
-4. **Analysis over a field, a well, a plate.** Data is submitted while it
-   is acquired. A step can be scoped so that it runs once a whole well is
-   done, on everything collected for it, and a later step once the whole
-   plate is done. Per-object measurements, then population statistics per
-   well, then one summary per plate.
+4. **Analysis over a group, a compartment, a carrier.** Data is submitted
+   while it is acquired. A step can be scoped so that it runs once a whole
+   compartment is done, on everything collected for it, and a later step
+   once the whole carrier is done. Per-object measurements, then a
+   population per compartment, then the compartments of a carrier
+   compared.
 
 ## What it does not do
 
@@ -50,7 +51,7 @@ the microscope.
 | Workflow | What it answers | Environment |
 |---|---|---|
 | `focus/` | Where in a z-stack the sample is sharp. Four sharpness measures are scored on every stack; the recipe chooses which one decides. | `ZMART--focus--main` |
-| `object_analysis/` | Which objects are in an image, and their size, shape, intensity and texture, as one table. Cellpose for the robust path, a watershed detector for the fast one. The plate recipe adds a population summary per well and a comparison of the wells per plate. | `ZMART--object_analysis--cellpose`, `--classical` |
+| `object_analysis/` | Which objects are in an image, and their size, shape, intensity and texture, as one table. Cellpose for the robust path, a watershed detector for the fast one. The scoped recipe adds a population per compartment and a comparison of the compartments per carrier. | `ZMART--object_analysis--cellpose`, `--classical` |
 | `population/` | A two-axis picture of a whole population, by principal components or UMAP, with the explained variance so the picture can be read. | `ZMART--population--main` |
 | `driver_configuration/` | How the camera's pixels map onto the stage, and where two objectives look relative to each other, measured from images. | `ZMART--driver_configuration--main` |
 
@@ -140,36 +141,42 @@ that should run somewhere else is a separate step file: the watershed
 detector, `detect_objects_fast`, names the light classical environment
 while `detect_objects` names the Cellpose one.
 
-## Steps over a field, a well, a plate
+## Steps over a group, a compartment, a carrier
+
+A sample is divided into four levels, narrowest first: a **tile**, a
+**group** (a tile set), a **compartment** and a **carrier**. Each is a plain
+number, so a compartment can be a well of a plate, a region of a slide or a
+stretch of a cleared sample, and the same recipe serves them all.
 
 Give a step a `scope`, and it waits until the caller says that unit is
-complete, then runs once over everything collected for it. The plate
-recipe of object analysis, `object_analysis_plate.yaml`, works this way:
+complete, then runs once over everything collected for it. The scoped
+recipe of object analysis, `object_analysis_scoped.yaml`, works this way:
 
 ```yaml
 object_analysis:
-  - detect_objects:        # every tile, as soon as it lands
+  - detect_objects:           # every tile, as soon as it lands
   - extract_classical_features:
   - build_object_table:
-  - summarise_well:        # once per well: the population, its profile, its PCA
-      scope: well
-  - summarise_plate:       # once per plate: the wells compared, odd ones flagged
-      scope: plate
+  - summarise_population:     # once per compartment: its objects as a population
+      scope: compartment
+  - compare_populations:      # once per carrier: the compartments side by side
+      scope: carrier
 ```
 
 ```python
-engine.submit("plate", tile, scope={"plate": "P1", "well": "B3"})
+engine.submit("scoped", tile, scope={"carrier": 1, "compartment": 3, "group": 2})
 ...
-engine.submit("plate", last_tile, scope={"plate": "P1", "well": "B3"}, complete="well")
+engine.submit("scoped", last_tile, scope={"carrier": 1, "compartment": 3},
+              complete="compartment")
 ...
-engine.submit("plate", very_last_tile, scope={"plate": "P1", "well": "H12"},
-              complete=["well", "plate"])
+engine.submit("scoped", very_last_tile, scope={"carrier": 1, "compartment": 96},
+              complete=["compartment", "carrier"])
 ```
 
-The engine never guesses when a well is done. The acquisition knows, and
-says so. A well is matched together with its plate, because well names
-repeat on every plate, so two plates can be acquired at once without their
-wells mixing.
+The engine never guesses when a unit is done. The acquisition knows, and
+says so. A unit is matched together with every wider level, because
+numbers repeat: compartment 3 of carrier 1 never mixes with compartment 3
+of carrier 2, so two carriers can be acquired at once.
 
 ## Reading the results
 

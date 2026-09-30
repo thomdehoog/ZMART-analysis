@@ -7,21 +7,23 @@ object_analysis.yaml:       detect_objects -> extract_classical_features -> buil
 object_analysis_fast.yaml:  the same, detection placed in the classical environment (method: fast),
                             features without the per-object texture crops (glrlm, lbp, fft)
 object_detection.yaml:      detect_objects   (persist_only: masks and checkpoint, no features)
-object_analysis_plate.yaml: the three steps per tile, then
-                            summarise_well  (scope: well)  population, profile and PCA of one well
-                            summarise_plate (scope: plate) the wells compared, odd ones flagged
+object_analysis_scoped.yaml: the three steps per tile, then
+                             summarise_population (scope: compartment) its objects as a population
+                             compare_populations  (scope: carrier)     the compartments side by side
 ```
 
-The plate recipe is for runs that tell the engine when a well and a plate
-are complete. Each well's population is described once all its tiles are
-measured: per-feature medians and quartiles, the well's profile (the median
-of each feature), and principal components with their explained variance.
-Each plate then lays its well profiles side by side and gives every well a
-robust z-score per feature, flagging wells more than `outlier_z` spreads
-from the plate's median well. These are the default aggregation and
-normalisation of image-based profiling (pycytominer's `aggregate` and
-`mad_robustize`), computed with pandas, numpy and scikit-learn in the
-classical environment.
+The scoped recipe is for runs that tell the engine when a compartment and a
+carrier are complete. Each compartment's population is described once all
+its tiles are measured: per-feature medians and quartiles, its profile (the
+median of each feature), and principal components with their explained
+variance. Each carrier then lays its compartment profiles side by side and
+gives every compartment a robust z-score per feature, flagging those more
+than `outlier_z` spreads from the median compartment. These are the default
+aggregation and normalisation of image-based profiling (pycytominer's
+`aggregate` and `mad_robustize`), computed with pandas, numpy and
+scikit-learn in the classical environment. The two steps read their level
+from the recipe, so `scope: group` and `scope: compartment` summarise per
+tile set instead.
 
 Each step file names its own environment: `detect_objects` the Cellpose one,
 `detect_objects_fast` the classical one, so the fast pipeline never spawns
