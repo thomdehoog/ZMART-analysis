@@ -220,25 +220,45 @@ def engine_factory():
 # --------------------------------------------------------------------------
 
 
+#: The environment the Cellpose step runs in (``environment`` in
+#: ``detect_objects.py``). The tests run Cellpose through the engine, so the
+#: probe looks there, not in the Python that runs pytest.
+CELLPOSE_ENVIRONMENT = "ZMART--object_analysis--cellpose"
+
 _CELLPOSE_RUNTIME_CACHE: tuple[bool, str] | None = None
 
 
 def _has_cellpose_runtime() -> tuple[bool, str]:
-    """Return (available, reason) for the cellpose runtime in this env.
+    """Return (available, detail) for Cellpose in its own environment.
 
-    Probe in a subprocess. Broken Windows torch installs can fail while
-    loading native DLLs, which is not always cleanly contained by catching
-    Python exceptions in the pytest process.
+    When available, ``detail`` is the device that environment's torch sees,
+    ``"cuda"`` or ``"cpu"``, so a test can check that a GPU which is there
+    was really used. Otherwise it says why, in a way that tells the reader
+    what to set up.
+
+    The probe runs in a subprocess: broken Windows torch installs can fail
+    while loading native DLLs, which is not always cleanly contained by
+    catching Python exceptions in the pytest process.
     """
     global _CELLPOSE_RUNTIME_CACHE
     if _CELLPOSE_RUNTIME_CACHE is not None:
+        return _CELLPOSE_RUNTIME_CACHE
+
+    from engine.workers import _the_interpreter_in, _the_prefix_of
+
+    prefix = _the_prefix_of(CELLPOSE_ENVIRONMENT)
+    if prefix is None:
+        _CELLPOSE_RUNTIME_CACHE = False, (
+            f"the {CELLPOSE_ENVIRONMENT} environment is not set up; create it with "
+            "python workflows/object_analysis/environments/setup_env.py --step cellpose"
+        )
         return _CELLPOSE_RUNTIME_CACHE
 
     code = r"""
 import importlib
 import sys
 
-for module in ("skimage", "cellpose.models"):
+for module in ("skimage", "cellpose.models", "torch"):
     try:
         importlib.import_module(module)
     except Exception as exc:
@@ -247,20 +267,22 @@ for module in ("skimage", "cellpose.models"):
             file=sys.stderr,
         )
         raise SystemExit(2)
+import torch
+print("cuda" if torch.cuda.is_available() else "cpu")
 """
     try:
         result = subprocess.run(
-            [sys.executable, "-c", code],
+            [str(_the_interpreter_in(prefix)), "-c", code],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,
         )
     except subprocess.TimeoutExpired:
         _CELLPOSE_RUNTIME_CACHE = False, "runtime probe timed out"
         return _CELLPOSE_RUNTIME_CACHE
 
     if result.returncode == 0:
-        _CELLPOSE_RUNTIME_CACHE = True, "ok"
+        _CELLPOSE_RUNTIME_CACHE = True, result.stdout.strip().splitlines()[-1]
         return _CELLPOSE_RUNTIME_CACHE
 
     detail = result.stderr.strip() or result.stdout.strip()
@@ -283,7 +305,7 @@ def pytest_configure(config):
         ("robustness", "edge cases, error recovery, resource cleanup"),
         ("adversarial", "stress / race-condition / corruption / protocol-attack tests"),
         ("slow", "tests that take more than ~5s individually"),
-        ("cellpose", "requires real cellpose + skimage in the active env"),
+        ("cellpose", "requires the ZMART--object_analysis--cellpose environment"),
         ("pooch", "uses public skimage sample data downloaded/cached by pooch"),
         ("conda_env", "requires the conda environments a workflow's setup_env.py creates"),
     ):
@@ -294,6 +316,15 @@ def pytest_configure(config):
 def cellpose_available():
     """Return (available, reason). Tests can call pytest.skip() with reason."""
     return _has_cellpose_runtime()
+
+
+@pytest.fixture
+def cellpose_device():
+    """The device Cellpose's environment can use, ``"cuda"`` or ``"cpu"``."""
+    available, detail = _has_cellpose_runtime()
+    if not available:
+        pytest.skip(f"cellpose unavailable: {detail}")
+    return detail
 
 
 def pytest_collection_modifyitems(config, items):
