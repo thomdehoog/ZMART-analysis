@@ -173,5 +173,93 @@ class TestGetTorchInstallArgs(unittest.TestCase):
         self.assertNotIn("--index-url", args)
 
 
+class _Ran:
+    """What subprocess.run hands back: an exit code and the printed lines."""
+
+    def __init__(self, returncode=0, stdout="OK", stderr=""):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+
+class TestDiagnostics(unittest.TestCase):
+    """A check that prints FAIL has failed, even though Python exited normally."""
+
+    def _run(self, answer):
+        from unittest import mock
+
+        from engine import conda_utils
+
+        with mock.patch.object(conda_utils.subprocess, "run", return_value=answer):
+            conda_utils._run_diagnostics("conda", "ZMART--x--main", [("check", "print('x')")])
+
+    def test_ok_passes(self):
+        self._run(_Ran(stdout="OK"))
+
+    def test_printed_fail_stops_the_setup(self):
+        with self.assertRaises(SystemExit):
+            self._run(_Ran(stdout="FAIL shift=[-3.  2.]"))
+
+    def test_a_crash_stops_the_setup(self):
+        with self.assertRaises(SystemExit):
+            self._run(_Ran(returncode=1, stdout="", stderr="ModuleNotFoundError: sklearn"))
+
+
+class TestCheckAnExistingEnvironment(unittest.TestCase):
+    """``--check`` runs the checks on an environment that is already there."""
+
+    def _setup(self, argv, envs):
+        from unittest import mock
+
+        from engine import conda_utils
+
+        info = {"conda_version": "26.1.0", "envs": envs, "envs_dirs": ["/envs"], "root_prefix": "/"}
+        ran = []
+        with mock.patch.object(conda_utils, "get_conda_info", return_value=info), \
+                mock.patch.object(conda_utils.subprocess, "run",
+                                  side_effect=lambda cmd, **_: ran.append(cmd) or _Ran()), \
+                mock.patch("sys.argv", ["setup_env.py", *argv]):
+            conda_utils.setup_workflow_env(
+                workflow="demo", pip_packages=["numpy"], diagnostics=[("numpy", "import numpy")],
+                install_torch=False,
+            )
+        return ran
+
+    def test_check_runs_only_the_diagnostics(self):
+        ran = self._setup(["--check"], envs=["/envs/ZMART--demo--main"])
+        self.assertEqual(len(ran), 1)
+        self.assertIn("import numpy", ran[0])
+        self.assertNotIn("create", ran[0])
+
+    def test_check_of_a_missing_environment_says_so(self):
+        with self.assertRaises(SystemExit):
+            self._setup(["--check"], envs=[])
+
+    def test_without_check_an_existing_environment_is_left_alone(self):
+        with self.assertRaises(SystemExit):
+            self._setup([], envs=["/envs/ZMART--demo--main"])
+
+
+class TestFindingConda(unittest.TestCase):
+    """Conda is found without CONDA_EXE, as in a shell where no env was activated."""
+
+    def test_found_beside_the_running_python(self):
+        import os
+        import tempfile
+        from unittest import mock
+
+        from engine import conda_utils
+
+        with tempfile.TemporaryDirectory() as root:
+            env = Path(root) / "envs" / "ZMART--demo--main"
+            env.mkdir(parents=True)
+            exe = Path(root) / ("Scripts/conda.exe" if os.name == "nt" else "bin/conda")
+            exe.parent.mkdir()
+            exe.write_text("")
+            with mock.patch.dict(os.environ, {}, clear=False), \
+                    mock.patch.object(conda_utils.shutil, "which", return_value=None), \
+                    mock.patch.object(conda_utils.sys, "prefix", str(env)):
+                os.environ.pop("CONDA_EXE", None)
+                self.assertEqual(conda_utils._find_conda(), str(exe))
+
+
 if __name__ == "__main__":
     unittest.main()

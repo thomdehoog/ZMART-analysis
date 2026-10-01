@@ -24,9 +24,31 @@ import json
 import re
 from pathlib import Path
 
-# Conda sets CONDA_EXE when any environment is activated.
-# This propagates to all subprocesses automatically.
-CONDA_CMD = os.environ.get("CONDA_EXE", "conda")
+def _find_conda() -> str:
+    """The conda program to run.
+
+    Conda sets ``CONDA_EXE`` when an environment is activated, and every
+    program started from there inherits it. A shell where conda was never
+    activated (Git Bash, a scheduled task) has neither that nor conda on its
+    PATH, so as a last resort conda is looked for in the installation this
+    Python itself belongs to: either this is conda's own Python, or one in
+    its ``envs`` folder.
+    """
+    exe = os.environ.get("CONDA_EXE")
+    if exe:
+        return exe
+    found = shutil.which("conda")
+    if found:
+        return found
+    here = Path(sys.prefix)
+    for root in (here, *here.parents[1:2]):
+        for candidate in (root / "Scripts" / "conda.exe", root / "bin" / "conda"):
+            if candidate.is_file():
+                return str(candidate)
+    return "conda"
+
+
+CONDA_CMD = _find_conda()
 
 
 def get_conda_info():
@@ -252,6 +274,11 @@ def setup_workflow_env(
         action="store_true",
         help="Print commands without executing",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Run the checks on an environment that already exists, installing nothing",
+    )
     args = parser.parse_args()
 
     env_name = f"ZMART--{workflow}--{args.step}"
@@ -285,9 +312,20 @@ def setup_workflow_env(
     info("Root prefix", conda_info.get("root_prefix", "unknown"))
     info("Envs directory", envs_dirs[0] if envs_dirs else "unknown")
 
-    if env_exists(conda_info, env_name):
+    exists = env_exists(conda_info, env_name)
+    if args.check:
+        if not exists:
+            fail(f"Environment '{env_name}' does not exist yet.")
+            print(f"         Create it: python setup_env.py --step {args.step}")
+            sys.exit(1)
+        section(f"Checking {env_name}")
+        _run_diagnostics(conda, env_name, diagnostics)
+        banner("Check Passed")
+        return
+    if exists:
         fail(f"Environment '{env_name}' already exists.")
-        print(f"         Remove it first: python clean_env.py --step {args.step}")
+        print(f"         Check it:        python setup_env.py --step {args.step} --check")
+        print(f"         Or remove it first: python clean_env.py --step {args.step}")
         sys.exit(1)
 
     section("Environment")
@@ -390,6 +428,7 @@ def setup_workflow_env(
 
     section("Next steps")
     print(f"  Activate:    conda activate {env_name}")
+    print(f"  Check:       python setup_env.py --step {args.step} --check")
     print(f"  Remove:      python clean_env.py --step {args.step}")
     print()
     print("=" * WIDTH)
@@ -522,10 +561,16 @@ def _run_diagnostics(
             text=True,
         )
         output = result.stdout.strip()
-        if result.returncode == 0:
+        # A check reports a wrong answer by printing FAIL and exiting normally.
+        if result.returncode == 0 and not output.startswith("FAIL"):
             ok(f"{label:<28s} {output}")
         else:
-            fail(f"{label:<28s}")
+            fail(f"{label:<28s} {output}")
+            lines = result.stderr.strip().splitlines()
+            if lines:
+                # The Python error, rather than conda's line saying the command failed.
+                errors = [line for line in lines if re.match(r"\w+(Error|Exception)\b", line)]
+                print("         " + (errors[-1] if errors else lines[-1]))
             all_passed = False
 
     if not all_passed:

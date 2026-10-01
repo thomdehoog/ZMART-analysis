@@ -285,10 +285,18 @@ def test_object_analysis_hands_off_to_target_discovery(tmp_path):
     assert validated["targets"][0]["object_label"] == 2
 
 
+def _used_gpu(root: Path) -> bool:
+    """Whether Cellpose ran on the GPU, as the detection step wrote it down beside its masks."""
+    import json
+
+    checkpoint = next(root.rglob("detection_checkpoint.json"))
+    return json.loads(checkpoint.read_text())["detector_params"]["used_gpu"]
+
+
 @pytest.mark.cellpose
 @pytest.mark.pooch
 @pytest.mark.slow
-def test_real_cellpose_object_analysis_end_to_end(tmp_path):
+def test_real_cellpose_object_analysis_end_to_end(tmp_path, cellpose_device):
     image_path, image = _write_immunohistochemistry_tile(tmp_path)
 
     result = _run_engine_workflow(
@@ -303,10 +311,13 @@ def test_real_cellpose_object_analysis_end_to_end(tmp_path):
             image_to_stage=[[0.0, -1.0], [1.0, 0.0]],
             channels=None,
             gpu=True,
+            output_dir=str(tmp_path / "analysis"),
         ),
     )
     tile = validate_tile_detection(result["object_analysis"])
 
+    # Asked for the GPU, it must be used whenever the environment has one.
+    assert _used_gpu(tmp_path) is (cellpose_device == "cuda")
     assert tile["objects"]["n_objects"] > 0
     assert tile["objects"]["properties"]["object_id"][0].startswith("IHC_r000_c000_obj")
     assert all(
@@ -318,7 +329,7 @@ def test_real_cellpose_object_analysis_end_to_end(tmp_path):
 @pytest.mark.cellpose
 @pytest.mark.pooch
 @pytest.mark.slow
-def test_real_cpsam_multichannel_immunohistochemistry_end_to_end(tmp_path):
+def test_real_cpsam_multichannel_immunohistochemistry_end_to_end(tmp_path, cellpose_device):
     image_path, image = _write_immunohistochemistry_tile(tmp_path)
 
     result = _run_engine_workflow(
@@ -333,12 +344,14 @@ def test_real_cpsam_multichannel_immunohistochemistry_end_to_end(tmp_path):
             image_to_stage=[[1.0, 0.0], [0.0, 1.0]],
             channels=None,
             gpu=True,
+            output_dir=str(tmp_path / "analysis"),
         ),
         timeout=240,
     )
     tile = validate_tile_detection(result["object_analysis"])
     props = tile["objects"]["properties"]
 
+    assert _used_gpu(tmp_path) is (cellpose_device == "cuda")
     assert tile["objects"]["n_objects"] > 0
     for channel in range(3):
         key = f"intensity_mean_c{channel}"

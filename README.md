@@ -31,14 +31,23 @@ drives the microscope.
 ```bash
 git clone https://github.com/thomdehoog/ZMART-analysis.git
 cd ZMART-analysis
-conda create -n zmart-analysis python=3.12 -y
+conda create -n zmart-analysis python=3.12 --override-channels -c conda-forge -y
 conda activate zmart-analysis
 python -m pip install -e ".[test]"
 python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
 Python 3.10 or newer and conda are needed. Conda is how each step gets its
-own software environment.
+own software environment, and every environment comes from conda-forge only.
+
+To see whether an environment made earlier still has what its workflow needs,
+for example after an update, add `--check`:
+`python workflows/object_analysis/environments/setup_env.py --step classical --check`.
+
+Cellpose downloads its model (about 1.2 GB) the first time it runs, into
+`.cellpose` in your home folder. To keep it elsewhere, for example where a
+Windows profile has a size limit, set `CELLPOSE_LOCAL_MODELS_PATH` to that
+folder before the first run.
 
 ## 1. Reproducibility
 

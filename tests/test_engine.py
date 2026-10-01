@@ -1255,9 +1255,10 @@ class TestEngineScopes(unittest.TestCase):
 class TestEngineEnvironmentIsolation(unittest.TestCase):
     """Verify the engine actually launches steps in their declared conda env.
 
-    Requires the SMART--basic_test--env_a conda env (Python 3.10) created
-    by workflows/basic_test/environments/setup_env.py. The conda_env marker
-    lets CI exclude this class via ``pytest -m "not conda_env"``.
+    Requires a conda env named SMART--basic_test--env_a with Python 3.10.
+    The basic_test workflow that created it is no longer part of this
+    repository, so on a computer without that env the class is skipped. The
+    conda_env marker lets CI exclude it via ``pytest -m "not conda_env"``.
     """
 
     @classmethod
@@ -1272,7 +1273,7 @@ class TestEngineEnvironmentIsolation(unittest.TestCase):
         if not env_exists(info, cls.env_name):
             raise unittest.SkipTest(
                 f"conda env '{cls.env_name}' not found; "
-                f"run workflows/basic_test/environments/setup_env.py"
+                f"this test needs a Python 3.10 conda env of that name"
             )
 
     def test_step_runs_in_declared_environment(self):

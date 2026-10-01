@@ -44,8 +44,10 @@ DIAGNOSTICS = [
         "registration",
         "import numpy as np; from skimage.registration import phase_cross_correlation; "
         "a = np.random.default_rng(0).random((64, 64)); "
+        # The answer is the shift that moves the second picture back onto
+        # the first: rolled by (3, -2), it comes back by (-3, 2).
         "s, _, _ = phase_cross_correlation(a, np.roll(a, (3, -2), axis=(0, 1))); "
-        "print('OK' if tuple(np.round(s)) == (3.0, -2.0) else 'FAIL shift=' + str(s))",
+        "print('OK' if tuple(np.round(s)) == (-3.0, 2.0) else 'FAIL shift=' + str(s))",
     ),
     (
         "TIFF/zarr interop",

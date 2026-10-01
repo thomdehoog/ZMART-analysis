@@ -80,6 +80,10 @@ STEP_PROFILES = {
         ],
         "diagnostics": [
             (
+                "the well and plate summaries",
+                "import pandas; from sklearn.decomposition import PCA; print('OK')",
+            ),
+            (
                 "scikit-image",
                 "from skimage.measure import regionprops_table; "
                 "import numpy as np; "

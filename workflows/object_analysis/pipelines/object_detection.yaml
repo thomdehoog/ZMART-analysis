@@ -22,5 +22,8 @@ object_detection:
       max_area_px: null
       min_equivalent_diameter_um: null
       max_equivalent_diameter_um: null
+      # A small GPU can be slower than the processor: on a 4 GB NVIDIA T400,
+      # Cellpose took 12 s per 512x512 tile on the GPU and 7.5 s on the CPU.
+      # On such a card, time one tile each way and set false if it wins.
       gpu: true
       persist_only: true
