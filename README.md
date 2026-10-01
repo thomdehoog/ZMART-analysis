@@ -6,7 +6,7 @@
 
 <img src="docs/zmart-analysis-icon.png" align="left" width="150" alt="ZMART Analysis">
 
-ZMART Analysis is the analysis engine of ZMART, ZMB's Microscopy-Agnostic
+ZMART Analysis is the analysis engine of [ZMART](https://github.com/thomdehoog/ZMART-microscopy), ZMB's Microscopy-Agnostic
 Research Toolkit, developed at the Center for Microscopy and Image Analysis
 (ZMB), University of Zurich. It analyses images while the microscope is
 still acquiring them, and its results decide what the experiment images
