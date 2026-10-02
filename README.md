@@ -17,14 +17,15 @@ at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 Smart microscopy needs image analysis that keeps up with the microscope and
 that others can trust and repeat. Four things usually get in the way:
 
-1. **Reproducibility.** An analysis is written down as a recipe that
-   anyone can read, share and run again.
-2. **Compatibility.** Tools that need conflicting software can still be
-   used together in one analysis.
-3. **Real-time analysis.** Results arrive while the microscope is still
-   working, fast enough to act on.
+1. **Reproducibility.** An analysis kept in someone's head, or in a notebook
+   that changed since, cannot be repeated or checked by anyone else.
+2. **Compatibility.** Image-analysis tools often need software versions that
+   conflict, so they cannot be installed and used together.
+3. **Real-time analysis.** Starting a program and loading a model for every
+   image is far too slow to keep up with a microscope.
 4. **Scope.** Some questions are about one tile, others about a whole
-   compartment or carrier; each is answered as soon as its data is complete.
+   compartment or carrier, and each can only be answered once all of its
+   data is there.
 
 ## The Solution
 
