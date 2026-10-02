@@ -3,6 +3,7 @@
 [![tests](https://github.com/thomdehoog/ZMART-analysis/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/thomdehoog/ZMART-analysis/actions/workflows/test.yml)
 [![python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![status](https://img.shields.io/badge/status-release%20candidate-orange)](#status)
 
 <img src="docs/zmart-analysis-icon.png" align="left" width="150" alt="ZMART Analysis">
 
