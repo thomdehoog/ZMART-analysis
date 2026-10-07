@@ -70,10 +70,24 @@ The ZMART Analysis pipeline engine addresses all four of them.
    within one pipeline can differ in scope, so per-image steps run as each
    image comes in while a per-carrier step waits for the whole carrier.
 
-How this looks in practice is in [How the engine works](docs/how-the-engine-works.md)
-and [Writing a step](docs/writing-a-step.md).
+## Want to give it a try?
 
-## Try it yourself
+1. **[How the engine works](docs/how-the-engine-works.md).** Recipes, workers,
+   scopes, and what the engine reports.
+2. **[Writing a step](docs/writing-a-step.md).** The one function a step
+   needs, and how to give it its own environment.
+3. **[Folder structure](docs/folder-structure.md).** Where recipes, steps,
+   tests and environments live.
+4. **The workflows that ship**, each with its own notes:
+   [focus](workflows/focus/README.md),
+   [object analysis](workflows/object_analysis/README.md), with its
+   population summaries and plots, and
+   [driver configuration](workflows/driver_configuration/pipelines/orientation.yaml).
+
+## Install it
+
+Python 3.11 or newer and conda are needed. Conda is how each step gets its
+own software environment, and every environment comes from conda-forge only.
 
 ```bash
 git clone https://github.com/thomdehoog/ZMART-analysis.git
@@ -84,9 +98,6 @@ python -m pip install -e ".[test]"
 python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
-Python 3.11 or newer and conda are needed. Conda is how each step gets its
-own software environment, and every environment comes from conda-forge only.
-
 To see whether an environment made earlier still has what its workflow needs,
 for example after an update, add `--check`:
 `python workflows/object_analysis/environments/setup_env.py --step classical --check`.
@@ -96,21 +107,7 @@ Cellpose downloads its model (about 1.2 GB) the first time it runs, into
 Windows profile has a size limit, set `CELLPOSE_LOCAL_MODELS_PATH` to that
 folder before the first run.
 
-The documentation, from the start:
-
-- [How the engine works](docs/how-the-engine-works.md): recipes, workers,
-  scopes, and what the engine reports.
-- [Writing a step](docs/writing-a-step.md): the one function a step needs,
-  and how to give it its own environment.
-- [Folder structure](docs/folder-structure.md): where recipes, steps, tests
-  and environments live.
-- The workflows that ship, each with its own notes:
-  [focus](workflows/focus/README.md),
-  [object analysis](workflows/object_analysis/README.md), with its
-  population summaries and plots, and
-  [driver configuration](workflows/driver_configuration/pipelines/orientation.yaml).
-
-### Status
+## Status
 
 This is a release candidate. The step format, the recipe layout and the
 `Engine` calls are settled in spirit, and small changes may still happen
