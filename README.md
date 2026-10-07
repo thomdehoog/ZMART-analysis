@@ -32,7 +32,7 @@ following four problems.
    parameters. Making sure that these pipelines are reproducible, properly
    documented and easy to share is a challenge on its own.
 
-3. **Time.** The analysis is time sensitive. The microscope waits for the
+3. **Time.** The analysis is often time sensitive. The microscope waits for the
    answer, so images must be analysed as soon as they come in and the
    analysis must keep up with the acquisition.
 
