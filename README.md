@@ -10,7 +10,7 @@
 <td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
 <td valign="middle">
 
-**ZMART Analysis** is an image analysis engine that lets you build pipelines suited for smart microscopy. It handles dependency conflicts between analysis steps, keeps every pipeline reproducible, and analyses images as the microscope acquires them, so the results can decide what to image next. An interface, an AI agent or any workflow can plug it in.
+**ZMART Analysis** is an image analysis engine built for smart microscopy. It analyses images as the microscope acquires them, so the results can decide what to image next. Tools with conflicting dependencies work together in one pipeline, and every pipeline is reproducible. An interface, an AI agent or any workflow can plug it in.
 
 It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 
