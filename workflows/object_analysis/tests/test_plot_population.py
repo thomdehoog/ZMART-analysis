@@ -2,9 +2,6 @@
 
 The conditioning is pinned on a small table; the components and the UMAP
 run for real on a population small enough to be quick.
-
-Author: Thom de Hoog, Center for Microscopy and Image Analysis (ZMB),
-University of Zurich (thom.dehoog@zmb.uzh.ch, thomdehoog@gmail.com).
 """
 
 from __future__ import annotations

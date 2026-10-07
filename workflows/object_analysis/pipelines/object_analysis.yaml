@@ -1,4 +1,20 @@
-# Object-centered analysis for one acquired image tile.
+# Object-centered analysis for one acquired image tile: detect the objects,
+# measure each, publish the table.
+#
+# What to submit with each job (see README.md, "Input"):
+#
+#   image_path             an OME-Zarr position or an OME-TIFF
+#   tile_id                e.g. ["R0", 3, 7]
+#   tile_stage_xy_um       the tile's stage position
+#   tile_z_um              capture height; optional
+#   source_pixel_size_um   [x, y]
+#   source_image_size_px   [nx, ny]
+#   image_to_stage         the 2x2 matrix from image to stage axes
+#   channels               up to three channel indices; null for all
+#   gpu                    true or false
+#
+# What comes back, under `object_analysis`: the object table, one row per
+# object, with its features and stage position.
 
 metadata:
   purpose: "Object-centered image analysis"
@@ -7,9 +23,7 @@ metadata:
   functions_dir: "../steps"
 
 object_analysis:
-  - detect_objects:
-      method: robust   # robust = Cellpose; fast = QuPath-style watershed
-      threshold: 100     # fast only: a nucleus's mean above background, in counts
+  - detect_objects:       # Cellpose; for the watershed, see object_analysis_fast.yaml
       channels: null
       channel_axis: null
       cellprob_threshold: 0.0
@@ -37,7 +51,7 @@ object_analysis:
       intensity_scale: null
       # Every extras family: texture (gradients, stat_texture, lbp, fft,
       # glrlm), background (global_bg, local_bg), neighbourhood, morphology.
-      # Each becomes a gating axis on the page, and every channelised extra
+      # Each becomes a gating axis on the operator page of ZMART Microscopy, and every channelised extra
       # is reported per colour (name, name_c0, name_c1, ...), the same
       # contract the intensity columns already follow.
       extras: [all]

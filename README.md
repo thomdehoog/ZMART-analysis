@@ -10,7 +10,7 @@
 <td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
 <td valign="middle">
 
-**ZMART Analysis** is an image analysis engine built for smart microscopy. It analyses images as the microscope acquires them, so the results can decide what to image next. Tools with conflicting dependencies work together in one pipeline, and every pipeline is reproducible. An interface, an AI agent or any workflow can plug it in.
+**ZMART Analysis** is an image analysis engine built for smart microscopy. It analyses images as the microscope acquires them, so the results can decide what to image next. Tools with conflicting dependencies work together in one pipeline, and every pipeline is reproducible. Any interface, AI agent or acquisition workflow can drive it.
 
 It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 
@@ -54,9 +54,10 @@ The ZMART Analysis pipeline engine addresses all four of them.
 
 2. **Pipelines are constructed in YAML files.** Which steps are pieced
    together, in which order, with which parameters, is defined in a YAML
-   file. An analysis is always started from this file, so it is reproducible
-   and easy to share and document. Every result also records the environment,
-   Python version and package versions each step actually ran with.
+   file: the *recipe*. An analysis is always started from this file, so it
+   is reproducible and easy to share and document. Every result also records
+   the environment, Python version and package versions each step actually
+   ran with.
 
 3. **Environments stay active, and several can run at once.** During a run,
    the analysis environments (workers) are started once and stay active, so
@@ -68,15 +69,28 @@ The ZMART Analysis pipeline engine addresses all four of them.
    needs to run: a single image, a group, a compartment, a carrier, or the
    experiment. When all the data for a scope is in, the step starts. Steps
    within one pipeline can differ in scope, so per-image steps run as each
-   image comes in while a per-carrier step waits for the whole carrier.
+   image comes in while a per-carrier step waits for the whole carrier, is
+   told what failed beneath it, and carries the lineage of every image it
+   was built from.
 
 ## Want to give it a try?
 
+```python
+from engine import Engine
+
+engine = Engine()
+engine.register("focus", "workflows/focus/pipelines/focus.yaml")
+engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
+print(engine.results("focus"))
+engine.shutdown()
+```
+
 1. **[Use the engine](docs/1_use_the_engine/README.md).** Every call, the
    recipe format, scopes, workers, and what comes back.
+   Tutorial: [notebook](docs/1_use_the_engine/tutorial.ipynb).
 2. **[Implement an analysis step](docs/2_implement_an_analysis_step/README.md).**
    The one function a step needs, its own environment, and where everything
-   lives.
+   lives. Tutorial: [notebook](docs/2_implement_an_analysis_step/tutorial.ipynb).
 3. **[The workflows we use](docs/3_workflows_we_use/README.md).** Focus,
    object analysis and driver configuration: what each does and where to
    start.
@@ -94,6 +108,9 @@ pip install -e .
 python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
+The package installs as `engine`: `from engine import Engine`. The
+tutorials are notebooks; `pip install jupyter` to run them.
+
 ## Status
 
 This is a release candidate. The step format, the recipe layout and the
@@ -108,10 +125,13 @@ pip install -e ".[test]"
 pytest -m "not cellpose and not conda_env and not pooch"
 ```
 
-This is what the continuous integration runs on every change. Without the
-`-m` filter the suite also runs the tests that need the per-step conda
+This is what the continuous integration runs on every change, on Linux,
+macOS and Windows with Python 3.11 to 3.13, after `ruff check .`. Without
+the `-m` filter the suite also runs the tests that need the per-step conda
 environments, Cellpose with its model, and public sample images downloaded
-on first use.
+on first use. `tests/` holds the engine's tests and those of
+`workflows/shared/`; each workflow's steps are tested in its own
+`workflows/<name>/tests/`.
 
 ## Author
 
@@ -125,7 +145,7 @@ for how to cite ZMART Analysis.
 
 ## Links
 
-- [ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy): the main repository, with the workflows
+- [ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy): the main repository, with the acquisition workflows
 - [ZMART Controller](https://github.com/thomdehoog/ZMART-controller): one vocabulary for driving any microscope
 - [ZMART Drivers](https://github.com/thomdehoog/ZMART-drivers): the drivers that plug into the controller
 - [ZMART viewer](https://github.com/thomdehoog/ZMART-viewer): the viewer

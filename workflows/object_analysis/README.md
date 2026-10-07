@@ -1,17 +1,56 @@
 # `object_analysis` workflow
 
-Object-centered analysis for one acquired image tile.
+Object-centered analysis for one acquired image *tile*: one image of a larger field, submitted as it lands.
 
 ```text
 object_analysis.yaml:       detect_objects -> extract_classical_features -> build_object_table
-object_analysis_fast.yaml:  the same, detection placed in the classical environment (method: fast),
+object_analysis_fast.yaml:  the same, with detect_objects_fast: a watershed in the classical environment,
                             features without the per-object texture crops (glrlm, lbp, fft)
 object_detection.yaml:      detect_objects   (persist_only: masks and checkpoint, no features)
 object_analysis_scoped.yaml: the three steps per tile, then
                              summarise_population (scope: compartment) its objects as a population
                              compare_populations  (scope: carrier)     the compartments side by side
-population_plots.yaml:      plot_population  (on the operator's ask) a PCA or UMAP of a detected population
+population_plots.yaml:      plot_population  (on request) a PCA or UMAP of a detected population
 ```
+
+Each step file names its own environment: `detect_objects` the Cellpose one,
+`detect_objects_fast` the classical one, so the fast pipeline never spawns
+the torch worker. A recipe does not set environments. Every recipe answers
+under `pipeline_data["object_analysis"]`.
+
+## Input
+
+Submit one tile at a time:
+
+```python
+{
+    "image_path": "path/to/position",      # OME-Zarr position or OME-TIFF
+    "tile_id": ["R0", 3, 7],
+    "tile_stage_xy_um": [10000.0, 15000.0],
+    "tile_z_um": 2500.0,               # capture height; optional
+    "source_pixel_size_um": [0.65, 0.65],
+    "source_image_size_px": [2048, 2048],  # (nx, ny)
+    "image_to_stage": [[0.0, -1.0], [1.0, 0.0]],
+    "channels": None,                      # up to three; [0, 2] to choose
+    "gpu": False,
+}
+```
+
+## Output
+
+The result lands under `pipeline_data["object_analysis"]` as the object
+table: per-object features plus `stage_x_um`/`stage_y_um` (placed via the
+tile's own geometry), `tile_name`, and `object_id`.
+
+`detect_objects` also writes `masks.tif`, `raw_masks.tif` and
+`detection_checkpoint.json` under `<analysis>/tiles/<short_name>/` — into the
+`analysis` folder beside the `data` the image came from, or `output_dir` when
+given, or nowhere when the image is outside an acquisition and no
+`output_dir` names a place. The checkpoint records the effective parameters,
+a hash of the true mask-generation parameters, and content hashes of the
+image and masks, so a run is reproducible from what actually ran.
+
+## The scoped recipe
 
 The scoped recipe is for runs that tell the engine when a compartment and a
 carrier are complete. Each compartment's population is described once all
@@ -30,6 +69,8 @@ failed (`n_failed_units`) and the tiles of compartments not closed when the
 carrier was (`n_not_closed`), and every summary and comparison carries its
 `lineage`: the tiles under it and where every step below it ran.
 
+## The population plot
+
 The population plot is the one recipe here that does not run per tile. Once
 a whole overview has been detected and its object table written, the
 operator can ask for a plot of that population: the first two principal
@@ -40,11 +81,6 @@ It uses the same conditioning and PCA as the compartment summary
 (`workflows/shared/population.py`), so a principal component means the same thing
 in both. A UMAP over half a million objects takes minutes, which is why it
 runs on request and never during detection.
-
-Each step file names its own environment: `detect_objects` the Cellpose one,
-`detect_objects_fast` the classical one, so the fast pipeline never spawns
-the torch worker. A recipe does not set environments. Both pipelines answer
-under `pipeline_data["object_analysis"]`.
 
 ## Environments
 
@@ -75,27 +111,10 @@ and scikit-image on numpy, released together, and splitting them would cost a
 second worker spawn and a pickle hop of the image per field for no isolation.
 
 Every parameter lives in the pipeline YAML with its default, and each can be
-overridden per submission — which is how the operator page tunes detection on
-one position without registering a pipeline of its own. The step docstrings
+overridden per submission, which is how the operator page in ZMART
+Microscopy tunes detection on one position without registering a pipeline
+of its own. The step docstrings
 are the reference for what each takes and returns.
-
-## Input
-
-Submit one tile at a time:
-
-```python
-{
-    "image_path": "path/to/position",      # OME-Zarr position or OME-TIFF
-    "tile_id": ["R0", 3, 7],
-    "tile_stage_xy_um": [10000.0, 15000.0],
-    "tile_z_um": 2500.0,               # capture height; optional
-    "source_pixel_size_um": [0.65, 0.65],
-    "source_image_size_px": [2048, 2048],  # (nx, ny)
-    "image_to_stage": [[0.0, -1.0], [1.0, 0.0]],
-    "channels": None,                      # up to three; [0, 2] to choose
-    "gpu": False,
-}
-```
 
 ## Tuning notes
 
@@ -109,20 +128,6 @@ Submit one tile at a time:
   not only speed.
 - `cellprob_threshold` lower = larger/more masks; `flow_threshold` is
   Cellpose's flow-consistency QC; `niter` helps very long objects.
-
-## Output
-
-The result lands under `pipeline_data["object_analysis"]` as the object
-table: per-object features plus `stage_x_um`/`stage_y_um` (placed via the
-tile's own geometry), `tile_name`, and `object_id`.
-
-`detect_objects` also writes `masks.tif`, `raw_masks.tif` and
-`detection_checkpoint.json` under `<analysis>/tiles/<short_name>/` — into the
-`analysis` folder beside the `data` the image came from, or `output_dir` when
-given, or nowhere when the image is outside an acquisition and no
-`output_dir` names a place. The checkpoint records the effective parameters,
-a hash of the true mask-generation parameters, and content hashes of the
-image and masks, so a run is reproducible from what actually ran.
 
 ## The Cellpose model
 
