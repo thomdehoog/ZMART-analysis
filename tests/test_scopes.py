@@ -619,15 +619,39 @@ def test_every_level_records_its_own_step_and_scope(recipe):
     assert compartment["inputs_provenance"] == [["tile"], ["tile"]]
 
 
-@pytest.mark.xfail(strict=True, reason="known gap: a scoped result does not say which tiles it "
-                                       "was built from, nor where their steps ran, unless the "
-                                       "step copies that over itself")
 def test_a_carrier_can_be_traced_back_to_its_tiles(recipe):
+    """Lineage: which tiles a unit was built from, and where every step
+    below it ran, through three levels."""
+    with Engine() as e:
+        e.register("p", recipe("group", "compartment", "carrier", then_double=True))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1, "group": 1}, complete="group")
+        submit_tiles(e, [3], {"carrier": 1, "compartment": 1, "group": 2},
+                     complete=["group", "compartment", "carrier"])
+        results = scoped(e, 4)
+
+    group = by_unit(results, "group")[(("carrier", 1), ("compartment", 1), ("group", 1))]
+    assert group["lineage"]["submissions"] == [0, 1]
+    assert set(group["lineage"]["provenance"]) == {"tile"}
+    assert set(group["provenance"]) == {"unit"}
+
+    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
+    assert carrier["lineage"]["submissions"] == [0, 1, 2]
+    assert carrier["lineage"]["failed"] == []
+    assert set(carrier["lineage"]["provenance"]) == {"tile", "unit"}   # below the carrier
+    assert len(carrier["lineage"]["provenance"]["unit"]) == 1     # one environment
+    assert set(carrier["provenance"]) == {"unit", "double"}
+
+
+def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1},
+        e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})           # idx 0
+        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")  # idx 1
+        submit_tiles(e, [666], {"carrier": 1, "compartment": 2},                        # idx 2
                      complete=["compartment", "carrier"])
         results = scoped(e, 2)
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    assert "tile" in carrier["provenance"]
+    failed = sorted((f["step"], f["phase"], f["submission_idx"]) for f in carrier["lineage"]["failed"])
+    assert failed == [("tile", 0, 0), ("unit", 1, 2)]
+    assert carrier["lineage"]["submissions"] == [1]

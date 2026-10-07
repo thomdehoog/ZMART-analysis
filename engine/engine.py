@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import ast
 import heapq
+import json
 import logging
 import os
 import sys
@@ -480,6 +481,41 @@ class Engine:
 
     # -- Internal: scope completion ------------------------------------
 
+    @staticmethod
+    def _lineage(results, failures):
+        """What a scoped result is built from.
+
+        ``submissions`` are the indices of every tile under the unit,
+        ``failed`` every failure record under it, and ``provenance`` the
+        distinct record of every step below this one: where it ran, on
+        which Python and packages. One record per step is the norm; two
+        mean the environment changed during the run.
+        """
+        submissions, failed, provenance, seen = [], list(failures), {}, set()
+
+        def add(step, record):
+            key = (step, json.dumps(record, sort_keys=True, default=str))
+            if key not in seen:
+                seen.add(key)
+                provenance.setdefault(step, []).append(record)
+
+        for r in results:
+            below = r.get("lineage")
+            if below:
+                submissions += below["submissions"]
+                failed += below["failed"]
+                for step, records in below["provenance"].items():
+                    for record in records:
+                        add(step, record)
+            else:
+                idx = r.get("metadata", {}).get("submission_idx")
+                if idx is not None:
+                    submissions.append(idx)
+            for step, record in r.get("provenance", {}).items():
+                add(step, record)
+        return {"submissions": sorted(submissions), "failed": failed,
+                "provenance": provenance}
+
     def _handle_scope_complete(self, state, level, scope, submission_idx):
         """Handle a scope completion signal.
 
@@ -518,13 +554,16 @@ class Engine:
         # Clean up consumed job entries
         state.cleanup_consumed_entries(value, submission_idx)
 
-        # Execute the scoped phase
+        # Execute the scoped phase. The lineage is attached after the step
+        # returns, so a step that builds a new dict cannot drop it.
+        lineage = self._lineage(results, failures)
         state.record_start(is_submission=False)
         step_name = [None]
         try:
             result = self._execute_scoped_phase(
                 state, phase_idx, results, failures, scope, level,
                 value or {}, step_name)
+            result["lineage"] = lineage
 
             # Store for next phase if there is one
             next_phase = phase_idx + 1
