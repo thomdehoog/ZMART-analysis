@@ -26,13 +26,16 @@ following four problems.
 1. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
    Each step needs the right environment with the right dependencies, and
    often there is no single environment in which all steps can run.
+
 2. **Reproducibility.** Image analysis pipelines can be complex and are often
    fitted to one use case. They chain many algorithms, each with their own
    parameters. Making sure that these pipelines are reproducible, properly
    documented and easy to share is a challenge on its own.
+
 3. **Time.** The analysis is time sensitive. The microscope waits for the
    answer, so images must be analysed as soon as they come in and the
    analysis must keep up with the acquisition.
+
 4. **Analysis over scopes.** Depending on the experiment, analysis needs to
    be done over single images, a group of images, a compartment, a carrier,
    or a whole experiment. However, the data does not come in all at once. A
