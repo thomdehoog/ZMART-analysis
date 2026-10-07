@@ -26,6 +26,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.fft import dctn
 
+
 def brenner(plane: np.ndarray) -> float:
     """Mean squared difference between pixels two apart, along both axes.
 

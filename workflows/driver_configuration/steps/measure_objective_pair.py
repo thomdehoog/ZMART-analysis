@@ -43,9 +43,9 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.image_io import as_plane as _plane  # noqa: E402
-from shared.focus_metrics import brenner  # noqa: E402
 from scipy.ndimage import zoom
+from shared.focus_metrics import brenner  # noqa: E402
+from shared.image_io import as_plane as _plane  # noqa: E402
 from skimage.registration import phase_cross_correlation
 
 METADATA = {
@@ -209,7 +209,8 @@ def _norm(a: np.ndarray) -> np.ndarray:
 def overlay_rgb(ref_norm: np.ndarray, tgt_norm: np.ndarray) -> np.ndarray:
     """Reference in magenta, target in green: where the two carry the same
     structure the colours add up to white, so a misfit shows as fringes."""
-    h = max(ref_norm.shape[0], tgt_norm.shape[0]); w = max(ref_norm.shape[1], tgt_norm.shape[1])
+    h = max(ref_norm.shape[0], tgt_norm.shape[0])
+    w = max(ref_norm.shape[1], tgt_norm.shape[1])
     rgb = np.zeros((h, w, 3))
     rgb[: ref_norm.shape[0], : ref_norm.shape[1], 0] = ref_norm
     rgb[: ref_norm.shape[0], : ref_norm.shape[1], 2] = ref_norm
@@ -242,14 +243,16 @@ def write_focus_diagnostic(stack, focus: dict, path, *, title: str = "Software A
     ax.axvline(focus["peak_z_um"], color="red" if bracketed else "#b45309", linestyle="--",
                label=f"peak z = {focus['peak_z_um']:.3f} um" if bracketed
                else f"no peak: sharpest at the stack's end ({focus['peak_z_um']:.1f} um)")
-    ax.set_xlabel("z (um, absolute)"); ax.set_ylabel("Brenner Gradient Score")
+    ax.set_xlabel("z (um, absolute)")
+    ax.set_ylabel("Brenner Gradient Score")
     ax.set_title(title if bracketed else f"{title} — refocus and measure again", color="#0f172a" if bracketed else "#b45309")
     ax.legend(loc="best")
     stack = list(stack or [])
     if stack:
         ax_img.imshow(_plane(stack[min(focus["peak_index"], len(stack) - 1)], channel), cmap="gray", origin="upper")
     ax_img.set_title(f"Focus position (Z = {focus['peak_z_um']:.2f} µm)")
-    ax_img.set_xticks([]); ax_img.set_yticks([])
+    ax_img.set_xticks([])
+    ax_img.set_yticks([])
     fig.savefig(str(path), dpi=100)
     return str(path)
 
@@ -265,11 +268,15 @@ def write_overlay_diagnostic(reference: dict, target: dict, answer: dict, path, 
     except ImportError:
         return None
     ref_um, tgt_um = float(reference["pixel_um"]), float(target["pixel_um"])
-    ref = _plane(reference["image"], channel); tgt = _plane(target["image"], channel)
+    ref = _plane(reference["image"], channel)
+    tgt = _plane(target["image"], channel)
     scale_um = max(ref_um, tgt_um)
-    ref_s = _to_scale(ref, ref_um, scale_um); tgt_s = _to_scale(tgt, tgt_um, scale_um)
-    rows = min(ref_s.shape[0], tgt_s.shape[0]); cols = min(ref_s.shape[1], tgt_s.shape[1])
-    ref_c = _centre_crop(ref_s, rows, cols); tgt_c = _centre_crop(tgt_s, rows, cols)
+    ref_s = _to_scale(ref, ref_um, scale_um)
+    tgt_s = _to_scale(tgt, tgt_um, scale_um)
+    rows = min(ref_s.shape[0], tgt_s.shape[0])
+    cols = min(ref_s.shape[1], tgt_s.shape[1])
+    ref_c = _centre_crop(ref_s, rows, cols)
+    tgt_c = _centre_crop(tgt_s, rows, cols)
     reg = answer["registration"]
     tgt_back = nd_shift(tgt_c, (-reg["drow_px"], -reg["dcol_px"]), order=1)
     t = answer["translation_um"]
@@ -284,6 +291,7 @@ def write_overlay_diagnostic(reference: dict, target: dict, answer: dict, path, 
     ax.set_title(f"Reference (magenta) vs target (green), as acquired\nshift ({t['x']:+.2f}, {t['y']:+.2f}) um")
     ax.set_axis_off()
     ax2.imshow(overlay_rgb(_norm(ref_c), _norm(tgt_back)), origin="upper")
-    ax2.set_title("Target after the measured correction"); ax2.set_axis_off()
+    ax2.set_title("Target after the measured correction")
+    ax2.set_axis_off()
     fig.savefig(str(path), dpi=100)
     return str(path)

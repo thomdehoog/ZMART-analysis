@@ -46,14 +46,14 @@ Usage (called by Worker, not directly)
 
 import argparse
 import hashlib
-import platform
-from importlib import metadata
 import logging
 import os
 import pickle
+import platform
 import sys
 import traceback
 import types
+from importlib import metadata
 from multiprocessing.connection import Client
 
 

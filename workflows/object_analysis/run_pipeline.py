@@ -14,7 +14,6 @@ sys.path.insert(0, str(WORKFLOWS_DIR))
 
 from engine import Engine  # noqa: E402
 
-
 WORKFLOW_DIR = Path(__file__).resolve().parent
 CLASSICAL_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis.yaml"
 

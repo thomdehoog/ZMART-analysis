@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 
 from engine.conda_utils import (
-    get_conda_info,
-    get_conda_exe,
-    env_exists,
-    list_envs_by_prefix,
     detect_gpu,
-    gpu_label,
+    env_exists,
+    get_conda_exe,
+    get_conda_info,
     get_torch_install_args,
+    gpu_label,
+    list_envs_by_prefix,
 )
 
 

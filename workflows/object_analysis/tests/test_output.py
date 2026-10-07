@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
 import detect_objects  # noqa: E402
 from detect_objects import analysis_dir, file_sha256, short_name  # noqa: E402
@@ -171,10 +170,9 @@ def _detection(masks):
 
 def _written_to(tmp_path, image):
     """Run the checkpoint writer for *image*, with no output_dir named."""
+    import detect_objects
     import numpy as np
     import tifffile
-
-    import detect_objects
 
     image.parent.mkdir(parents=True, exist_ok=True)
     masks = np.zeros((8, 8), dtype="int32")

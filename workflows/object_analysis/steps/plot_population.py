@@ -48,7 +48,11 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.population import conditioned, measured_columns, principal_components  # noqa: E402
+from shared.population import (  # noqa: E402
+    conditioned,
+    measured_columns,
+    principal_components,
+)
 
 METADATA = {
     "description": "Principal components or a UMAP of a discovered population",

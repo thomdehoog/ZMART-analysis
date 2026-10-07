@@ -1,9 +1,8 @@
 """extract_classical_features -- per-object features for one detected tile."""
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 import numpy as np
-
 
 METADATA = {
     "description": "Per-object features (shape / intensity / neighbourhood / texture)",
@@ -683,7 +682,8 @@ def _statistical_texture_values(
     rows = label_to_row[masks[fg]]
     vals = img_q[fg]
     valid = rows >= 0
-    rows = rows[valid]; vals = vals[valid]
+    rows = rows[valid]
+    vals = vals[valid]
 
     counts = np.bincount(
         rows * n_bins + vals, minlength=len(labels) * n_bins
@@ -747,9 +747,10 @@ def _lbp_values(
     slices: list,
     params: dict,
 ) -> dict[str, np.ndarray]:
+    from scipy.stats import kurtosis as sstat_kurt
+    from scipy.stats import skew as sstat_skew
     from skimage.feature import local_binary_pattern
     from skimage.measure import shannon_entropy
-    from scipy.stats import skew as sstat_skew, kurtosis as sstat_kurt
 
     P = int(params.get("lbp_P", 8))
     R = float(params.get("lbp_R", 1))
@@ -823,7 +824,8 @@ def _fft_values(
     slices: list,
     params: dict,
 ) -> dict[str, np.ndarray]:
-    from scipy.stats import skew as sstat_skew, kurtosis as sstat_kurt
+    from scipy.stats import kurtosis as sstat_kurt
+    from scipy.stats import skew as sstat_skew
 
     n_bins = int(params.get("fft_entropy_bins", 256))
     n = len(labels)

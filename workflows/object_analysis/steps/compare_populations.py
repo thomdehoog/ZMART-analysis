@@ -100,7 +100,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             "n_failed_units": n_failed_units,
             "n_not_closed": n_not_closed,
             "n_objects": int(sum(u["n_objects"] for u in units)),
-            "objects_per_unit": {n: u["n_objects"] for n, u in zip(names, units)},
+            "objects_per_unit": {n: u["n_objects"] for n, u in zip(names, units, strict=True)},
             "features": features,
             "profiles": {unit: row.to_dict() for unit, row in profiles.iterrows()},
             "robust_z": {unit: row.to_dict() for unit, row in zscores.iterrows()},

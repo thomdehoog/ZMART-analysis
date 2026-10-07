@@ -319,7 +319,9 @@ def candidate_overlay(home, plus_x, plus_y, *, stage_move_um, pixel_um, rotation
     agreement = 0.0 if a.size < 16 or a.std() == 0 or b.std() == 0 else float(np.corrcoef(a, b)[0, 1])
     ref, tgt = _for_display(home), _for_display(moved)
     rgb = np.zeros((*ref.shape, 3))
-    rgb[..., 0] = ref; rgb[..., 2] = ref; rgb[..., 1] = tgt
+    rgb[..., 0] = ref
+    rgb[..., 2] = ref
+    rgb[..., 1] = tgt
     return reorient(np.clip(rgb, 0.0, 1.0), rotation_deg, reflection), max(agreement, 0.0)
 
 
@@ -368,10 +370,12 @@ def write_diagnostic(home, plus_x, plus_y, answer: dict, path, *, channel: int =
     grid = fig.add_gridspec(2, 1, height_ratios=(0.95, 5.4), left=0.035, right=0.985, bottom=0.09, top=0.98, hspace=0.09)
 
     # The answer, in a card.
-    card = fig.add_subplot(grid[0]); card.set_axis_off()
+    card = fig.add_subplot(grid[0])
+    card.set_axis_off()
     card.add_patch(FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.012,rounding_size=0.03",
                                   transform=card.transAxes, facecolor="#f8fafc", edgecolor=line, linewidth=1.2, clip_on=False))
-    t = lambda x, y, text, **kw: card.text(x, y, text, transform=card.transAxes, va="center", **kw)
+    def t(x, y, text, **kw):
+        return card.text(x, y, text, transform=card.transAxes, va="center", **kw)
     t(0.025, 0.82, "DETECTED IMAGE CORRECTION" if accepted else "ORIENTATION NOT ACCEPTED", ha="left",
       fontsize=11, fontweight="bold", color=verdict_colour)
     for x, label, value in ((0.025, "ROTATION", f"{o['rotation_deg']}° clockwise"),
@@ -386,7 +390,8 @@ def write_diagnostic(home, plus_x, plus_y, answer: dict, path, *, channel: int =
     gallery = grid[1].subgridspec(4, 5, width_ratios=(0.14, 1, 1, 1, 1), height_ratios=(1, 0.12, 1, 0.12),
                                   hspace=0.05, wspace=0.05)
     for row, (reflection, label) in enumerate(((False, "no mirror"), (True, "mirrored"))):
-        lab = fig.add_subplot(gallery[2 * row, 0]); lab.set_axis_off()
+        lab = fig.add_subplot(gallery[2 * row, 0])
+        lab.set_axis_off()
         lab.text(0.5, 0.5, label, transform=lab.transAxes, ha="center", va="center", rotation=90,
                  fontsize=11, fontweight="bold", color=ink_3)
         for column, rotation_deg in enumerate((0, 90, 180, 270)):
@@ -394,17 +399,21 @@ def write_diagnostic(home, plus_x, plus_y, answer: dict, path, *, channel: int =
             selected = (rotation_deg, reflection) == chosen
             ax = fig.add_subplot(gallery[2 * row, column + 1])
             ax.imshow(overlay, interpolation="nearest", alpha=1.0 if selected else 0.55)
-            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_xticks([])
+            ax.set_yticks([])
             if row == 0:
                 ax.set_title(f"{rotation_deg}°", fontsize=13, fontweight="bold", color=ink_2 if selected else ink_3, pad=6)
             for spine in ax.spines.values():
-                spine.set_color(verdict_colour if selected else line); spine.set_linewidth(3.5 if selected else 1.0)
+                spine.set_color(verdict_colour if selected else line)
+                spine.set_linewidth(3.5 if selected else 1.0)
             if selected:
                 ax.text(0.5, 0.05, "✓  SELECTED" if accepted else "NEAREST · REJECTED", transform=ax.transAxes,
                         ha="center", va="bottom", color="white", fontsize=9, fontweight="bold",
                         bbox={"facecolor": verdict_colour, "edgecolor": "none", "boxstyle": "round,pad=0.35"})
-            bar = fig.add_subplot(gallery[2 * row + 1, column + 1]); bar.set_axis_off()
-            bar.set_xlim(0, 1); bar.set_ylim(0, 1)
+            bar = fig.add_subplot(gallery[2 * row + 1, column + 1])
+            bar.set_axis_off()
+            bar.set_xlim(0, 1)
+            bar.set_ylim(0, 1)
             bar.add_patch(Rectangle((0, 0.3), 1, 0.4, facecolor=line, edgecolor="none"))
             bar.add_patch(Rectangle((0, 0.3), agreement, 0.4, facecolor=verdict_colour if selected else "#94a3b8", edgecolor="none"))
             bar.text(1.0, 0.5, f"{agreement:.2f}", ha="right", va="center", fontsize=11,

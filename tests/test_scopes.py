@@ -164,7 +164,7 @@ def test_two_carriers_interleaved_keep_their_compartments_apart(recipe):
     """Both carriers have a compartment 1; tiles of the two arrive mixed."""
     with Engine(max_concurrent=4) as e:
         e.register("p", recipe("compartment", "carrier"))
-        for value in range(3):
+        for _ in range(3):
             e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1})
             e.submit("p", {"value": 100}, scope={"carrier": 2, "compartment": 1})
         e.submit("p", {"value": 0}, scope={"carrier": 2, "compartment": 1},

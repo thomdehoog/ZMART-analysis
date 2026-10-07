@@ -1,8 +1,6 @@
 """detect_objects -- Cellpose object detection for one image tile."""
 
 from __future__ import annotations
-from typing import Any
-from collections.abc import Mapping
 
 import hashlib
 import json
@@ -10,7 +8,9 @@ import math
 import operator
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -19,7 +19,6 @@ from shared.image_io import (  # noqa: E402
     load_channels,
     load_plane,
 )
-
 
 METADATA = {
     "description": "Detect objects in a TIFF tile with Cellpose",
@@ -865,7 +864,7 @@ def filter_masks_by_area(masks, *, min_area_px=None, max_area_px=None):
         keep &= areas <= max_area_px
 
     present = np.flatnonzero(areas)
-    return _keep_labels(masks, [int(l) for l in present if l and keep[l]])
+    return _keep_labels(masks, [int(label) for label in present if label and keep[label]])
 
 
 def filter_masks_by_border(masks, *, border_margin_px=None):
@@ -905,7 +904,7 @@ def filter_masks_by_border(masks, *, border_margin_px=None):
         masks[:, :margin].ravel(), masks[:, -margin:].ravel(),
     ])).tolist())
     present = np.flatnonzero(np.bincount(masks.ravel()))
-    return _keep_labels(masks, [int(l) for l in present if l and l not in touching])
+    return _keep_labels(masks, [int(label) for label in present if label and label not in touching])
 
 
 def _keep_labels(masks, keep: list[int]):
@@ -920,7 +919,7 @@ def _keep_labels(masks, keep: list[int]):
     """
     present = np.flatnonzero(np.bincount(masks.ravel()))
     keep_set = set(int(k) for k in keep)
-    dropped = sorted(int(l) for l in present if l and int(l) not in keep_set)
+    dropped = sorted(int(label) for label in present if label and int(label) not in keep_set)
     kept = np.where(np.isin(masks, list(keep_set)), masks, 0)
     return kept.astype(np.int32, copy=False), dropped
 

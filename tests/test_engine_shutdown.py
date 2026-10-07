@@ -8,9 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from engine import Engine
 import engine.engine as engine_module
-
+from engine import Engine
 
 pytestmark = pytest.mark.adversarial
 

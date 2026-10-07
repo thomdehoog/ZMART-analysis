@@ -120,7 +120,8 @@ def test_a_missing_value_takes_its_columns_median(tmp_path):
     rows = table.read_text(encoding="utf-8").splitlines()
     header = rows[0].split(",")
     area = header.index("area")
-    cells = rows[1].split(","); cells[area] = ""
+    cells = rows[1].split(",")
+    cells[area] = ""
     rows[1] = ",".join(cells)
     table.write_text("\n".join(rows) + "\n", encoding="utf-8")
     got = _plotted(table, "pca")

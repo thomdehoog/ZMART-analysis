@@ -38,24 +38,35 @@ import sys
 import threading
 import time
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 # The engine package sits one folder up, at the root of the repository.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Step files, recipes and the polling helpers are the shared ones from conftest.
+from conftest import (  # noqa: E402
+    _SESSION_TEMP,
+    _next_id,
+    _wait_for_results,
+    _wait_for_status,
+)
+from conftest import (
+    _write_step as _temp_step,
+)
+from conftest import (
+    _write_yaml as _temp_yaml,
+)
 from engine import (
-    WorkerError, WorkerSpawnError, WorkerCrashedError,
-    WorkerTimeoutError, StepExecutionError, ScopeError,
+    ScopeError,
+    StepExecutionError,
+    WorkerCrashedError,
+    WorkerError,
+    WorkerSpawnError,
+    WorkerTimeoutError,
 )
 from engine.engine import get_step_settings
 from engine.pipeline import split_phases
-
-# Step files, recipes and the polling helpers are the shared ones from conftest.
-from conftest import (  # noqa: E402
-    _SESSION_TEMP, _next_id, _wait_for_results, _wait_for_status,
-    _write_step as _temp_step, _write_yaml as _temp_yaml,
-)
 
 _TEMP_DIR = str(_SESSION_TEMP)
 
@@ -417,6 +428,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         # Orphan detection must watch the engine PID explicitly, because a
         # conda-env worker's real parent is the `conda run` wrapper.
         import subprocess as _sp
+
         from engine import workers
 
         captured = {}
@@ -450,6 +462,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         # os.getppid(), which is the conda-wrapper failure mode.
         import subprocess as _sp
         from multiprocessing.connection import Listener
+
         from engine.workers import WORKER_SCRIPT
 
         authkey = os.urandom(16)
@@ -606,8 +619,7 @@ class TestPool(unittest.TestCase):
         imports are the cost it exists to avoid paying twice; a press five
         minutes after the last one found them reaped and paid it again.
         """
-        from engine.workers import WorkerPool
-        from engine.workers import Worker
+        from engine.workers import Worker, WorkerPool
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=None)
         pool.execute(None, path, {}, {}, timeout=10)
@@ -1794,8 +1806,8 @@ class TestTheBrake(unittest.TestCase):
     """
 
     def test_a_shutdown_now_puts_a_busy_worker_down_at_once(self):
-        from engine.workers import Worker
         from engine import WorkerCrashedError
+        from engine.workers import Worker
         pid_file = os.path.join(_TEMP_DIR, f"busy_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=10)
@@ -1876,8 +1888,8 @@ class TestTheBrake(unittest.TestCase):
         every early press.
         """
         import engine.workers as worker_module
-        from engine.workers import Worker
         from engine import WorkerCrashedError, WorkerSpawnError
+        from engine.workers import Worker
         wrapper = _temp_step("""
             import subprocess, sys, time
             # An activation takes its time before the interpreter is started.
@@ -1918,8 +1930,8 @@ class TestTheBrake(unittest.TestCase):
         up afterwards and stayed, segmenting a field nobody wanted.
         """
         import engine.workers as worker_module
-        from engine.workers import Worker
         from engine import WorkerCrashedError, WorkerSpawnError
+        from engine.workers import Worker
         pid_file = os.path.join(_TEMP_DIR, f"late_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=20)

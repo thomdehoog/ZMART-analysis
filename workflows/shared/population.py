@@ -109,7 +109,7 @@ def principal_components(matrix: np.ndarray, features: list[str], *, seed: int =
         f"pca_{axis + 1}": {
             feature: float(weight)
             for feature, weight in sorted(
-                zip(features, pca.components_[axis]), key=lambda fw: -abs(fw[1])
+                zip(features, pca.components_[axis], strict=True), key=lambda fw: -abs(fw[1])
             )[:5]
         }
         for axis in range(min(2, components.shape[1]))

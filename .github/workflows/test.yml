@@ -15,7 +15,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.11', '3.12']
+        python-version: ['3.11', '3.12', '3.13']
 
     defaults:
       run:
@@ -41,7 +41,10 @@ jobs:
           which python
 
       - name: Install package with test deps
-        run: pip install -e .[test]
+        run: pip install -e .[test] ruff
+
+      - name: Lint
+        run: ruff check .
 
       - name: Run pytest
         # Skipped here because CI does not provision them:
