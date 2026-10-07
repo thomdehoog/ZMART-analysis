@@ -11,12 +11,8 @@ peaks. No GPU, no model, so it runs on a laptop.
 ## Before you start
 
 - The engine installed as in [Install it](../../README.md#install-it),
-  with its `zmart-analysis` conda environment active.
-- The `focus` workflow's own environment, made once:
-
-  ```
-  python workflows/focus/environments/setup_env.py
-  ```
+  including the `focus` workflow's environment.
+- `numpy` and `tifffile`, to make a z-stack: `pip install numpy tifffile`.
 
 Open Python in the root folder of the repository and type the lines below
 one at a time.
