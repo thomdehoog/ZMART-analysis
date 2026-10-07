@@ -217,11 +217,14 @@ class PipelineState:
         # Phase 0 results: [(submission_idx, scope_dict, result)]
         self._phase0_results = []
 
-        # Phase N>0 results: phase_idx -> [(scope_dict, result)]
+        # Phase N>0 results: phase_idx -> [(submission_idx, scope_dict, result)]
+        # where submission_idx is the submit that closed the unit.
         self._phase_results = defaultdict(list)
 
-        # Scoped phases still running: phase_idx -> [(scope_dict, Event)].
-        # A later phase waits on the ones that belong to its scope value.
+        # Scoped phases still running: phase_idx -> [(scope_dict, idx, Event)].
+        # A later phase waits on the ones of its unit that were signalled
+        # before it (idx <= its own); a signal sent after it is not waited
+        # on, or the signal threads could all wait on each other.
         self._scoped_in_flight = defaultdict(list)
 
         # Completed results queue (drained by engine.results())
@@ -250,7 +253,7 @@ class PipelineState:
         with self._lock:
             self._job_entries.append((future, scope, submission_idx))
         future.add_done_callback(
-            lambda done: self.record_cancellation(scope)
+            lambda done: self.record_cancellation(scope, submission_idx)
             if done.cancelled() else None
         )
 
@@ -279,17 +282,20 @@ class PipelineState:
             self._n_running = max(0, self._n_running - 1)
             self._n_completed += 1
 
-    def record_failure(self, scope, step_name, error_msg):
-        """Record a job failure."""
+    def record_failure(self, scope, step_name, error_msg, phase, submission_idx):
+        """Record a failed step. ``phase`` is the phase it failed in and
+        ``submission_idx`` the tile, or the submit that closed the unit."""
         with self._lock:
             self._n_running = max(0, self._n_running - 1)
             self._failures.append({
                 "scope": scope,
                 "step": step_name,
                 "error": error_msg,
+                "phase": phase,
+                "submission_idx": submission_idx,
             })
 
-    def record_cancellation(self, scope):
+    def record_cancellation(self, scope, submission_idx):
         """Record a queued submission cancelled during engine shutdown."""
         with self._lock:
             self._n_pending = max(0, self._n_pending - 1)
@@ -297,6 +303,8 @@ class PipelineState:
                 "scope": scope,
                 "step": "engine",
                 "error": "Cancelled during engine shutdown",
+                "phase": 0,
+                "submission_idx": submission_idx,
             })
 
     def scope_key(self, level, scope):
@@ -323,35 +331,57 @@ class PipelineState:
                 return i
         return None
 
-    def collect_for_scope(self, phase_idx, level, value):
+    def collect_for_scope(self, phase_idx, value, before):
         """
-        Collect results from the previous phase for a triggered scope.
+        Collect the previous phase's results and failures for the unit
+        *value*, from submits up to and including *before*.
 
         For Phase 1 (prev=0): collects from Phase 0 results.
         For Phase N (prev=N-1): collects from phase_results[N-1].
 
         Returns (results, failures) where results is a list sorted by
-        submission order and failures is a list of failure info dicts.
+        submission order and failures is a list of failure records.
         """
         prev_idx = phase_idx - 1
 
         if prev_idx > 0:
-            self._wait_for_scoped(prev_idx, level, value)
+            self._wait_for_scoped(prev_idx, value, before)
 
         with self._lock:
             if prev_idx == 0:
-                return self._collect_phase0(level, value)
+                entries = self._phase0_results
+            else:
+                entries = self._phase_results[prev_idx]
             matching, remaining = [], []
-            for entry in self._phase_results[prev_idx]:
-                entry_scope, result = entry
-                if _matches(entry_scope, value):
-                    matching.append(result)
+            for entry in entries:
+                idx, entry_scope, result = entry
+                if idx <= before and _matches(entry_scope, value):
+                    matching.append((idx, result))
                 else:
                     remaining.append(entry)
-            self._phase_results[prev_idx] = remaining
-            return matching, []
+            if prev_idx == 0:
+                self._phase0_results = remaining
+            else:
+                self._phase_results[prev_idx] = remaining
+            matching.sort(key=lambda x: x[0])
+            results = [r for _, r in matching]
+            failures = self._take_failures(prev_idx, value, before)
+            return results, failures
 
-    def begin_scoped(self, phase_idx, scope):
+    def _take_failures(self, phase_idx, value, before):
+        """Remove and return the failures of phase *phase_idx* that belong
+        to the unit *value*, from submits up to *before*. Under _lock."""
+        taken, remaining = [], []
+        for f in self._failures:
+            if (f["phase"] == phase_idx and f["submission_idx"] <= before
+                    and _matches(f["scope"], value)):
+                taken.append(f)
+            else:
+                remaining.append(f)
+        self._failures = remaining
+        return taken
+
+    def begin_scoped(self, phase_idx, scope, submission_idx):
         """Mark a scoped phase as running for *scope*; returns its token.
 
         A level with no phase in this pipeline gets a token that marks
@@ -360,7 +390,8 @@ class PipelineState:
         done = threading.Event()
         if phase_idx is not None:
             with self._lock:
-                self._scoped_in_flight[phase_idx].append((dict(scope), done))
+                self._scoped_in_flight[phase_idx].append(
+                    (dict(scope), submission_idx, done))
         return phase_idx, done
 
     def end_scoped(self, token):
@@ -370,82 +401,44 @@ class PipelineState:
             with self._lock:
                 self._scoped_in_flight[phase_idx] = [
                     entry for entry in self._scoped_in_flight[phase_idx]
-                    if entry[1] is not done
+                    if entry[2] is not done
                 ]
         done.set()
 
-    def _wait_for_scoped(self, phase_idx, level, value):
-        """Wait until every running phase *phase_idx* of this scope is done."""
+    def _wait_for_scoped(self, phase_idx, value, before):
+        """Wait until every phase *phase_idx* of this unit signalled up to
+        *before* is done."""
         with self._lock:
             waiting = [
-                done for entry_scope, done in self._scoped_in_flight[phase_idx]
-                if _matches(entry_scope, value)
+                done for entry_scope, idx, done
+                in self._scoped_in_flight[phase_idx]
+                if idx <= before and _matches(entry_scope, value)
             ]
         for done in waiting:
             done.wait()
 
-    def _collect_phase0(self, level, value):
-        """Collect Phase 0 results matching scope criteria.
-
-        Must be called under _lock.
-        """
-        if value is not None:
-            matching = []
-            remaining = []
-            for entry in self._phase0_results:
-                idx, scope, result = entry
-                if _matches(scope, value):
-                    matching.append((idx, result))
-                else:
-                    remaining.append(entry)
-            self._phase0_results = remaining
-        else:
-            matching = [(idx, r) for idx, _, r in self._phase0_results]
-            self._phase0_results = []
-
-        matching.sort(key=lambda x: x[0])
-        results = [r for _, r in matching]
-
-        # Collect failures for matching scope
-        failures = []
-        remaining_failures = []
-        for f in self._failures:
-            if value is not None and _matches(f["scope"], value):
-                failures.append(f)
-            elif value is None:
-                failures.append(f)
-            else:
-                remaining_failures.append(f)
-        self._failures = remaining_failures
-
-        return results, failures
-
-    def store_phase_result(self, phase_idx, result, scope):
-        """Store a scoped phase result, with its scope, for the next phase."""
+    def store_phase_result(self, phase_idx, result, scope, submission_idx):
+        """Store a scoped phase result, with its scope and the submit that
+        closed it, for the next phase."""
         with self._lock:
-            self._phase_results[phase_idx].append((dict(scope), result))
+            self._phase_results[phase_idx].append(
+                (submission_idx, dict(scope), result))
 
-    def get_matching_futures(self, level, value):
-        """Get Phase 0 futures matching a scope level and value."""
+    def get_matching_futures(self, value, before):
+        """Phase 0 futures of the unit *value*, submitted up to *before*."""
         with self._lock:
-            if value is not None:
-                return [
-                    f for f, scope, _ in self._job_entries
-                    if _matches(scope, value)
-                ]
-            else:
-                return [f for f, _, _ in self._job_entries]
+            return [
+                f for f, scope, idx in self._job_entries
+                if idx <= before and _matches(scope, value)
+            ]
 
-    def cleanup_consumed_entries(self, level, value):
+    def cleanup_consumed_entries(self, value, before):
         """Remove consumed job entries after scope collection."""
         with self._lock:
-            if value is not None:
-                self._job_entries = [
-                    (f, s, idx) for f, s, idx in self._job_entries
-                    if not _matches(s, value)
-                ]
-            else:
-                self._job_entries = []
+            self._job_entries = [
+                (f, s, idx) for f, s, idx in self._job_entries
+                if not (idx <= before and _matches(s, value))
+            ]
 
     def drain_results(self):
         """Drain and return all completed results."""

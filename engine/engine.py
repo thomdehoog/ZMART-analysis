@@ -295,14 +295,22 @@ class Engine:
                 # later signal for a wider scope (a carrier) cannot overtake
                 # a narrower one (a compartment) submitted before it.
                 tokens = [
-                    state.begin_scoped(state.get_triggered_phase_idx(level), scope)
+                    state.begin_scoped(
+                        state.get_triggered_phase_idx(level), scope,
+                        submission_idx)
                     for level in complete_levels
                 ]
                 # Process levels sequentially in one thread so that
                 # chained scopes (e.g., ["group", "all"]) execute in order.
-                self._scope_executor.submit(
+                chain = self._scope_executor.submit(
                     self._handle_scope_complete_chain, state,
-                    complete_levels, scope, tokens,
+                    complete_levels, scope, tokens, submission_idx,
+                )
+                # A chain cancelled by shutdown(wait=False) never runs, so
+                # its marks are cleared here, or a waiter would hang.
+                chain.add_done_callback(
+                    lambda done: [state.end_scoped(t) for t in tokens]
+                    if done.cancelled() else None
                 )
 
     def status(self, name=None):
@@ -392,7 +400,8 @@ class Engine:
 
     # -- Internal: scope completion chain --------------------------------
 
-    def _handle_scope_complete_chain(self, state, levels, scope, tokens):
+    def _handle_scope_complete_chain(self, state, levels, scope, tokens,
+                                     submission_idx):
         """Process multiple scope completion levels sequentially.
 
         Each level must complete before the next starts, so chained
@@ -401,7 +410,7 @@ class Engine:
         """
         for level, token in zip(levels, tokens):
             try:
-                self._handle_scope_complete(state, level, scope)
+                self._handle_scope_complete(state, level, scope, submission_idx)
             except Exception as e:
                 logger.error("Scope chain failed at level '%s': %s",
                              level, e)
@@ -451,18 +460,18 @@ class Engine:
             state.record_completion()
 
         except Exception as e:
-            state.record_failure(scope, step_name, str(e))
+            state.record_failure(scope, step_name, str(e), 0, submission_idx)
             logger.error("Phase 0 failed for %s (idx=%d): %s",
                          state.name, submission_idx, e)
             raise
 
     # -- Internal: scope completion ------------------------------------
 
-    def _handle_scope_complete(self, state, level, scope):
+    def _handle_scope_complete(self, state, level, scope, submission_idx):
         """Handle a scope completion signal.
 
-        Waits for matching Phase 0 jobs to finish, collects results,
-        and executes the triggered scoped phase.
+        Waits for the unit's Phase 0 jobs submitted up to this signal to
+        finish, collects results, and executes the triggered scoped phase.
         """
         phase_idx = state.get_triggered_phase_idx(level)
         if phase_idx is None:
@@ -475,7 +484,7 @@ class Engine:
         value = state.scope_key(level, scope)
 
         # Wait for all matching Phase 0 futures to complete
-        matching_futures = state.get_matching_futures(level, value)
+        matching_futures = state.get_matching_futures(value, submission_idx)
         for f in matching_futures:
             try:
                 f.result()
@@ -483,7 +492,8 @@ class Engine:
                 pass  # Failures already recorded by Phase 0 handler
 
         # Collect results from previous phase
-        results, failures = state.collect_for_scope(phase_idx, level, value)
+        results, failures = state.collect_for_scope(
+            phase_idx, value, submission_idx)
 
         if not results and not failures:
             logger.warning("No results for scope '%s' (value=%s) in '%s'",
@@ -491,31 +501,35 @@ class Engine:
             return
 
         # Clean up consumed job entries
-        state.cleanup_consumed_entries(level, value)
+        state.cleanup_consumed_entries(value, submission_idx)
 
         # Execute the scoped phase
         state.record_start(is_submission=False)
+        step_name = [None]
         try:
             result = self._execute_scoped_phase(
-                state, phase_idx, results, failures, scope, level)
+                state, phase_idx, results, failures, scope, level, step_name)
 
             # Store for next phase if there is one
             next_phase = phase_idx + 1
             if next_phase < len(state.phases):
-                state.store_phase_result(phase_idx, result, scope)
+                state.store_phase_result(
+                    phase_idx, result, scope, submission_idx)
 
             # Publish scoped result
             state.publish_result(dict(result), phase_idx, scope, level)
             state.record_completion()
 
         except Exception as e:
-            state.record_failure(scope, f"phase_{phase_idx}", str(e))
+            state.record_failure(
+                scope, step_name[0], str(e), phase_idx, submission_idx)
             logger.error("Scoped phase %d failed for %s: %s",
                          phase_idx, state.name, e)
 
     def _execute_scoped_phase(self, state, phase_idx, accumulated_results,
-                               failures, scope, scope_level):
-        """Execute a scoped phase with accumulated results."""
+                               failures, scope, scope_level, step_name):
+        """Execute a scoped phase with accumulated results. The step being
+        run is written to ``step_name[0]`` so a failure can name it."""
         phase = state.phases[phase_idx]
 
         pipeline_data = {
@@ -536,6 +550,7 @@ class Engine:
         }
 
         for step in phase.steps:
+            step_name[0] = step.name
             pipeline_data = self._execute_step(state, step, pipeline_data)
 
             if not isinstance(pipeline_data, dict):
