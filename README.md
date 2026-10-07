@@ -46,89 +46,32 @@ following four problems.
 
 The ZMART Analysis pipeline engine addresses all four of them.
 
-### 1. Every step can be executed in its own environment
+1. **Every step can be executed in its own environment.** Each step says which
+   conda environment it needs. The pipeline engine runs each step in that
+   environment and pieces the steps together into one pipeline. In this way,
+   steps can share an environment or be separated to neutralise dependency
+   conflicts.
 
-Each step says which conda environment it needs, at the top of the step
-file:
+2. **Pipelines are constructed in YAML files.** Which steps are pieced
+   together, in which order, with which parameters, is defined in a YAML
+   file. An analysis is always started from this file, so it is reproducible
+   and easy to share and document. Every result also records the environment,
+   Python version and package versions each step actually ran with.
 
-```python
-METADATA = {"environment": "ZMART--object_analysis--cellpose"}
-```
+3. **Environments stay active, and several can run at once.** During a run,
+   the analysis environments (workers) are started once and stay active, so
+   each image is processed the moment it comes in. For one step, several
+   workers can be spawned to analyse images concurrently. A queue routes
+   incoming work to the right worker and lets urgent jobs go first.
 
-The pipeline engine runs each step in that environment and pieces the steps
-together into one pipeline. Steps that name no environment run in the one
-you started from. In this way, steps can share an environment or be
-separated to neutralise dependency conflicts.
+4. **Steps declare a scope.** Each step says over which scope its analysis
+   needs to run: a single image, a group, a compartment, a carrier, or the
+   experiment. When all the data for a scope is in, the step starts. Steps
+   within one pipeline can differ in scope, so per-image steps run as each
+   image comes in while a per-carrier step waits for the whole carrier.
 
-### 2. Pipelines are constructed in YAML files
-
-Which steps are pieced together, in which order, with which parameters, is
-defined in a YAML file:
-
-```yaml
-focus:
-  - score_focus:
-      metric: brenner      # brenner | dct | vollath_f4 | intensity
-      channel: 0
-      skip_ends: 2
-```
-
-An analysis is always started from this file, so it is reproducible and easy
-to share and document. Every result also records, for each step, the
-environment it ran in, the Python version, and the versions of the packages
-it used. The file says what was asked for, and the result says what actually
-ran.
-
-### 3. Environments stay active, and several can run at once
-
-During a run, the analysis environments (workers) are started once and stay
-active, so each image is processed the moment it comes in. A model loaded
-for the first image is still there for the next:
-
-```python
-def run(pipeline_data, state, **params):
-    if "model" not in state:          # only on the first image
-        state["model"] = load_the_model()
-    ...
-```
-
-For one step, several workers can be spawned to analyse images concurrently:
-one for a model on the GPU, many for work on the processor. A queue routes
-incoming work to the right worker and lets urgent jobs go first.
-
-```yaml
-  - detect_objects_fast:
-      max_workers: 12
-```
-
-### 4. Steps declare a scope
-
-Each step says over which scope its analysis needs to run: a single image, a
-group, a compartment, a carrier, or the experiment. Each level is a plain
-number, so a compartment can be a well of a plate, a region of a slide or
-part of a cleared sample. When all the data for a scope is in, the step
-starts. Steps within one pipeline can differ in scope, so per-image steps run
-as each image comes in while a per-carrier step waits for the whole carrier:
-
-```yaml
-object_analysis:
-  - detect_objects:            # every image, as soon as it lands
-  - extract_classical_features:
-  - build_object_table:
-  - summarise_population:      # each compartment, once it is complete
-      scope: compartment
-  - compare_populations:       # each carrier, once it is complete
-      scope: carrier
-```
-
-```python
-engine.submit("scoped", image, scope={"carrier": 1, "compartment": 3})
-engine.submit("scoped", last_image, scope={"carrier": 1, "compartment": 3},
-              complete="compartment")
-```
-
-The engine never guesses when a scope is complete. The acquisition knows, and
-says so.
+How this looks in practice is in [How the engine works](docs/how-the-engine-works.md)
+and [Writing a step](docs/writing-a-step.md).
 
 ## Try it yourself
 
