@@ -104,9 +104,9 @@ for result in engine.results("intensity"):
     print(result["input"]["name"], result["mean_intensity"])
 ```
 ```
-image_0 {'mean': 2041.9, 'max': 4095.0}
-image_1 {'mean': 2047.1, 'max': 4094.0}
-image_2 {'mean': 2063.5, 'max': 4095.0}
+image_0 {'mean': 2062.80224609375, 'max': 4095.0}
+image_1 {'mean': 2022.114501953125, 'max': 4095.0}
+image_2 {'mean': 2060.589599609375, 'max': 4095.0}
 ```
 
 There is no `METADATA` yet, so the step runs in the environment you are
@@ -116,10 +116,11 @@ in. `shutdown(wait=True)` waits for every job. Look at one result:
 print(result["provenance"]["mean_intensity"])
 ```
 ```
-{'environment': 'zmart-analysis', 'python': '3.12.4', 'fingerprint': '…', 'packages': {'numpy': '2.1.0'}}
+{'environment': 'zmart-microscopy', 'python': '3.11.15', 'fingerprint': 'ced179088d40e21f', 'packages': {'numpy': '2.4.6', 'setuptools': '83.0.0'}}
 ```
 
-The engine added where the step ran and which packages it imported.
+The engine added where the step ran and which packages it imported. Your
+environment name and versions will differ; that is the point.
 
 ## Step 5: add a parameter
 
@@ -206,12 +207,19 @@ Run the setup once:
 python workflows/intensity/environments/setup_env.py
 ```
 
-Now run Step 4 again. Nothing in the Python changes, but the provenance
-does:
+Now run Step 4 again. Nothing in the Python changes, but the output does:
 
 ```
-{'environment': 'ZMART--intensity--main', 'python': '3.12.4', ...}
+image_1 {'mean': 2022.114501953125, 'max': 4093.8100000000013, 'percentile': 99.9}
+image_2 {'mean': 2060.589599609375, 'max': 4092.0, 'percentile': 99.9}
+image_0 {'mean': 2062.80224609375, 'max': 4092.9050000000007, 'percentile': 99.9}
+{'environment': 'ZMART--intensity--main', 'python': '3.12.15', 'fingerprint': '0eb1bb28efc1a380', 'packages': {'numpy': '2.5.3', 'setuptools': '84.0.0'}}
 ```
+
+The `max` is now the 99.9th percentile. The results come back in a
+different order, because `max_workers: 4` ran the three images at once;
+`input["name"]` says which is which. And the provenance names the new
+environment.
 
 The worker in the new environment stays running between images; a model
 loaded on the first image and kept in `state` would still be there for the
@@ -283,8 +291,8 @@ for result in engine.results("intensity"):
         print(result["group"], result["n_images"], round(result["spread"], 1))
 ```
 ```
-{'group': 1} 4 9.3
-{'group': 2} 4 11.7
+{'group': 2} 4 14.6
+{'group': 1} 4 18.6
 ```
 
 `mean_intensity` ran on every image as it was submitted. `summarise_group`
