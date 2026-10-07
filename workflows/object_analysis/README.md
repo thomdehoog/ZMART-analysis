@@ -119,3 +119,10 @@ given, or nowhere when the image is outside an acquisition and no
 `output_dir` names a place. The checkpoint records the effective parameters,
 a hash of the true mask-generation parameters, and content hashes of the
 image and masks, so a run is reproducible from what actually ran.
+
+## The Cellpose model
+
+Cellpose downloads its model (about 1.2 GB) the first time it runs, into
+`.cellpose` in your home folder. To keep it elsewhere, for example where a
+Windows profile has a size limit, set `CELLPOSE_LOCAL_MODELS_PATH` to that
+folder before the first run.
