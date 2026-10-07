@@ -199,10 +199,13 @@ class PipelineState:
     """
 
     def __init__(self, name, yaml_path, phases, functions_dir,
-                 step_settings, verbose):
+                 step_settings, verbose, levels=None):
         self.name = name
         self.yaml_path = Path(yaml_path)
         self.phases = phases
+        #: The sample's levels, widest first, from the recipe's metadata.
+        #: Without them, the phases' scopes stand in (narrowest first).
+        self.levels = list(levels) if levels else None
         self.functions_dir = functions_dir
         self.step_settings = step_settings
         self.verbose = verbose
@@ -307,21 +310,29 @@ class PipelineState:
                 "submission_idx": submission_idx,
             })
 
+    def wider_levels(self, level):
+        """The levels wider than *level*, widest first: from the recipe's
+        ``levels`` when it has them, else from the later phases' scopes."""
+        if self.levels is not None:
+            levels = self.levels
+            return levels[:levels.index(level)] if level in levels else []
+        phases = [phase.scope for phase in self.phases if phase.scope]
+        wider = phases[phases.index(level) + 1:] if level in phases else []
+        return wider[::-1]
+
     def scope_key(self, level, scope):
         """The identity of the unit *level* closes, from a submit's scope.
 
-        The level's own value together with the value of every wider level
-        in this pipeline (the scope levels of later phases) that the scope
-        names. Completing compartment 3 of {"carrier": 1, "compartment": 3}
-        is compartment 3 *of carrier 1*. ``None`` when the scope does not name the level,
-        which collects everything (the "all" case).
+        The value of every wider level the scope names, widest first, then
+        the level's own value. Completing compartment 3 of
+        {"carrier": 1, "compartment": 3} is compartment 3 *of carrier 1*.
+        ``None`` when the scope does not name the level, which collects
+        everything (the "all" case).
         """
         if level not in scope:
             return None
-        levels = [phase.scope for phase in self.phases if phase.scope]
-        wider = levels[levels.index(level) + 1:] if level in levels else []
-        key = {level: scope[level]}
-        key.update({w: scope[w] for w in wider if w in scope})
+        key = {w: scope[w] for w in self.wider_levels(level) if w in scope}
+        key[level] = scope[level]
         return key
 
     def get_triggered_phase_idx(self, level):
@@ -367,6 +378,34 @@ class PipelineState:
             results = [r for _, r in matching]
             failures = self._take_failures(prev_idx, value, before)
             return results, failures
+
+    def held_for(self, phase_idx, value, before):
+        """What this unit still holds from the phases below *phase_idx* - 1:
+        results and failures a narrower level never closed. Reported to the
+        step as failures (``step: "engine"``) and kept, since that level's
+        signal may still come.
+        """
+        held = []
+        with self._lock:
+            for k in range(phase_idx - 1):
+                entries = self._phase0_results if k == 0 else self._phase_results[k]
+                not_closed = self.phases[k + 1].scope
+                for idx, entry_scope, _ in entries:
+                    if idx <= before and _matches(entry_scope, value):
+                        held.append({
+                            "scope": entry_scope,
+                            "step": "engine",
+                            "error": f"{not_closed} not closed",
+                            "phase": k,
+                            "submission_idx": idx,
+                        })
+                held += [
+                    f for f in self._failures
+                    if f["phase"] == k and f["submission_idx"] <= before
+                    and _matches(f["scope"], value)
+                ]
+        held.sort(key=lambda f: f["submission_idx"])
+        return held
 
     def _take_failures(self, phase_idx, value, before):
         """Remove and return the failures of phase *phase_idx* that belong
@@ -452,14 +491,23 @@ class PipelineState:
 
     @property
     def status(self):
-        """Current pipeline state for observability."""
+        """Current pipeline state for observability. ``held`` is what waits
+        for a level to close: how many results, and of which units."""
         with self._lock:
+            held_units, n_held = {}, 0
+            for k in range(len(self.phases) - 1):
+                entries = self._phase0_results if k == 0 else self._phase_results[k]
+                for _, entry_scope, _ in entries:
+                    n_held += 1
+                    unit = self.scope_key(self.phases[k + 1].scope, entry_scope) or {}
+                    held_units[tuple(sorted(unit.items()))] = unit
             return {
                 "pending": self._n_pending,
                 "running": self._n_running,
                 "completed": self._n_completed,
                 "failed": len(self._failures),
                 "failures": list(self._failures),
+                "held": {"results": n_held, "units": list(held_units.values())},
             }
 
 
