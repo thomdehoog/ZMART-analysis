@@ -1,10 +1,7 @@
 # 2. Implement an analysis step
 
-Write one Python function, and the engine runs it in the right environment,
-on every image or on every completed unit of the sample.
-
-This page is the documentation of what a step is and how it is written. For
-a step-by-step walk-through, see the [tutorial](tutorial.md).
+How to write a step for the ZMART Analysis engine. This page is the
+reference. The [tutorial](tutorial.ipynb), a notebook, walks you through writing one.
 
 ## Contents
 
@@ -15,27 +12,28 @@ a step-by-step walk-through, see the [tutorial](tutorial.md).
 5. [Give a step its own environment](#give-a-step-its-own-environment)
 6. [Keep a model loaded](#keep-a-model-loaded)
 7. [A step over a scope](#a-step-over-a-scope)
-8. [Parameters and overrides](#parameters-and-overrides)
+8. [Parameters](#parameters)
 9. [Provenance](#provenance)
-10. [The folder structure of a workflow](#the-folder-structure-of-a-workflow)
+10. [The folder of a workflow](#the-folder-of-a-workflow)
 11. [Test a step](#test-a-step)
 
 ## The idea
 
-Every step is one Python file with one function, `run`. A recipe (YAML)
-says which steps run in which order with which parameters. The engine
-starts a worker in the conda environment the step asks for, hands it the
-image, and passes what the step returns to the next step.
+A step is one Python file with one function, `run`. A recipe (YAML) says
+which steps run, in which order, with which parameters. The engine starts a
+worker in the conda environment the step asks for, hands it the image, and
+passes what the step returns to the next step.
 
 ```
   recipe (YAML) ──► engine ──► worker in the step's environment ──► run(...)
 ```
 
-A step is a plain function, so a test or a notebook can call it without
-the engine. The environment is named in the file, so the engine never
-imports the step; the heavy imports happen inside the worker. How recipes
-are registered and images submitted is in
-[Use the engine](../1_use_the_engine/README.md).
+A step is a plain function. A test or a notebook can call it without the
+engine. The engine never imports the step; the heavy imports happen in the
+worker.
+
+How recipes are registered and images submitted is in
+[part 1](../1_use_the_engine/README.md).
 
 ## The smallest step
 
@@ -58,10 +56,9 @@ hello:
   - double_it:
 ```
 
-The step's name is its file name without `.py`; the recipe finds it in
-`functions_dir`, relative to the recipe (default `../steps`). This step has
-no `METADATA`, so it runs in the environment the engine started from, one
-copy at a time.
+The step's name is its file name without `.py`. The recipe finds it in
+`functions_dir`, relative to the recipe. This step has no `METADATA`, so it
+runs in the engine's own environment, one copy at a time.
 
 ## What `run` receives and returns
 
@@ -71,26 +68,27 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
 | Argument | What it is |
 |---|---|
-| `pipeline_data` | `pipeline_data["input"]` is exactly what was passed to `engine.submit`. `pipeline_data["metadata"]` is what the engine knows about the job (below). Each earlier step has added its output under its own name. |
-| `state` | A dictionary that belongs to this step in this worker and survives from one job to the next. Empty on the first job. For anything slow to make: a loaded model, an opened file. |
-| `**params` | The parameters written under this step in the recipe. |
+| `pipeline_data` | `["input"]` is what was passed to `engine.submit`. `["metadata"]` is what the engine knows about the job. Each earlier step has added its output under its own name. |
+| `state` | A dictionary for this step in this worker. It survives from one job to the next. Empty on the first job. Keep slow things here: a loaded model, an open file. |
+| `**params` | The parameters under this step in the recipe. |
 
 **Return `pipeline_data`** with your output added under your step's name.
+
 A step that returns anything but a dictionary fails its job. A step that
-raises fails only its own job; the message and traceback appear in
+raises fails only its own job. The message and traceback appear in
 `engine.status()`.
 
 `pipeline_data["metadata"]` on a per-image job:
 
 | Key | What it is |
 |---|---|
-| `workflow_name` | The top-level key of the recipe, e.g. `focus`. |
+| `workflow_name` | The top key of the recipe, e.g. `focus`. |
 | `yaml_filename` | The recipe's file name. |
 | `steps` | The step names in this phase, in order. |
-| `scope` | The `scope` given at submission, e.g. `{"carrier": 1, "compartment": 3}`. |
+| `scope` | The `scope` given at submit, e.g. `{"carrier": 1, "compartment": 3}`. |
 | `submission_idx` | The job's number, from zero, in submission order. |
 | `datetime` | When the job started, `YYYYMMDD-HHMMSS`. |
-| `verbose` | The recipe's `metadata.verbose`, default 2. |
+| `verbose` | The recipe's `metadata.verbose`. Default 2. |
 
 ## METADATA
 
@@ -105,20 +103,21 @@ METADATA = {
 }
 ```
 
-The engine reads it **without running the file**: it parses the text and
+The engine reads it **without running the file**. It parses the text and
 takes the literal dictionary assigned to `METADATA`. So it must be a plain
-literal (strings, numbers, `True`, `None`) at the top level of the file.
-Everything else, imports included, runs only inside the worker.
+literal, at the top level of the file.
 
 | Key | What it does | Default |
 |---|---|---|
 | `environment` | The conda environment the step runs in. | The engine's own. |
 | `max_workers` | How many copies may run at once. | 1 |
 
-`description` and `version` are for the reader; every shipped step carries
-them. A recipe may override `max_workers` under the step. A recipe may
-**not** set `environment`; the engine refuses it. A step that must run in
-two environments is two step files.
+`description` and `version` are for the reader. Every shipped step has
+them.
+
+A recipe may override `max_workers`. A recipe may **not** set
+`environment`; the engine refuses it. A step that must run in two
+environments is two step files.
 
 ## Give a step its own environment
 
@@ -128,13 +127,13 @@ Name it in `METADATA`:
 METADATA = {"environment": "ZMART--object_analysis--cellpose"}
 ```
 
-Names follow **`ZMART--<workflow>--<step>`**: the workflow folder, and a
-short word for the environment. A workflow with one environment calls it
-`main`; `object_analysis` has `cellpose` and `classical`, so a run that
-only needs the second does not pay for the first.
+Names follow `ZMART--<workflow>--<step>`: the workflow folder, then a short
+word for the environment. A workflow with one environment calls it `main`.
+`object_analysis` has `cellpose` and `classical`, so a run that only needs
+the second does not pay for the first.
 
 The workflow's `environments/setup_env.py` lists the packages and a few
-checks, and hands the work to `engine/conda_utils.py`:
+checks. It hands the work to `engine/conda_utils.py`:
 
 ```bash
 python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main
@@ -144,22 +143,21 @@ python workflows/object_analysis/environments/setup_env.py --step cellpose
 | Option | What it does |
 |---|---|
 | `--step <name>` | Which of the workflow's environments to make. |
-| `--python <version>` | Python version, default 3.12. |
+| `--python <version>` | Python version. Default 3.12. |
 | `--gpu cu128\|cu124\|cu121\|mps\|cpu` | Which PyTorch build, for workflows that use torch. Default: detect. |
-| `--check` | Run the checks on an existing environment, installing nothing. |
+| `--check` | Run the checks on an existing environment. Installs nothing. |
 | `--dry-run` | Print the commands without running them. |
 
-Every environment is built from conda-forge only; packages are installed
-with pip inside it. `clean_env.py` beside it removes the environments again
-(`--step` for one, `--dry-run` to list).
+Every environment is built from conda-forge; packages are installed with
+pip inside it. `clean_env.py` beside it removes the environments again.
 
-The engine starts a worker with `conda run -n <environment>`, so the step
-sees that environment's packages and no other. A step naming the engine's
-own environment runs in the engine's interpreter, saving a process.
+The engine starts a worker with `conda run -n <environment>`. The step sees
+that environment's packages and no other. A step that names the engine's
+own environment runs in the engine's interpreter.
 
 ## Keep a model loaded
 
-Loading a model takes seconds; using it takes milliseconds. A worker stays
+Loading a model takes seconds. Using it takes milliseconds. A worker stays
 running, and `state` is what it keeps for your step between jobs:
 
 ```python
@@ -171,14 +169,14 @@ def run(pipeline_data, state, **params):
     ...
 ```
 
-`state` is per step and per worker: two copies of a step (`max_workers: 2`)
+`state` is per step and per worker. Two copies of a step (`max_workers: 2`)
 each load their own model. A worker idle longer than the engine's
-`idle_timeout` is shut down, and the next job starts with an empty `state`.
+`idle_timeout` is stopped, and the next job starts with an empty `state`.
 
 ## A step over a scope
 
 A step with a `scope` in the recipe does not run per image. It waits until
-the acquisition says that unit is complete, then runs once over everything
+the acquisition says the unit is complete, then runs once over everything
 collected for it:
 
 ```yaml
@@ -192,37 +190,36 @@ object_analysis:
       scope: carrier
 ```
 
-The scope is a word of your choosing. The shipped workflows use, narrowest
-first, **image**, **group**, **compartment**, **carrier** and
-**experiment**. A step over a wider scope collects the results of the step
-over the narrower one: `compare_populations` receives one result per
-compartment, not per image.
+A step over a wider scope collects the results of the step over the
+narrower one. `compare_populations` receives one result per compartment,
+not per image.
 
 Such a step receives a different `pipeline_data`:
 
 | Key | What it is |
 |---|---|
-| `results` | One entry per image (or narrower unit) in this unit, in submission order: the `pipeline_data` the previous phase returned. |
-| `failures` | What failed under this unit: each with `scope`, `step`, `error`, `phase` and `submission_idx`. A failed step of the phase below, or, with `step: "engine"`, an image of a narrower unit that was not closed when this one was. |
-| `metadata["unit"]` | Which unit, widest level first, e.g. `{"carrier": 1, "compartment": 3}`; `{}` for a step over everything. |
-| `metadata["scope"]` | The scope of the image that closed the unit. It may name narrower levels too. |
+| `results` | One entry per image, or per narrower unit, in submission order: what the previous phase returned. |
+| `failures` | What failed under this unit. Each has `scope`, `step`, `error`, `phase` and `submission_idx`. A `step` of `"engine"` means an image of a narrower unit that was not closed when this one was. |
+| `metadata["unit"]` | Which unit, widest level first, e.g. `{"carrier": 1, "compartment": 3}`. `{}` for a step over everything. |
 | `metadata["scope_level"]` | The level, e.g. `"compartment"`. |
+| `metadata["scope"]` | The scope of the image that closed the unit. It may name narrower levels too. |
 | `metadata["n_accumulated"]`, `metadata["n_failures"]` | How many of each. |
 
-There is no `input`. **Return a new dictionary** with your output; copying
-the per-image results forward only uses memory. The result reaches
-`engine.results()` with `_scope`, `_scope_level` and `lineage` added: the
-images under this unit, the failures under it, and where every step below
-ran. The engine adds `lineage` after your step returns; you need not carry
-anything over.
+There is no `input`.
+
+**Return a new dictionary** with your output. Copying the per-image results
+forward only uses memory. The engine adds `lineage` to your result after it
+returns: the images under this unit, the failures under it, and where every
+step below ran. You carry nothing over.
+
 `workflows/object_analysis/steps/summarise_population.py` is the worked
 example.
 
-## Parameters and overrides
+## Parameters
 
 Recipe parameters arrive as `**params`. Give every parameter a default in
-the recipe with a comment; the recipe is the record, and a reader should
-not need the step file.
+the recipe, with a comment. The recipe is the record; a reader should not
+need the step file.
 
 A step may let one submission override a recipe parameter by looking in
 `pipeline_data["input"]` first:
@@ -233,9 +230,8 @@ def _setting(inp, params, key):
 ```
 
 This is how `detect_objects` lets the operator tune detection on one
-position: the recipe holds the default, and a submission carrying
-`diameter` wins for that image only. Say in the docstring which parameters
-allow this.
+position. The recipe holds the default; a submission carrying `diameter`
+wins for that image only. Say in the docstring which parameters allow this.
 
 ## Provenance
 
@@ -247,12 +243,12 @@ Before a result leaves the worker, the engine adds where it ran, under
 | `environment` | The conda environment's name. |
 | `python` | The interpreter version. |
 | `fingerprint` | A hash of every installed package and version. Same fingerprint, identical environment. |
-| `packages` | The version of every package this worker actually imported. |
+| `packages` | The version of every package this worker imported. |
 
-The recipe says what was asked for; `provenance` says what actually ran.
-The step does nothing for this.
+The recipe says what was asked for. `provenance` says what ran. The step
+does nothing for this.
 
-## The folder structure of a workflow
+## The folder of a workflow
 
 ```text
 workflows/object_analysis/
@@ -260,15 +256,14 @@ workflows/object_analysis/
 ├── pipelines/                  the recipes (YAML)
 ├── steps/                      one Python file per step
 ├── environments/
-│   ├── setup_env.py            lists the packages each environment needs
+│   ├── setup_env.py            the packages each environment needs
 │   └── clean_env.py            removes the environments again
 └── tests/
 ```
 
-Helpers more than one workflow uses live in `workflows/shared/`
-(`image_io.py`, `focus_metrics.py`, `population.py`). A step file is
-loaded on its own, not as part of a package, so it adds `workflows/` to the
-search path first:
+Helpers more than one workflow uses live in `workflows/shared/`. A step
+file is loaded on its own, not as part of a package, so it adds
+`workflows/` to the search path first:
 
 ```python
 import sys
@@ -278,14 +273,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared.image_io import load_plane
 ```
 
-To add a workflow: copy `focus`, the smallest; write the steps; name each
+To add a workflow: copy `focus`, the smallest. Write the steps. Name each
 environment `ZMART--<workflow>--<step>` and list its packages in
-`setup_env.py`; write a recipe with every parameter and a comment; add
+`setup_env.py`. Write a recipe with every parameter and a comment. Add
 tests and a short `README.md`.
 
 ## Test a step
 
-A step is an ordinary function, so a test calls it directly:
+A step is an ordinary function. A test calls it directly:
 
 ```python
 import sys
@@ -301,7 +296,7 @@ def test_double_it():
 ```
 
 For a step over a scope, pass `{"results": [...], "failures": [],
-"metadata": {"scope": {...}, "scope_level": "compartment"}}`.
+"metadata": {"unit": {...}, "scope_level": "compartment"}}`.
 
 Tests that need something the machine may not have mark themselves, so
 they skip rather than fail:
@@ -318,6 +313,6 @@ pytest -m "not cellpose and not conda_env and not pooch"   # what CI runs
 pytest workflows/focus                                      # one workflow
 ```
 
-`workflows/focus/tests/test_focus.py` shows the pattern: it scores a
+`workflows/focus/tests/test_focus.py` shows the pattern. It scores a
 synthetic z-stack directly, then, when `ZMART--focus--main` exists, once
 more through the engine.
