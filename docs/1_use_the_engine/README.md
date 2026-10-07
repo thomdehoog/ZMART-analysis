@@ -74,9 +74,11 @@ here, not later.
 
 ```yaml
 metadata:
+  purpose: "Focus scoring for a z-stack"
+  version: "1.0"
   functions_dir: "../steps"     # where the step files are, relative to this file
   levels: [carrier, compartment, group]   # the sample's levels, widest first (see Scopes)
-  verbose: 1                    # handed to every step in pipeline_data["metadata"]
+  verbose: 1                    # 0 is silent; the steps print progress above that
 
 focus:
   - score_focus:
@@ -86,6 +88,8 @@ focus:
 
 - The first key that is not `metadata` names the recipe. The list under it
   is the steps, in the order they run.
+- `purpose` and `version` are for the reader. `verbose` reaches every step
+  in `pipeline_data["metadata"]`; default 2.
 - A step is named after its file. `score_focus` is `score_focus.py` in
   `functions_dir` (default `../steps`).
 - Everything under a step is a parameter for it, except two keys the engine
@@ -95,6 +99,9 @@ focus:
 |---|---|
 | `scope` | Run this step once per unit (a compartment, a carrier, ...), not once per image. See [Scopes](#scopes). |
 | `max_workers` | How many copies of this step may run at once. Overrides the step's `METADATA`. |
+
+A step with a `scope` starts a new phase. The steps after it, until the
+next `scope`, run in that same phase, on the same unit.
 
 A recipe never sets a step's `environment`. That belongs in the step file.
 A recipe that tries is refused.
@@ -170,7 +177,8 @@ What a scoped step receives is in
 - **Nothing is lost quietly.** A carrier step is told about a compartment
   that failed, and about images of a compartment that was not closed. Those
   images are kept until their compartment is closed, and `status()` lists
-  them under `held`.
+  them under `held`. An image that arrives after its unit was closed waits
+  the same way, until the unit is closed again.
 
 One image may close several levels: `complete=["compartment", "carrier"]`
 runs the compartment step, then the carrier step.
@@ -245,18 +253,30 @@ in flight included.
 ## Errors
 
 A failing step does not stop the engine. Its job counts under `failed` in
-`status`. The other jobs carry on.
+`status`, with the error's name and message under `failures`. The other
+jobs carry on. You do not catch these; you read them in `status`:
 
-| Error | When |
+| In `failures` | When |
 |---|---|
-| `StepExecutionError` | The step's `run` raised. The worker's traceback is on `.remote_traceback`. |
+| `StepExecutionError` | The step's `run` raised. The message carries the worker's traceback. |
 | `WorkerTimeoutError` | The step ran longer than `execution_timeout`. |
 | `WorkerCrashedError` | The worker process died during the step. |
 | `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist: run the workflow's `environments/setup_env.py`. |
-| `ScopeError` | Raised by `submit`. The `complete` names a level the `scope` leaves out, such as `scope={"carrier": 1}, complete="compartment"`. That would close every compartment at once. |
 
-The four worker errors share the base `WorkerError`. All are importable
-from `engine`.
+Two errors are raised by the calls themselves, so you see them at once:
+
+| Raised | When |
+|---|---|
+| `ValueError`, `KeyError`, `RuntimeError` | A bad recipe or name at `register` or `submit`; a call after `shutdown`. |
+| `ScopeError` | A `complete` that names a level the `scope` leaves out, such as `scope={"carrier": 1}, complete="compartment"`. That would close every compartment at once. |
+
+The engine logs what it does through Python's `logging`. To see why a
+scoped step did not run:
+
+```python
+import logging
+logging.basicConfig(level=logging.INFO)
+```
 
 ## What the engine does not do
 
