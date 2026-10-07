@@ -1,8 +1,9 @@
 """population -- how a population of objects is summarised, in one place.
 
-Shared by the scoped well summary in object analysis and by the on-demand
-population plots, so a well's principal components mean the same thing in
-both. Everything here works on a pandas table with one row per object and
+Shared by the scoped compartment summary in object analysis and by the
+on-demand population plots, so a compartment's principal components mean
+the same thing in both. A compartment is a well, say, and a carrier the
+plate. Everything here works on a pandas table with one row per object and
 one column per measurement.
 
 The choices follow common practice in image-based profiling, so they can be
@@ -12,8 +13,8 @@ cited rather than defended:
 - each column is centred on its median and scaled by its interquartile
   range (scikit-learn ``RobustScaler``), so a few bright outliers cannot own
   an axis;
-- a well's profile is the median of each feature over its objects, and a
-  well is compared with its plate by a robust z-score, the median absolute
+- a compartment's profile is the median of each feature over its objects,
+  and a compartment is compared with its carrier by a robust z-score, the median absolute
   deviation (MAD) scaled by 1.4826. These are the defaults of pycytominer's
   ``aggregate`` and ``normalize(method="mad_robustize")``.
 """

@@ -1,4 +1,20 @@
-# Object detection checkpoint for one acquired image tile.
+# Object detection checkpoint for one acquired image tile: masks and the
+# detection checkpoint, no features.
+#
+# What to submit with each job (see README.md, "Input"):
+#
+#   image_path             an OME-Zarr position or an OME-TIFF
+#   tile_id                e.g. ["R0", 3, 7]
+#   tile_stage_xy_um       the tile's stage position
+#   tile_z_um              capture height; optional
+#   source_pixel_size_um   [x, y]
+#   source_image_size_px   [nx, ny]
+#   image_to_stage         the 2x2 matrix from image to stage axes
+#   channels               up to three channel indices; null for all
+#   gpu                    true or false
+#
+# What comes back, under `object_analysis`: the detection, with the paths
+# of the masks and checkpoint it wrote.
 
 metadata:
   purpose: "Object detection checkpoint"
@@ -7,9 +23,7 @@ metadata:
   functions_dir: "../steps"
 
 object_detection:
-  - detect_objects:
-      method: robust   # robust = Cellpose; fast = QuPath-style watershed
-      threshold: 100     # fast only: a nucleus's mean above background, in counts
+  - detect_objects:       # Cellpose; for the watershed, see object_analysis_fast.yaml
       channels: null
       channel_axis: null
       cellprob_threshold: 0.0

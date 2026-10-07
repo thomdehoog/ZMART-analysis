@@ -7,6 +7,21 @@
 # overridden per submission the same way; the table lands under the same
 # name, `object_analysis`, so whoever reads it does not know which way it
 # was found.
+#
+# What to submit with each job (see README.md, "Input"):
+#
+#   image_path             an OME-Zarr position or an OME-TIFF
+#   tile_id                e.g. ["R0", 3, 7]
+#   tile_stage_xy_um       the tile's stage position
+#   tile_z_um              capture height; optional
+#   source_pixel_size_um   [x, y]
+#   source_image_size_px   [nx, ny]
+#   image_to_stage         the 2x2 matrix from image to stage axes
+#   channels               up to three channel indices; null for all
+#   gpu                    true or false
+#
+# What comes back, under `object_analysis`: the object table, one row per
+# object, with its features and stage position.
 
 metadata:
   purpose: "Object-centered image analysis, classical detector"
@@ -45,7 +60,7 @@ object_analysis:
       # loop over every object in Python and were 4.5 s of a 5.8 s step on a
       # 488-object mock tile; the rest, one pass over the label image, was
       # 1.5 s. Size, shape, intensity, background and neighbourhood stay,
-      # and each is a gating axis on the page; the texture columns are what
+      # and each is a gating axis on the operator page of ZMART Microscopy; the texture columns are what
       # robust mode has that fast does not.
       extras: [intensity, neighbourhood, morphology, gradients, stat_texture]
 
