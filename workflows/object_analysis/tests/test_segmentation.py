@@ -108,13 +108,13 @@ def test_explicit_channel_axis_resolves_ambiguous_shape():
     # With equal end axes, an explicit orientation disambiguates. Probe two
     # points that live in channel 0 under exactly one orientation each.
     img = np.zeros((3, 10, 3), dtype=np.uint8)
-    img[0, 5, 1] = 5   # in the first-axis plane 0, not the last-axis plane 0
-    img[1, 5, 0] = 7   # in the last-axis plane 0, not the first-axis plane 0
+    img[0, 5, 1] = 5  # in the first-axis plane 0, not the last-axis plane 0
+    img[1, 5, 0] = 7  # in the last-axis plane 0, not the first-axis plane 0
 
     first = select_channels(img, channels=[0], channel_axis=0)
     last = select_channels(img, channels=[0], channel_axis=-1)
-    assert first.shape == (10, 3)   # channel-first (C, H, W) -> (H, W)
-    assert last.shape == (3, 10)    # channel-last (H, W, C) -> (H, W)
+    assert first.shape == (10, 3)  # channel-first (C, H, W) -> (H, W)
+    assert last.shape == (3, 10)  # channel-last (H, W, C) -> (H, W)
     assert int(first[5, 1]) == 5
     assert int(last[1, 5]) == 7
 
@@ -200,7 +200,10 @@ def test_segment_position_uses_channel_axis_for_multichannel(tmp_path):
 
     path = tmp_path / "three_channel.tif"
     tifffile.imwrite(
-        path, np.zeros((3, 10, 12), dtype=np.uint8), metadata={"axes": "CYX"}
+        path,
+        np.zeros((3, 10, 12), dtype=np.uint8),
+        metadata={"axes": "CYX"},
+        photometric="minisblack",
     )
     model = _RecordingModel()
     out = segment_position(path, {"model": model})
@@ -530,6 +533,7 @@ def test_segment_position_rejects_invalid_area_filter(tmp_path):
 # ---------------------------------------------------------------------------
 # The overlap guard
 # ---------------------------------------------------------------------------
+
 
 def _labelled(height, width, boxes):
     """A mask image with one label per (row0, row1, col0, col1) box."""

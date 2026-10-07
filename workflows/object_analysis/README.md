@@ -36,6 +36,11 @@ Submit one tile at a time:
 }
 ```
 
+To try the robust recipe on one tile from a shell, without writing the
+payload yourself: `python run_pipeline.py image.tif --pixel-size-um 0.65,0.65`
+runs `object_analysis.yaml` through the engine and prints the object count.
+`python run_pipeline.py --help` lists the flags, one per payload key.
+
 ## Output
 
 The result lands under `pipeline_data["object_analysis"]` as the object

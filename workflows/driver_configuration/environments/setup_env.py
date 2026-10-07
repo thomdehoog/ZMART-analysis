@@ -24,15 +24,15 @@ PYTHON_VERSION = "3.12"
 PIP_PACKAGES = [
     "pyyaml",
     "numpy",
-    "scipy",                  # ndimage.zoom and shift for the objective pair
-    "scikit-image>=0.23",     # phase_cross_correlation, match_template
-    "matplotlib",             # the review pictures
+    "scipy",  # ndimage.zoom and shift for the objective pair
+    "scikit-image>=0.23",  # phase_cross_correlation, match_template
+    "matplotlib",  # the review pictures
     # Before 2026.6.1 tifffile imports a name zarr 3.3 moved, and the first
     # read fails with a misleading "zarr 3.3.0 < 3 is not supported".
     "tifffile>=2026.6.1",
     "imagecodecs",
-    "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
-    "ome-types",     # OME-XML metadata
+    "ngio",  # OME-Zarr, NGFF 0.4 and 0.5
+    "ome-types",  # OME-XML metadata
 ]
 
 #: ``__STEPS__`` is replaced with this workflow's steps directory before the

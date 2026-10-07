@@ -143,7 +143,6 @@ def nearest_orientation(matrix) -> tuple[tuple[int, bool], float]:
     return best, best_residual
 
 
-
 def overlap_agreement(reference: np.ndarray, moved: np.ndarray, dcol: float, drow: float) -> float:
     """How alike the two pictures are where they overlap, once laid over one
     another by a shift: a plain correlation of the shared pixels, 1 for
@@ -169,7 +168,7 @@ def _template_shift_px(reference: np.ndarray, moved: np.ndarray) -> tuple[float,
     from skimage.feature import match_template
 
     rows, cols = moved.shape
-    template = moved[rows // 4: 3 * rows // 4, cols // 4: 3 * cols // 4]
+    template = moved[rows // 4 : 3 * rows // 4, cols // 4 : 3 * cols // 4]
     score = match_template(reference, template)
     r, c = np.unravel_index(int(np.argmax(score)), score.shape)
     # The template's top-left sat at (rows/4, cols/4) in the moved picture and
@@ -228,15 +227,20 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     shift_y = feature_shift_px(home, plus_y, upsample=upsample)
 
     # Features per micrometre of stage travel, one column per stage axis.
-    moved = np.array(
-        [
-            [shift_x["dcol_px"], shift_y["dcol_px"]],
-            [shift_x["drow_px"], shift_y["drow_px"]],
-        ]
-    ) / stage_move_um
+    moved = (
+        np.array(
+            [
+                [shift_x["dcol_px"], shift_y["dcol_px"]],
+                [shift_x["drow_px"], shift_y["drow_px"]],
+            ]
+        )
+        / stage_move_um
+    )
     lengths = np.linalg.norm(moved, axis=0)  # px per um, one per axis
     if not np.all(np.isfinite(lengths)) or np.any(lengths <= 0):
-        raise ValueError("the features did not move; the stage move was too small or the field is flat")
+        raise ValueError(
+            "the features did not move; the stage move was too small or the field is flat"
+        )
     pixel_um_by_axis = {"x": float(1.0 / lengths[0]), "y": float(1.0 / lengths[1])}
     pixel_um = float(np.mean([pixel_um_by_axis["x"], pixel_um_by_axis["y"]]))
 
@@ -246,7 +250,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     try:
         fitted = -np.linalg.inv(unit)
     except np.linalg.LinAlgError as exc:
-        raise ValueError(f"the two moves did not span the picture ({exc}); the shifts are collinear") from exc
+        raise ValueError(
+            f"the two moves did not span the picture ({exc}); the shifts are collinear"
+        ) from exc
 
     (rotation_deg, reflection), residual = nearest_orientation(fitted)
     accepted = residual <= residual_max
@@ -306,9 +312,14 @@ def candidate_overlay(home, plus_x, plus_y, *, stage_move_um, pixel_um, rotation
     expected_y = stage_to_image[:, 1] * stage_move_um
 
     def align(image, expected_um):
-        return nd_shift(np.asarray(image, dtype=np.float64),
-                        shift=(-expected_um[1] / pixel_um, -expected_um[0] / pixel_um),
-                        order=1, mode="constant", cval=float(np.median(image)), prefilter=False)
+        return nd_shift(
+            np.asarray(image, dtype=np.float64),
+            shift=(-expected_um[1] / pixel_um, -expected_um[0] / pixel_um),
+            order=1,
+            mode="constant",
+            cval=float(np.median(image)),
+            prefilter=False,
+        )
 
     moved = (align(plus_x, expected_x) + align(plus_y, expected_y)) / 2.0
     # Agreement, judged away from the edges the shift dragged filler into.
@@ -316,7 +327,9 @@ def candidate_overlay(home, plus_x, plus_y, *, stage_move_um, pixel_um, rotation
     h, w = np.asarray(home).shape
     inner = (slice(margin, h - margin), slice(margin, w - margin))
     a, b = np.asarray(home, dtype=np.float64)[inner].ravel(), moved[inner].ravel()
-    agreement = 0.0 if a.size < 16 or a.std() == 0 or b.std() == 0 else float(np.corrcoef(a, b)[0, 1])
+    agreement = (
+        0.0 if a.size < 16 or a.std() == 0 or b.std() == 0 else float(np.corrcoef(a, b)[0, 1])
+    )
     ref, tgt = _for_display(home), _for_display(moved)
     rgb = np.zeros((*ref.shape, 3))
     rgb[..., 0] = ref
@@ -359,41 +372,87 @@ def write_diagnostic(home, plus_x, plus_y, answer: dict, path, *, channel: int =
     for reflection in (False, True):
         for rotation_deg in (0, 90, 180, 270):
             tiles[(rotation_deg, reflection)] = candidate_overlay(
-                home_g, x_g, y_g, stage_move_um=move_um, pixel_um=pixel_um,
-                rotation_deg=rotation_deg, reflection=reflection)
+                home_g,
+                x_g,
+                y_g,
+                stage_move_um=move_um,
+                pixel_um=pixel_um,
+                rotation_deg=rotation_deg,
+                reflection=reflection,
+            )
     chosen = (o["rotation_deg"], o["reflection"])
 
     # Drawn narrow and tall on purpose: the page shows the sheet at the
     # column's width, and a wide sheet would shrink the tiles to thumbnails.
     fig = Figure(figsize=(10, 7.9), facecolor="white")
     FigureCanvasAgg(fig)
-    grid = fig.add_gridspec(2, 1, height_ratios=(0.95, 5.4), left=0.035, right=0.985, bottom=0.09, top=0.98, hspace=0.09)
+    grid = fig.add_gridspec(
+        2, 1, height_ratios=(0.95, 5.4), left=0.035, right=0.985, bottom=0.09, top=0.98, hspace=0.09
+    )
 
     # The answer, in a card.
     card = fig.add_subplot(grid[0])
     card.set_axis_off()
-    card.add_patch(FancyBboxPatch((0, 0), 1, 1, boxstyle="round,pad=0.012,rounding_size=0.03",
-                                  transform=card.transAxes, facecolor="#f8fafc", edgecolor=line, linewidth=1.2, clip_on=False))
+    card.add_patch(
+        FancyBboxPatch(
+            (0, 0),
+            1,
+            1,
+            boxstyle="round,pad=0.012,rounding_size=0.03",
+            transform=card.transAxes,
+            facecolor="#f8fafc",
+            edgecolor=line,
+            linewidth=1.2,
+            clip_on=False,
+        )
+    )
+
     def t(x, y, text, **kw):
         return card.text(x, y, text, transform=card.transAxes, va="center", **kw)
-    t(0.025, 0.82, "DETECTED IMAGE CORRECTION" if accepted else "ORIENTATION NOT ACCEPTED", ha="left",
-      fontsize=11, fontweight="bold", color=verdict_colour)
-    for x, label, value in ((0.025, "ROTATION", f"{o['rotation_deg']}° clockwise"),
-                            (0.30, "REFLECTION", "Yes" if o["reflection"] else "No"),
-                            (0.47, "STAGE X", f"image {o['sign_convention']['stage_x_from_image']}"),
-                            (0.66, "STAGE Y", f"image {o['sign_convention']['stage_y_from_image']}"),
-                            (0.85, "PIXEL", f"{answer['pixel_um']['mean']:.3f} µm")):
+
+    t(
+        0.025,
+        0.82,
+        "DETECTED IMAGE CORRECTION" if accepted else "ORIENTATION NOT ACCEPTED",
+        ha="left",
+        fontsize=11,
+        fontweight="bold",
+        color=verdict_colour,
+    )
+    for x, label, value in (
+        (0.025, "ROTATION", f"{o['rotation_deg']}° clockwise"),
+        (0.30, "REFLECTION", "Yes" if o["reflection"] else "No"),
+        (0.47, "STAGE X", f"image {o['sign_convention']['stage_x_from_image']}"),
+        (0.66, "STAGE Y", f"image {o['sign_convention']['stage_y_from_image']}"),
+        (0.85, "PIXEL", f"{answer['pixel_um']['mean']:.3f} µm"),
+    ):
         t(x, 0.52, label, ha="left", fontsize=9, fontweight="bold", color=ink_3)
         t(x, 0.22, value, ha="left", fontsize=18, fontweight="bold", color=ink)
 
     # The eight candidates: tile above, agreement bar below, in one grid.
-    gallery = grid[1].subgridspec(4, 5, width_ratios=(0.14, 1, 1, 1, 1), height_ratios=(1, 0.12, 1, 0.12),
-                                  hspace=0.05, wspace=0.05)
+    gallery = grid[1].subgridspec(
+        4,
+        5,
+        width_ratios=(0.14, 1, 1, 1, 1),
+        height_ratios=(1, 0.12, 1, 0.12),
+        hspace=0.05,
+        wspace=0.05,
+    )
     for row, (reflection, label) in enumerate(((False, "no mirror"), (True, "mirrored"))):
         lab = fig.add_subplot(gallery[2 * row, 0])
         lab.set_axis_off()
-        lab.text(0.5, 0.5, label, transform=lab.transAxes, ha="center", va="center", rotation=90,
-                 fontsize=11, fontweight="bold", color=ink_3)
+        lab.text(
+            0.5,
+            0.5,
+            label,
+            transform=lab.transAxes,
+            ha="center",
+            va="center",
+            rotation=90,
+            fontsize=11,
+            fontweight="bold",
+            color=ink_3,
+        )
         for column, rotation_deg in enumerate((0, 90, 180, 270)):
             overlay, agreement = tiles[(rotation_deg, reflection)]
             selected = (rotation_deg, reflection) == chosen
@@ -402,25 +461,67 @@ def write_diagnostic(home, plus_x, plus_y, answer: dict, path, *, channel: int =
             ax.set_xticks([])
             ax.set_yticks([])
             if row == 0:
-                ax.set_title(f"{rotation_deg}°", fontsize=13, fontweight="bold", color=ink_2 if selected else ink_3, pad=6)
+                ax.set_title(
+                    f"{rotation_deg}°",
+                    fontsize=13,
+                    fontweight="bold",
+                    color=ink_2 if selected else ink_3,
+                    pad=6,
+                )
             for spine in ax.spines.values():
                 spine.set_color(verdict_colour if selected else line)
                 spine.set_linewidth(3.5 if selected else 1.0)
             if selected:
-                ax.text(0.5, 0.05, "✓  SELECTED" if accepted else "NEAREST · REJECTED", transform=ax.transAxes,
-                        ha="center", va="bottom", color="white", fontsize=9, fontweight="bold",
-                        bbox={"facecolor": verdict_colour, "edgecolor": "none", "boxstyle": "round,pad=0.35"})
+                ax.text(
+                    0.5,
+                    0.05,
+                    "✓  SELECTED" if accepted else "NEAREST · REJECTED",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="bottom",
+                    color="white",
+                    fontsize=9,
+                    fontweight="bold",
+                    bbox={
+                        "facecolor": verdict_colour,
+                        "edgecolor": "none",
+                        "boxstyle": "round,pad=0.35",
+                    },
+                )
             bar = fig.add_subplot(gallery[2 * row + 1, column + 1])
             bar.set_axis_off()
             bar.set_xlim(0, 1)
             bar.set_ylim(0, 1)
             bar.add_patch(Rectangle((0, 0.3), 1, 0.4, facecolor=line, edgecolor="none"))
-            bar.add_patch(Rectangle((0, 0.3), agreement, 0.4, facecolor=verdict_colour if selected else "#94a3b8", edgecolor="none"))
-            bar.text(1.0, 0.5, f"{agreement:.2f}", ha="right", va="center", fontsize=11,
-                     fontweight="bold" if selected else "normal", color=ink if selected else ink_3,
-                     bbox={"facecolor": "white", "edgecolor": "none", "pad": 1.5})
-    fig.text(0.035, 0.028, "Home image in magenta, the moved images laid back by each candidate in green: "
-             "the right candidate overlaps white.\nThe bar is the Pearson correlation of the two where they overlap (1 = identical).",
-             ha="left", va="center", fontsize=10, color=ink_3)
+            bar.add_patch(
+                Rectangle(
+                    (0, 0.3),
+                    agreement,
+                    0.4,
+                    facecolor=verdict_colour if selected else "#94a3b8",
+                    edgecolor="none",
+                )
+            )
+            bar.text(
+                1.0,
+                0.5,
+                f"{agreement:.2f}",
+                ha="right",
+                va="center",
+                fontsize=11,
+                fontweight="bold" if selected else "normal",
+                color=ink if selected else ink_3,
+                bbox={"facecolor": "white", "edgecolor": "none", "pad": 1.5},
+            )
+    fig.text(
+        0.035,
+        0.028,
+        "Home image in magenta, the moved images laid back by each candidate in green: "
+        "the right candidate overlaps white.\nThe bar is the Pearson correlation of the two where they overlap (1 = identical).",
+        ha="left",
+        va="center",
+        fontsize=10,
+        color=ink_3,
+    )
     fig.savefig(str(path), dpi=105)
     return str(path)

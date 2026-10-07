@@ -33,6 +33,7 @@ FEATURE_COLUMN_MAP = {
     "eccentricity": "eccentricity",
 }
 
+
 def run(pipeline_data: dict, state: dict, **params) -> dict:
     feature_output = pipeline_data["extract_features"]
     props = feature_output["properties"]
@@ -51,10 +52,12 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         "n_objects": n_objects,
     }
 
-    tile_detection = validate_tile_detection({
-        "objects": objects,
-        "geometry": geometry,
-    })
+    tile_detection = validate_tile_detection(
+        {
+            "objects": objects,
+            "geometry": geometry,
+        }
+    )
 
     pipeline_data["object_analysis"] = tile_detection
     if not _setting(pipeline_data["input"], params, "keep_intermediate", False):
@@ -100,9 +103,7 @@ def _add_stage_columns(props: dict, geometry: dict) -> None:
 def _add_identity_columns(props: dict, geometry: dict) -> None:
     t_name = tile_name(geometry["tile_id"])
     props["tile_name"] = [t_name for _ in props["label"]]
-    props["object_id"] = [
-        object_name(geometry["tile_id"], int(label)) for label in props["label"]
-    ]
+    props["object_id"] = [object_name(geometry["tile_id"], int(label)) for label in props["label"]]
 
 
 def _geometry_from_input(inp: dict, detection: dict) -> dict:
@@ -124,9 +125,7 @@ def _geometry_from_input(inp: dict, detection: dict) -> dict:
         # know it says so rather than writing a fabricated zero.
         "tile_z_um": inp.get("tile_z_um"),
         "source_pixel_size_um": inp["source_pixel_size_um"],
-        "source_image_size_px": inp.get(
-            "source_image_size_px", detection.get("image_size_px")
-        ),
+        "source_image_size_px": inp.get("source_image_size_px", detection.get("image_size_px")),
         "image_to_stage": inp["image_to_stage"],
     }
 
@@ -140,7 +139,6 @@ def _strip_heavy_intermediates(pipeline_data: dict) -> None:
         detection.pop("image", None)
         detection.pop("image_2d", None)
         detection.pop("masks", None)
-
 
 
 def _setting(inp: dict, params: dict, key: str, default):
@@ -323,24 +321,16 @@ def validate_tile_detection(tile: Mapping[str, Any]) -> dict:
         if "label" in embeddings:
             labels = embeddings["label"]
             if not isinstance(labels, list) or len(labels) != n_objects:
-                raise ValueError(
-                    "objects.embeddings.label must be a list aligned to n_objects."
-                )
+                raise ValueError("objects.embeddings.label must be a list aligned to n_objects.")
             if labels != props["label"]:
-                raise ValueError(
-                    "objects.embeddings.label must match objects.properties.label."
-                )
+                raise ValueError("objects.embeddings.label must match objects.properties.label.")
         if "vectors" in embeddings:
             vectors = embeddings["vectors"]
             if not isinstance(vectors, list) or len(vectors) != n_objects:
-                raise ValueError(
-                    "objects.embeddings.vectors must be a list aligned to n_objects."
-                )
+                raise ValueError("objects.embeddings.vectors must be a list aligned to n_objects.")
             for idx, vector in enumerate(vectors):
                 if not isinstance(vector, list):
-                    raise ValueError(
-                        f"objects.embeddings.vectors[{idx}] must be a list."
-                    )
+                    raise ValueError(f"objects.embeddings.vectors[{idx}] must be a list.")
 
     return tile
 

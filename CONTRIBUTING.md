@@ -15,6 +15,7 @@ pip install -e ".[test]" ruff
 
 ```bash
 ruff check .
+ruff format --check .
 pytest -m "not cellpose and not conda_env and not pooch"
 ```
 

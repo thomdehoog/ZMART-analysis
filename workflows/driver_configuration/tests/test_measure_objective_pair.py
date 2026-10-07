@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
 from measure_objective_pair import run, sharp_height_um  # noqa: E402
 
 REF_UM, TGT_UM = 2.0, 0.5
-OFFSET_UM = (-18.0, 11.0)   # where the target lens looks, relative to the reference
+OFFSET_UM = (-18.0, 11.0)  # where the target lens looks, relative to the reference
 REF_FOCUS_UM, TGT_FOCUS_UM = 100.0, 103.5
 
 
@@ -37,7 +37,7 @@ def _view(scene, lens_um: float, centre_um, window_px: int) -> np.ndarray:
     c0 = int(round((600 * 0.5 + centre_um[0] - half_um) / 0.5))
     r0 = int(round((600 * 0.5 + centre_um[1] - half_um) / 0.5))
     span = int(round(window_px * scale))
-    cut = scene[r0:r0 + span, c0:c0 + span]
+    cut = scene[r0 : r0 + span, c0 : c0 + span]
     return zoom(cut, 1.0 / scale, order=1) if scale != 1.0 else cut
 
 
@@ -54,10 +54,13 @@ def test_the_offset_and_the_focus_difference_are_recovered(scene):
     tgt = _view(scene, TGT_UM, OFFSET_UM, 256)
     ref_stack, ref_z = _stack(ref, REF_FOCUS_UM, np.arange(96.0, 105.0, 1.0))
     tgt_stack, tgt_z = _stack(tgt, TGT_FOCUS_UM, np.arange(99.0, 108.0, 1.0))
-    data = {"input": {
-        "reference": {"image": ref, "pixel_um": REF_UM, "stack": ref_stack, "z_um": ref_z},
-        "target": {"image": tgt, "pixel_um": TGT_UM, "stack": tgt_stack, "z_um": tgt_z},
-    }, "metadata": {"verbose": 0}}
+    data = {
+        "input": {
+            "reference": {"image": ref, "pixel_um": REF_UM, "stack": ref_stack, "z_um": ref_z},
+            "target": {"image": tgt, "pixel_um": TGT_UM, "stack": tgt_stack, "z_um": tgt_z},
+        },
+        "metadata": {"verbose": 0},
+    }
     out = run(data, {})["measure_objective_pair"]
     assert out["accepted"], out["why"]
     assert out["translation_um"]["x"] == pytest.approx(OFFSET_UM[0], abs=1.0)
@@ -69,10 +72,13 @@ def test_the_offset_and_the_focus_difference_are_recovered(scene):
 def test_without_stacks_only_the_look_is_reported(scene):
     ref = _view(scene, REF_UM, (0.0, 0.0), 128)
     tgt = _view(scene, TGT_UM, OFFSET_UM, 256)
-    data = {"input": {
-        "reference": {"image": ref, "pixel_um": REF_UM},
-        "target": {"image": tgt, "pixel_um": TGT_UM},
-    }, "metadata": {"verbose": 0}}
+    data = {
+        "input": {
+            "reference": {"image": ref, "pixel_um": REF_UM},
+            "target": {"image": tgt, "pixel_um": TGT_UM},
+        },
+        "metadata": {"verbose": 0},
+    }
     out = run(data, {})["measure_objective_pair"]
     assert out["translation_um"]["z"] is None
     assert out["focus"] == {"reference": None, "target": None}
@@ -98,7 +104,9 @@ def test_each_cell_draws_its_own_picture(scene, tmp_path):
     assert (tmp_path / "focus.png").stat().st_size > 10_000
     reference = {"image": ref, "pixel_um": REF_UM}
     target = {"image": tgt, "pixel_um": TGT_UM}
-    out = run({"input": {"reference": reference, "target": target}, "metadata": {"verbose": 0}}, {})["measure_objective_pair"]
+    out = run(
+        {"input": {"reference": reference, "target": target}, "metadata": {"verbose": 0}}, {}
+    )["measure_objective_pair"]
     write_overlay_diagnostic(reference, target, out, tmp_path / "overlay.png")
     assert (tmp_path / "overlay.png").stat().st_size > 10_000
 
@@ -107,15 +115,21 @@ def test_a_peak_on_the_end_of_a_stack_is_not_a_peak(scene):
     """The stack never reached the sharp plane: no height is reported, and
     the answer says to refocus rather than pretending."""
     image = _view(scene, REF_UM, (0.0, 0.0), 96)
-    stack, z = _stack(image, 60.0, np.arange(46.0, 55.0, 1.0))   # sharp above the top plane
+    stack, z = _stack(image, 60.0, np.arange(46.0, 55.0, 1.0))  # sharp above the top plane
     f = sharp_height_um(stack, z)
     assert f["bracketed"] is False and f["peak_index"] == len(z) - 1
     ref = _view(scene, REF_UM, (0.0, 0.0), 128)
     tgt = _view(scene, TGT_UM, OFFSET_UM, 256)
-    out = run({"input": {
-        "reference": {"image": ref, "pixel_um": REF_UM, "stack": stack, "z_um": z},
-        "target": {"image": tgt, "pixel_um": TGT_UM, "stack": stack, "z_um": z},
-    }, "metadata": {"verbose": 0}}, {})["measure_objective_pair"]
+    out = run(
+        {
+            "input": {
+                "reference": {"image": ref, "pixel_um": REF_UM, "stack": stack, "z_um": z},
+                "target": {"image": tgt, "pixel_um": TGT_UM, "stack": stack, "z_um": z},
+            },
+            "metadata": {"verbose": 0},
+        },
+        {},
+    )["measure_objective_pair"]
     assert out["translation_um"]["z"] is None
     assert out["accepted"] is False
     assert "refocus" in out["why"]

@@ -65,7 +65,6 @@ METADATA = {
 KINDS = {"pca": ("pca_1", "pca_2"), "umap": ("umap_1", "umap_2")}
 
 
-
 def run(pipeline_data: dict, state: dict, **params) -> dict:
     verbose = pipeline_data.get("metadata", {}).get("verbose", 0)
     inp = pipeline_data["input"]
@@ -75,7 +74,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     table = Path(inp["table"])
     enough_objects = int(params.get("enough_objects", 10))
     matrix, ids, features = _conditioned(
-        _read_population(table, inp.get("ids")), float(params.get("enough_measured", 0.5)),
+        _read_population(table, inp.get("ids")),
+        float(params.get("enough_measured", 0.5)),
     )
     if len(ids) < enough_objects:
         raise ValueError(
@@ -90,7 +90,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         matrix, features, seed=seed, n_components=int(params.get("components", 50))
     )
     stem = table.name.removesuffix("_objects.csv")
-    written = {"pca": _write(table.with_name(f"{stem}_pca.csv"), ids, KINDS["pca"], components[:, :2])}
+    written = {
+        "pca": _write(table.with_name(f"{stem}_pca.csv"), ids, KINDS["pca"], components[:, :2])
+    }
     umap_settings = None
     if kind == "umap":
         from umap import UMAP
@@ -102,8 +104,10 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             "random_state": seed,
         }
         laid_out = UMAP(
-            n_components=2, n_neighbors=umap_settings["n_neighbors"],
-            min_dist=umap_settings["min_dist"], random_state=seed,
+            n_components=2,
+            n_neighbors=umap_settings["n_neighbors"],
+            min_dist=umap_settings["min_dist"],
+            random_state=seed,
         ).fit_transform(components)
         written["umap"] = _write(table.with_name(f"{stem}_umap.csv"), ids, KINDS["umap"], laid_out)
     if verbose:

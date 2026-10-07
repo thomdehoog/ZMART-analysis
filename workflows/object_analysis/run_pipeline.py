@@ -24,8 +24,6 @@ def _image_size_px(path: Path, channel_axis=None) -> list[int]:
     ``channel_axis`` is accepted and ignored: an image says what its axes
     are, and this used to have to guess from the shape.
     """
-    import sys
-
     sys.path.insert(0, str(WORKFLOW_DIR / "steps"))
     from detect_objects import load_plane
 
@@ -44,9 +42,7 @@ def _parse_pair(text: str) -> list[float]:
 def _parse_matrix(text: str) -> list[list[float]]:
     values = [float(part.strip()) for part in text.split(",")]
     if len(values) != 4:
-        raise argparse.ArgumentTypeError(
-            "expected four comma-separated values, e.g. 1,0,0,1"
-        )
+        raise argparse.ArgumentTypeError("expected four comma-separated values, e.g. 1,0,0,1")
     return [[values[0], values[1]], [values[2], values[3]]]
 
 
@@ -74,14 +70,16 @@ def _parse_tile_id(text: str) -> list:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Run object-centered analysis on one image tile."
-    )
+    parser = argparse.ArgumentParser(description="Run object-centered analysis on one image tile.")
     parser.add_argument("image_path", help="Path to a TIFF tile.")
     parser.add_argument("--tile-id", default="R0,0,0")
     parser.add_argument("--stage-xy-um", type=_parse_pair, default=[0.0, 0.0])
-    parser.add_argument("--z-um", type=float, default=None,
-                        help="the height the tile was captured at; omitted is honest")
+    parser.add_argument(
+        "--z-um",
+        type=float,
+        default=None,
+        help="the height the tile was captured at; omitted is honest",
+    )
     parser.add_argument("--pixel-size-um", type=_parse_pair, default=[1.0, 1.0])
     parser.add_argument(
         "--image-to-stage",

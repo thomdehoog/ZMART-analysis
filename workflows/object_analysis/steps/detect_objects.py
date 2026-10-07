@@ -90,7 +90,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         # segmenter uses -- and stacked channel-last exactly like the paths.
         planes = [np.asarray(image)]
         planes += [
-            np.asarray(load_plane(inp["image_path"], c=int(channel), z=inp.get("z_selection", "mid"))[0])
+            np.asarray(
+                load_plane(inp["image_path"], c=int(channel), z=inp.get("z_selection", "mid"))[0]
+            )
             for channel in extra_channels
         ]
         image = np.stack(planes, axis=-1)
@@ -150,7 +152,9 @@ def _write_detection_checkpoint(detection: dict, raw_masks, inp: dict, params: d
         "masks_path": str(masks_path),
         "masks_sha256": file_sha256(masks_path),
     }
-    checkpoint_path.write_text(json.dumps(to_builtin(checkpoint), indent=2) + "\n", encoding="utf-8")
+    checkpoint_path.write_text(
+        json.dumps(to_builtin(checkpoint), indent=2) + "\n", encoding="utf-8"
+    )
     return {
         "masks_tif": str(masks_path),
         "raw_masks_tif": str(raw_masks_path),
@@ -161,9 +165,7 @@ def _write_detection_checkpoint(detection: dict, raw_masks, inp: dict, params: d
 def _slim_detection_result(detection: dict) -> dict:
     """Return checkpoint metadata without large image/mask arrays."""
     return {
-        key: value
-        for key, value in detection.items()
-        if key not in {"image", "image_2d", "masks"}
+        key: value for key, value in detection.items() if key not in {"image", "image_2d", "masks"}
     }
 
 
@@ -215,9 +217,7 @@ def segmentation_params(inp: dict, params: dict) -> dict:
     return {
         "z_selection": inp.get("z_selection", "mid"),
         "channels": inp.get("channels", params.get("channels", None)),
-        "channel_axis": _channel_axis(
-            inp.get("channel_axis", params.get("channel_axis", None))
-        ),
+        "channel_axis": _channel_axis(inp.get("channel_axis", params.get("channel_axis", None))),
         # From the submission when it names one, else the pipeline's default.
         # That is what lets an operator tune detection on a single position
         # and see the answer without re-registering a pipeline.
@@ -233,9 +233,7 @@ def segmentation_params(inp: dict, params: dict) -> dict:
 
 def border_filter_params(inp: dict, params: dict) -> dict:
     """The overlap guard: how wide a band at each tile edge is rejected."""
-    return {"border_margin_px": _none_or_int(
-        _setting(inp, params, "border_margin_px")
-    )}
+    return {"border_margin_px": _none_or_int(_setting(inp, params, "border_margin_px"))}
 
 
 def area_filter_params(inp: dict, params: dict) -> dict:
@@ -257,11 +255,7 @@ def area_filter_params(inp: dict, params: dict) -> dict:
         source_pixel_size_um=_setting(inp, params, "source_pixel_size_um"),
         bound="max",
     )
-    if (
-        min_area_px is not None
-        and max_area_px is not None
-        and max_area_px < min_area_px
-    ):
+    if min_area_px is not None and max_area_px is not None and max_area_px < min_area_px:
         raise ValueError("max object size must be >= min object size.")
     return {
         "min_area_px": min_area_px,
@@ -280,8 +274,7 @@ def _area_bound_px(*, area_px, diameter_um, source_pixel_size_um, bound: str):
     diameter_um = _none_or_float(diameter_um)
     if area_px is not None and diameter_um is not None:
         raise ValueError(
-            f"Specify either {bound}_area_px or {bound}_equivalent_diameter_um, "
-            "not both."
+            f"Specify either {bound}_area_px or {bound}_equivalent_diameter_um, not both."
         )
     if area_px is not None:
         if area_px < 0:
@@ -303,9 +296,7 @@ def _area_bound_px(*, area_px, diameter_um, source_pixel_size_um, bound: str):
 
 def _pixel_area_um2(source_pixel_size_um):
     if source_pixel_size_um is None:
-        raise ValueError(
-            "source_pixel_size_um is required when filtering by equivalent diameter."
-        )
+        raise ValueError("source_pixel_size_um is required when filtering by equivalent diameter.")
     if isinstance(source_pixel_size_um, (int, float)):
         sx = sy = float(source_pixel_size_um)
     else:
@@ -336,22 +327,16 @@ def _channel_axis(value):
     if value is None:
         return None
     if isinstance(value, bool):
-        raise ValueError(
-            f"channel_axis must be 0, 2, -1, or None; got {value}."
-        )
+        raise ValueError(f"channel_axis must be 0, 2, -1, or None; got {value}.")
     try:
         value = operator.index(value)
     except TypeError as exc:
-        raise ValueError(
-            f"channel_axis must be 0, 2, -1, or None; got {value}."
-        ) from exc
+        raise ValueError(f"channel_axis must be 0, 2, -1, or None; got {value}.") from exc
     if value == 0:
         return 0
     if value in (-1, 2):
         return -1
-    raise ValueError(
-        f"channel_axis must be 0, 2, -1, or None; got {value}."
-    )
+    raise ValueError(f"channel_axis must be 0, 2, -1, or None; got {value}.")
 
 
 def segmentation_params_hash(params: dict) -> str:
@@ -511,9 +496,7 @@ def segment_position(
     # Border first, then size: an object clipped by the tile edge has a
     # smaller area than the object really is, so filtering by size before
     # dropping it would judge it on a measurement the edge invented.
-    masks, dropped_labels = filter_masks_by_border(
-        raw_masks, border_margin_px=border_margin_px
-    )
+    masks, dropped_labels = filter_masks_by_border(raw_masks, border_margin_px=border_margin_px)
     masks, dropped_by_area = filter_masks_by_area(
         masks,
         min_area_px=min_area_px,
@@ -527,8 +510,7 @@ def segment_position(
     if verbose >= 1:
         seg_ny, seg_nx = seg_eval.shape[:2]
         print(
-            f"  [{log_prefix}] image={nx}x{ny}, "
-            f"segmentation={seg_nx}x{seg_ny}, objects={n_objects}"
+            f"  [{log_prefix}] image={nx}x{ny}, segmentation={seg_nx}x{seg_ny}, objects={n_objects}"
         )
 
     return {
@@ -639,8 +621,11 @@ def _get_cellpose_model(state, *, requested_gpu: bool, verbose: int, log_prefix:
         cached_gpu = bool(state.get("_cellpose_model_gpu", requested_gpu))
         if requested_gpu and not cached_gpu:
             accelerated = _load_cellpose_model(
-                state, requested_gpu=True, accelerated_only=True,
-                verbose=verbose, log_prefix=log_prefix,
+                state,
+                requested_gpu=True,
+                accelerated_only=True,
+                verbose=verbose,
+                log_prefix=log_prefix,
             )
             if accelerated is not None:
                 return accelerated
@@ -650,11 +635,16 @@ def _get_cellpose_model(state, *, requested_gpu: bool, verbose: int, log_prefix:
             state.get("_cellpose_model_device", "cuda" if requested_gpu else "cpu"),
         )
     loaded = _load_cellpose_model(
-        state, requested_gpu=requested_gpu, accelerated_only=False,
-        verbose=verbose, log_prefix=log_prefix,
+        state,
+        requested_gpu=requested_gpu,
+        accelerated_only=False,
+        verbose=verbose,
+        log_prefix=log_prefix,
     )
     if loaded is None:
-        raise RuntimeError("Could not initialize CellposeModel on any device: " + state.pop("_cellpose_errors", ""))
+        raise RuntimeError(
+            "Could not initialize CellposeModel on any device: " + state.pop("_cellpose_errors", "")
+        )
     return loaded
 
 
@@ -699,11 +689,7 @@ def _cellpose_device_candidates(prefer_accelerator: bool):
 
     if torch is not None and torch.cuda.is_available():
         candidates.append(("cuda", True, {"gpu": True, "device": torch.device("cuda")}))
-    if (
-        torch is not None
-        and hasattr(torch.backends, "mps")
-        and torch.backends.mps.is_available()
-    ):
+    if torch is not None and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         candidates.append(("mps", True, {"gpu": True, "device": torch.device("mps")}))
     candidates.append(("cpu", False, {"gpu": False}))
     return candidates
@@ -718,8 +704,9 @@ def _cellpose_provenance(model) -> dict:
     try:
         import cellpose
 
-        out["cellpose_version"] = str(getattr(cellpose, "version", None) or
-                                      getattr(cellpose, "__version__", "unknown"))
+        out["cellpose_version"] = str(
+            getattr(cellpose, "version", None) or getattr(cellpose, "__version__", "unknown")
+        )
     except Exception:  # noqa: BLE001 - provenance never fails a detection
         out["cellpose_version"] = "unknown"
     network = getattr(model, "pretrained_model", None)
@@ -780,9 +767,7 @@ def select_channels(image, channels=None, channel_axis=None):
         if len(indices) > 3:
             raise ValueError("Cellpose accepts at most 3 channels.")
         if any(c < 0 or c >= n_channels for c in indices):
-            raise ValueError(
-                f"channels {indices} out of range for {n_channels} channels."
-            )
+            raise ValueError(f"channels {indices} out of range for {n_channels} channels.")
 
     selected = stack[..., indices]
     if selected.shape[-1] == 1:
@@ -799,9 +784,7 @@ def _to_channel_last(image, channel_axis):
     """
     if channel_axis is not None:
         if isinstance(channel_axis, (bool, np.bool_)):
-            raise ValueError(
-                f"channel_axis must be 0, 2, -1, or None; got {channel_axis}."
-            )
+            raise ValueError(f"channel_axis must be 0, 2, -1, or None; got {channel_axis}.")
         try:
             channel_axis = operator.index(channel_axis)
         except TypeError as exc:
@@ -812,9 +795,7 @@ def _to_channel_last(image, channel_axis):
             return image
         if channel_axis == 0:
             return np.moveaxis(image, 0, -1)
-        raise ValueError(
-            f"channel_axis must be 0, 2, -1, or None; got {channel_axis}."
-        )
+        raise ValueError(f"channel_axis must be 0, 2, -1, or None; got {channel_axis}.")
 
     first, last = image.shape[0], image.shape[-1]
     if first == last:
@@ -845,11 +826,7 @@ def filter_masks_by_area(masks, *, min_area_px=None, max_area_px=None):
         raise ValueError("min_area_px must be >= 0.")
     if max_area_px is not None and max_area_px < 0:
         raise ValueError("max_area_px must be >= 0.")
-    if (
-        min_area_px is not None
-        and max_area_px is not None
-        and max_area_px < min_area_px
-    ):
+    if min_area_px is not None and max_area_px is not None and max_area_px < min_area_px:
         raise ValueError("max_area_px must be >= min_area_px.")
     if min_area_px is None and max_area_px is None:
         return masks, []
@@ -894,15 +871,22 @@ def filter_masks_by_border(masks, *, border_margin_px=None):
     height, width = masks.shape[:2]
     if 2 * border_margin_px >= min(height, width):
         raise ValueError(
-            f"border_margin_px={border_margin_px} leaves no interior in a "
-            f"{height}x{width} tile."
+            f"border_margin_px={border_margin_px} leaves no interior in a {height}x{width} tile."
         )
 
     margin = border_margin_px
-    touching = set(np.unique(np.concatenate([
-        masks[:margin, :].ravel(), masks[-margin:, :].ravel(),
-        masks[:, :margin].ravel(), masks[:, -margin:].ravel(),
-    ])).tolist())
+    touching = set(
+        np.unique(
+            np.concatenate(
+                [
+                    masks[:margin, :].ravel(),
+                    masks[-margin:, :].ravel(),
+                    masks[:, :margin].ravel(),
+                    masks[:, -margin:].ravel(),
+                ]
+            )
+        ).tolist()
+    )
     present = np.flatnonzero(np.bincount(masks.ravel()))
     return _keep_labels(masks, [int(label) for label in present if label and label not in touching])
 
@@ -978,10 +962,7 @@ def _area_resize_axis(arr, out_size, axis):
         lo = int(np.floor(start))
         hi = int(np.ceil(stop))
         weights = np.array(
-            [
-                max(0.0, min(stop, src_idx + 1) - max(start, src_idx))
-                for src_idx in range(lo, hi)
-            ],
+            [max(0.0, min(stop, src_idx + 1) - max(start, src_idx)) for src_idx in range(lo, hi)],
             dtype=np.float32,
         )
         selector = [slice(None)] * arr.ndim
@@ -1146,24 +1127,16 @@ def validate_tile_detection(tile: Mapping[str, Any]) -> dict:
         if "label" in embeddings:
             labels = embeddings["label"]
             if not isinstance(labels, list) or len(labels) != n_objects:
-                raise ValueError(
-                    "objects.embeddings.label must be a list aligned to n_objects."
-                )
+                raise ValueError("objects.embeddings.label must be a list aligned to n_objects.")
             if labels != props["label"]:
-                raise ValueError(
-                    "objects.embeddings.label must match objects.properties.label."
-                )
+                raise ValueError("objects.embeddings.label must match objects.properties.label.")
         if "vectors" in embeddings:
             vectors = embeddings["vectors"]
             if not isinstance(vectors, list) or len(vectors) != n_objects:
-                raise ValueError(
-                    "objects.embeddings.vectors must be a list aligned to n_objects."
-                )
+                raise ValueError("objects.embeddings.vectors must be a list aligned to n_objects.")
             for idx, vector in enumerate(vectors):
                 if not isinstance(vector, list):
-                    raise ValueError(
-                        f"objects.embeddings.vectors[{idx}] must be a list."
-                    )
+                    raise ValueError(f"objects.embeddings.vectors[{idx}] must be a list.")
 
     return tile
 

@@ -1,4 +1,5 @@
 """extract_classical_features -- per-object features for one detected tile."""
+
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -31,20 +32,33 @@ INTENSITY_PROPERTIES = (
 DEFAULT_PROPERTIES = [
     "label",
     "bbox",
-    "centroid", "weighted_centroid",
-    "area", "num_pixels", "area_convex",
-    "equivalent_diameter_area", "feret_diameter_max",
-    "perimeter", "perimeter_crofton",
-    "axis_major_length", "axis_minor_length", "orientation",
-    "eccentricity", "solidity", "extent",
-    "intensity_mean", "intensity_min", "intensity_max",
-    "intensity_std", "intensity_median",
+    "centroid",
+    "weighted_centroid",
+    "area",
+    "num_pixels",
+    "area_convex",
+    "equivalent_diameter_area",
+    "feret_diameter_max",
+    "perimeter",
+    "perimeter_crofton",
+    "axis_major_length",
+    "axis_minor_length",
+    "orientation",
+    "eccentricity",
+    "solidity",
+    "extent",
+    "intensity_mean",
+    "intensity_min",
+    "intensity_max",
+    "intensity_std",
+    "intensity_median",
 ]
 
 
 # ---------------------------------------------------------------------------
 # Public entry point.
 # ---------------------------------------------------------------------------
+
 
 def run(pipeline_data: dict, state: dict, **params) -> dict:
     """Engine entry point. See module docstring for the full parameter set."""
@@ -68,9 +82,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     img = _normalise_image_axes(pipeline_data["preprocess"]["image"], masks.shape)
 
     spacing_kw = {"spacing": tuple(pixel_size_um)} if pixel_size_um else {}
-    native_properties = [
-        prop for prop in properties if prop not in SYNTHETIC_PROPERTIES
-    ]
+    native_properties = [prop for prop in properties if prop not in SYNTHETIC_PROPERTIES]
     props = regionprops_table(
         masks, intensity_image=img, properties=native_properties, **spacing_kw
     )
@@ -86,8 +98,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             _run_extras(props, masks, img, labels, extras, params, pixel_size_um)
 
     if verbose >= 2:
-        print(f"  [extract_features] cells: {n_cells}, "
-              f"properties: {sorted(props)}")
+        print(f"  [extract_features] cells: {n_cells}, properties: {sorted(props)}")
 
     pipeline_data["extract_features"] = {
         "properties": props,
@@ -106,9 +117,7 @@ def _add_synthetic_properties(
     channels = _channel_images(img)
     if channels is not None:
         for idx, channel in enumerate(channels):
-            props[f"intensity_median_c{idx}"] = _intensity_medians(
-                masks, channel
-            )
+            props[f"intensity_median_c{idx}"] = _intensity_medians(masks, channel)
         props["intensity_median"] = props["intensity_median_c0"]
         return
 
@@ -139,9 +148,7 @@ def _normalise_image_axes(img, mask_shape: tuple[int, int]) -> np.ndarray:
         return arr
     if arr.ndim == 3 and arr.shape[1:] == mask_shape:
         return np.moveaxis(arr, 0, -1)
-    raise ValueError(
-        f"image shape {arr.shape} is not aligned to mask shape {mask_shape}."
-    )
+    raise ValueError(f"image shape {arr.shape} is not aligned to mask shape {mask_shape}.")
 
 
 def _channel_images(img: np.ndarray) -> tuple[np.ndarray, ...] | None:
@@ -192,6 +199,7 @@ def _normalise_intensity_columns(props: dict, img: np.ndarray) -> None:
 # the native regionprops set naturally trims its derivatives.
 # ---------------------------------------------------------------------------
 
+
 def _add_derived(props: dict) -> None:
     """Cheap algebraic derivatives of the native regionprops set.
 
@@ -237,15 +245,11 @@ def _add_derived(props: dict) -> None:
                 n_px = np.asarray(props["num_pixels"], dtype=float)
                 props[f"intensity_total_c{idx}"] = mean_i * n_px
             elif "area" in props:
-                props[f"intensity_total_c{idx}"] = mean_i * np.asarray(
-                    props["area"], dtype=float
-                )
+                props[f"intensity_total_c{idx}"] = mean_i * np.asarray(props["area"], dtype=float)
             std_key = f"intensity_std_c{idx}"
             if std_key in props:
                 std_i = np.asarray(props[std_key], dtype=float)
-                props[f"intensity_cv_c{idx}"] = np.where(
-                    mean_i > 0, std_i / mean_i, np.nan
-                )
+                props[f"intensity_cv_c{idx}"] = np.where(mean_i > 0, std_i / mean_i, np.nan)
 
 
 def _intensity_channel_indices(props: dict) -> list[int]:
@@ -253,7 +257,7 @@ def _intensity_channel_indices(props: dict) -> list[int]:
     indices = []
     for key in props:
         if key.startswith(prefix):
-            suffix = key[len(prefix):]
+            suffix = key[len(prefix) :]
             if suffix.isdigit():
                 indices.append(int(suffix))
     return sorted(indices)
@@ -262,6 +266,7 @@ def _intensity_channel_indices(props: dict) -> list[int]:
 # ---------------------------------------------------------------------------
 # Extras dispatcher.
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class _Context:
@@ -319,9 +324,14 @@ def _run_extras(props, masks, img, labels, extras, params, pixel_size_um) -> Non
     slices = find_objects(masks) if needs_bbox else None
 
     ctx = _Context(
-        props=props, masks=masks, img=_primary_image(img),
-        channel_images=_channel_images(img), labels=labels,
-        slices=slices, params=params, pixel_size_um=pixel_size_um,
+        props=props,
+        masks=masks,
+        img=_primary_image(img),
+        channel_images=_channel_images(img),
+        labels=labels,
+        slices=slices,
+        params=params,
+        pixel_size_um=pixel_size_um,
     )
 
     for name in sorted(extras, key=lambda n: (EXTRAS[n].family, n)):
@@ -350,6 +360,7 @@ def _expand_extras(extras):
 # ---------------------------------------------------------------------------
 # Helpers shared across families.
 # ---------------------------------------------------------------------------
+
 
 def _texture_scale(img: np.ndarray, masks: np.ndarray, params: dict) -> float:
     """The intensity that maps to the top texture bin.
@@ -380,9 +391,9 @@ def _to_uint8(img: np.ndarray, scale: float) -> np.ndarray:
     return np.clip(arr.astype(np.float64) / scale * 255.0, 0, 255).astype(np.uint8)
 
 
-def _per_label_mean(values_image: np.ndarray,
-                    label_image: np.ndarray,
-                    labels: np.ndarray) -> np.ndarray:
+def _per_label_mean(
+    values_image: np.ndarray, label_image: np.ndarray, labels: np.ndarray
+) -> np.ndarray:
     """Per-label mean of ``values_image`` via two ``np.bincount`` passes.
 
     Equivalent to ``[values_image[label_image == lab].mean() for lab in
@@ -434,6 +445,7 @@ def _assign_channelised(ctx: _Context, compute: Callable[[np.ndarray], dict]) ->
 # Family: Intensity
 # ===========================================================================
 
+
 def _global_bg_mean(ctx: _Context) -> None:
     """Mean intensity over all unlabelled pixels (``label == 0``).
 
@@ -482,9 +494,7 @@ def _local_bg_collar(ctx: _Context) -> None:
 
     if ctx.channel_images is not None:
         for idx, image in enumerate(ctx.channel_images):
-            bg_local = _local_bg_values(
-                image, ctx.masks, ctx.labels, ctx.slices, ctx.params
-            )
+            bg_local = _local_bg_values(image, ctx.masks, ctx.labels, ctx.slices, ctx.params)
             suffix = f"_c{idx}"
             ctx.props[f"bg_local_mean{suffix}"] = bg_local
             _add_local_bg_derivatives(ctx.props, bg_local, suffix=suffix)
@@ -518,9 +528,7 @@ def _local_bg_values(
     return bg_local
 
 
-def _add_local_bg_derivatives(
-    props: dict, bg_local: np.ndarray, suffix: str = ""
-) -> None:
+def _add_local_bg_derivatives(props: dict, bg_local: np.ndarray, suffix: str = "") -> None:
     """Compute the four background-corrected intensity columns.
 
     Split out from ``_local_bg_collar`` so the bbox loop stays focussed on
@@ -533,12 +541,9 @@ def _add_local_bg_derivatives(
         if mean_key in props:
             mean_i = np.asarray(props[mean_key], dtype=float)
             props[f"mean_minus_local_bg{suffix}"] = mean_i - bg_local
-            props[f"mean_over_local_bg{suffix}"] = np.where(
-                bg_local > 0, mean_i / bg_local, np.nan
-            )
+            props[f"mean_over_local_bg{suffix}"] = np.where(bg_local > 0, mean_i / bg_local, np.nan)
             n_px_key = (
-                "num_pixels" if "num_pixels" in props
-                else ("area" if "area" in props else None)
+                "num_pixels" if "num_pixels" in props else ("area" if "area" in props else None)
             )
             if n_px_key is not None:
                 n_px = np.asarray(props[n_px_key], dtype=float)
@@ -546,14 +551,13 @@ def _add_local_bg_derivatives(
         total_key = f"intensity_total{suffix}"
         if total_key in props:
             tot = np.asarray(props[total_key], dtype=float)
-            props[f"total_over_local_bg{suffix}"] = np.where(
-                bg_local > 0, tot / bg_local, np.nan
-            )
+            props[f"total_over_local_bg{suffix}"] = np.where(bg_local > 0, tot / bg_local, np.nan)
 
 
 # ===========================================================================
 # Family: Neighbourhood (cKDTree on object centroids)
 # ===========================================================================
+
 
 def _neighbour_features(ctx: _Context) -> None:
     """Object-to-object spatial features.
@@ -587,10 +591,13 @@ def _neighbour_features(ctx: _Context) -> None:
 
     have_centroids = "centroid-0" in ctx.props and "centroid-1" in ctx.props
     if have_centroids and n >= 2:
-        pts = np.stack([
-            np.asarray(ctx.props["centroid-0"], dtype=float),
-            np.asarray(ctx.props["centroid-1"], dtype=float),
-        ], axis=1)
+        pts = np.stack(
+            [
+                np.asarray(ctx.props["centroid-0"], dtype=float),
+                np.asarray(ctx.props["centroid-1"], dtype=float),
+            ],
+            axis=1,
+        )
         tree = cKDTree(pts)
         # k=2 because the closest hit at every point is itself (distance 0).
         d, _ = tree.query(pts, k=2)
@@ -616,6 +623,7 @@ def _neighbour_features(ctx: _Context) -> None:
 # ===========================================================================
 # Family: Texture
 # ===========================================================================
+
 
 def _gradient_means(ctx: _Context) -> None:
     """Per-object mean of the Prewitt and Roberts gradient magnitudes.
@@ -662,9 +670,7 @@ def _statistical_texture(ctx: _Context) -> None:
     """
     _assign_channelised(
         ctx,
-        lambda image: _statistical_texture_values(
-            image, ctx.masks, ctx.labels, ctx.params
-        ),
+        lambda image: _statistical_texture_values(image, ctx.masks, ctx.labels, ctx.params),
     )
 
 
@@ -686,13 +692,13 @@ def _statistical_texture_values(
     rows = rows[valid]
     vals = vals[valid]
 
-    counts = np.bincount(
-        rows * n_bins + vals, minlength=len(labels) * n_bins
-    ).reshape(len(labels), n_bins).astype(np.float64)
-    n_per = counts.sum(axis=1)
-    p = np.divide(
-        counts, n_per[:, None], out=np.zeros_like(counts), where=n_per[:, None] > 0
+    counts = (
+        np.bincount(rows * n_bins + vals, minlength=len(labels) * n_bins)
+        .reshape(len(labels), n_bins)
+        .astype(np.float64)
     )
+    n_per = counts.sum(axis=1)
+    p = np.divide(counts, n_per[:, None], out=np.zeros_like(counts), where=n_per[:, None] > 0)
 
     levels = np.arange(n_bins, dtype=np.float64)
     uniformity = (p * p).sum(axis=1)
@@ -702,9 +708,9 @@ def _statistical_texture_values(
 
     mean = (p * levels).sum(axis=1)
     centered = levels[None, :] - mean[:, None]
-    m2 = (p * centered ** 2).sum(axis=1)
-    m3 = (p * centered ** 3).sum(axis=1)
-    m4 = (p * centered ** 4).sum(axis=1)
+    m2 = (p * centered**2).sum(axis=1)
+    m3 = (p * centered**3).sum(axis=1)
+    m4 = (p * centered**4).sum(axis=1)
 
     skewness = np.full(len(labels), np.nan)
     kurtosis = np.full(len(labels), np.nan)
@@ -735,9 +741,7 @@ def _lbp_features(ctx: _Context) -> None:
     """
     _assign_channelised(
         ctx,
-        lambda image: _lbp_values(
-            image, ctx.masks, ctx.labels, ctx.slices, ctx.params
-        ),
+        lambda image: _lbp_values(image, ctx.masks, ctx.labels, ctx.slices, ctx.params),
     )
 
 
@@ -757,9 +761,9 @@ def _lbp_values(
     R = float(params.get("lbp_R", 1))
     method = str(params.get("lbp_method", "default"))
 
-    lbp = local_binary_pattern(_to_uint8(img, _texture_scale(img, masks, params)), P=P, R=R, method=method).astype(
-        np.int32
-    )
+    lbp = local_binary_pattern(
+        _to_uint8(img, _texture_scale(img, masks, params)), P=P, R=R, method=method
+    ).astype(np.int32)
 
     n = len(labels)
     out = np.full((n, 6), np.nan, dtype=np.float64)
@@ -783,10 +787,16 @@ def _lbp_values(
 
     return {
         key: out[:, col]
-        for col, key in enumerate((
-        "lbp_mean", "lbp_std", "lbp_energy",
-        "lbp_entropy", "lbp_skewness", "lbp_kurtosis",
-        ))
+        for col, key in enumerate(
+            (
+                "lbp_mean",
+                "lbp_std",
+                "lbp_energy",
+                "lbp_entropy",
+                "lbp_skewness",
+                "lbp_kurtosis",
+            )
+        )
     }
 
 
@@ -812,9 +822,7 @@ def _fft_features(ctx: _Context) -> None:
     """
     _assign_channelised(
         ctx,
-        lambda image: _fft_values(
-            image, ctx.masks, ctx.labels, ctx.slices, ctx.params
-        ),
+        lambda image: _fft_values(image, ctx.masks, ctx.labels, ctx.slices, ctx.params),
     )
 
 
@@ -857,10 +865,16 @@ def _fft_values(
 
     return {
         key: out[:, col]
-        for col, key in enumerate((
-        "fft_mean", "fft_std", "fft_energy",
-        "fft_entropy", "fft_skewness", "fft_kurtosis",
-        ))
+        for col, key in enumerate(
+            (
+                "fft_mean",
+                "fft_std",
+                "fft_energy",
+                "fft_entropy",
+                "fft_skewness",
+                "fft_kurtosis",
+            )
+        )
     }
 
 
@@ -885,9 +899,7 @@ def _glrlm_features(ctx: _Context) -> None:
     """
     _assign_channelised(
         ctx,
-        lambda image: _glrlm_values(
-            image, ctx.masks, ctx.labels, ctx.slices, ctx.params
-        ),
+        lambda image: _glrlm_values(image, ctx.masks, ctx.labels, ctx.slices, ctx.params),
     )
 
 
@@ -901,9 +913,9 @@ def _glrlm_values(
     n_levels = int(params.get("glrlm_levels", 16))
     img_arr = np.asarray(img)
     vmax = _texture_scale(img_arr, masks, params)
-    img_q = np.clip(
-        img_arr.astype(np.float64) / vmax * (n_levels - 1), 0, n_levels - 1
-    ).astype(np.int16)
+    img_q = np.clip(img_arr.astype(np.float64) / vmax * (n_levels - 1), 0, n_levels - 1).astype(
+        np.int16
+    )
 
     n = len(labels)
     out = np.full((n, 4), np.nan, dtype=np.float64)
@@ -921,20 +933,25 @@ def _glrlm_values(
         TR = float(P.sum())
         if TR == 0:
             continue
-        sum_g = P.sum(axis=0)   # over gray levels -> per run length
-        sum_r = P.sum(axis=1)   # over run lengths -> per gray level
+        sum_g = P.sum(axis=0)  # over gray levels -> per run length
+        sum_r = P.sum(axis=1)  # over run lengths -> per gray level
         out[i] = [
-            float((sum_g ** 2).sum() / TR),
-            float((P / (g ** 2)).sum() / TR),
-            float((P * (g ** 2)).sum() / TR),
-            float((sum_r ** 2).sum() / TR),
+            float((sum_g**2).sum() / TR),
+            float((P / (g**2)).sum() / TR),
+            float((P * (g**2)).sum() / TR),
+            float((sum_r**2).sum() / TR),
         ]
 
     return {
         key: out[:, col]
-        for col, key in enumerate((
-        "glrlm_rlnu", "glrlm_lglre", "glrlm_hglre", "glrlm_glnu",
-        ))
+        for col, key in enumerate(
+            (
+                "glrlm_rlnu",
+                "glrlm_lglre",
+                "glrlm_hglre",
+                "glrlm_glnu",
+            )
+        )
     }
 
 
@@ -977,16 +994,17 @@ def _glrlm_matrix_4dir(crop_q: np.ndarray, n_levels: int) -> np.ndarray:
             if vals.size:
                 np.add.at(P, (vals, lens - 1), 1)
 
-    _accumulate(crop_q)                                                          # 0
-    _accumulate(crop_q.T)                                                        # 90
-    _accumulate(np.diagonal(crop_q, k) for k in range(-H + 1, W))                # 45
-    _accumulate(np.diagonal(np.fliplr(crop_q), k) for k in range(-H + 1, W))     # 135
+    _accumulate(crop_q)  # 0
+    _accumulate(crop_q.T)  # 90
+    _accumulate(np.diagonal(crop_q, k) for k in range(-H + 1, W))  # 45
+    _accumulate(np.diagonal(np.fliplr(crop_q), k) for k in range(-H + 1, W))  # 135
     return P
 
 
 # ===========================================================================
 # Family: Morphology
 # ===========================================================================
+
 
 def _radius_of_gyration_and_spread(ctx: _Context) -> None:
     """Radius of gyration and normalised intensity radial variance.
@@ -1032,7 +1050,7 @@ def _radius_of_gyration_and_spread(ctx: _Context) -> None:
         u_mean = float(u.mean())
         N = u.size
         if rg_v > 0 and u_mean > 0:
-            spread[i] = float((u * d2).sum() / (u_mean * N * rg_v ** 2))
+            spread[i] = float((u * d2).sum() / (u_mean * N * rg_v**2))
 
     ctx.props["radius_of_gyration"] = rg
     ctx.props["intensity_radial_variance_normalised"] = spread
@@ -1050,6 +1068,7 @@ def _radius_of_gyration_and_spread(ctx: _Context) -> None:
 #   2. add an entry below.
 # ===========================================================================
 
+
 @dataclass(frozen=True)
 class _Extra:
     handler: Callable[[_Context], None]
@@ -1058,15 +1077,15 @@ class _Extra:
 
 
 EXTRAS: dict[str, _Extra] = {
-    "global_bg":    _Extra(_global_bg_mean,                "intensity",     False),
-    "local_bg":     _Extra(_local_bg_collar,               "intensity",     True),
-    "neighbours":   _Extra(_neighbour_features,            "neighbourhood", False),
-    "gradients":    _Extra(_gradient_means,                "texture",       False),
-    "stat_texture": _Extra(_statistical_texture,           "texture",       False),
-    "lbp":          _Extra(_lbp_features,                  "texture",       True),
-    "fft":          _Extra(_fft_features,                  "texture",       True),
-    "glrlm":        _Extra(_glrlm_features,                "texture",       True),
-    "rg_spread":    _Extra(_radius_of_gyration_and_spread, "morphology",    True),
+    "global_bg": _Extra(_global_bg_mean, "intensity", False),
+    "local_bg": _Extra(_local_bg_collar, "intensity", True),
+    "neighbours": _Extra(_neighbour_features, "neighbourhood", False),
+    "gradients": _Extra(_gradient_means, "texture", False),
+    "stat_texture": _Extra(_statistical_texture, "texture", False),
+    "lbp": _Extra(_lbp_features, "texture", True),
+    "fft": _Extra(_fft_features, "texture", True),
+    "glrlm": _Extra(_glrlm_features, "texture", True),
+    "rg_spread": _Extra(_radius_of_gyration_and_spread, "morphology", True),
 }
 
 

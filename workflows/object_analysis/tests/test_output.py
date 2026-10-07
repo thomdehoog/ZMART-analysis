@@ -9,8 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
 import detect_objects  # noqa: E402
 from detect_objects import analysis_dir, file_sha256, short_name  # noqa: E402
 
-PLANE =("overview_a1b2c3_K00_M000001_G000001_P000000_V00"
-         "_T000000_C00_Z00000.ome.tiff")
+PLANE = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000_C00_Z00000.ome.tiff"
 FRAME = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000"
 
 

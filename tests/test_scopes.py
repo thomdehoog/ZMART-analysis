@@ -72,6 +72,7 @@ def steps_dir(tmp_path_factory):
 @pytest.fixture
 def recipe(steps_dir):
     """recipe("compartment", "carrier") -> tile, then one unit step per scope."""
+
     def build(*scopes, then_double=False, levels=None):
         lines = [f'metadata:\n  functions_dir: "{steps_dir.as_posix()}"']
         if levels:
@@ -84,6 +85,7 @@ def recipe(steps_dir):
         path = steps_dir / f"recipe_{'_'.join(scopes)}_{then_double}_{bool(levels)}.yaml"
         path.write_text("\n".join(lines) + "\n")
         return str(path)
+
     return build
 
 
@@ -141,9 +143,12 @@ def test_three_levels_each_add_up_their_own_units(recipe):
                     if group == 2 and compartment == 2:
                         closes.append("carrier")
                     value = 1000 * carrier + 100 * compartment + 10 * group
-                    submit_tiles(e, [value, value + 1],
-                                 {"carrier": carrier, "compartment": compartment, "group": group},
-                                 complete=closes)
+                    submit_tiles(
+                        e,
+                        [value, value + 1],
+                        {"carrier": carrier, "compartment": compartment, "group": group},
+                        complete=closes,
+                    )
         results = scoped(e, 8 + 4 + 2)
 
     groups = by_unit(results, "group")
@@ -155,7 +160,9 @@ def test_three_levels_each_add_up_their_own_units(recipe):
     assert compartments[(("carrier", 1), ("compartment", 2))]["total"] == 1210 + 1211 + 1220 + 1221
     assert compartments[(("carrier", 1), ("compartment", 2))]["n_inputs"] == 2
     for c in (1, 2):
-        every_tile = [1000 * c + 100 * m + 10 * g + d for m in (1, 2) for g in (1, 2) for d in (0, 1)]
+        every_tile = [
+            1000 * c + 100 * m + 10 * g + d for m in (1, 2) for g in (1, 2) for d in (0, 1)
+        ]
         assert carriers[(("carrier", c),)]["total"] == sum(every_tile)
     assert carriers[(("carrier", 2),)]["n_inputs"] == 2
 
@@ -167,10 +174,18 @@ def test_two_carriers_interleaved_keep_their_compartments_apart(recipe):
         for _ in range(3):
             e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1})
             e.submit("p", {"value": 100}, scope={"carrier": 2, "compartment": 1})
-        e.submit("p", {"value": 0}, scope={"carrier": 2, "compartment": 1},
-                 complete=["compartment", "carrier"])
-        e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 1},
-                 complete=["compartment", "carrier"])
+        e.submit(
+            "p",
+            {"value": 0},
+            scope={"carrier": 2, "compartment": 1},
+            complete=["compartment", "carrier"],
+        )
+        e.submit(
+            "p",
+            {"value": 0},
+            scope={"carrier": 1, "compartment": 1},
+            complete=["compartment", "carrier"],
+        )
         results = scoped(e, 4)
 
     carriers = by_unit(results, "carrier")
@@ -183,8 +198,12 @@ def test_a_wider_level_closed_by_a_later_submit_waits_for_the_narrower(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
         for compartment in (1, 2, 3):
-            submit_tiles(e, [compartment] * 4, {"carrier": 1, "compartment": compartment},
-                         complete="compartment")
+            submit_tiles(
+                e,
+                [compartment] * 4,
+                {"carrier": 1, "compartment": compartment},
+                complete="compartment",
+            )
         e.submit("p", {"value": 0}, scope={"carrier": 1}, complete="carrier")
         results = scoped(e, 4)
 
@@ -196,9 +215,15 @@ def test_a_wider_level_closed_by_a_later_submit_waits_for_the_narrower(recipe):
 def test_all_after_carriers_collects_every_carrier(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier", "all"))
-        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"])
-        submit_tiles(e, [10, 20], {"carrier": 2, "compartment": 1},
-                     complete=["compartment", "carrier", "all"])
+        submit_tiles(
+            e, [1, 2], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
+        )
+        submit_tiles(
+            e,
+            [10, 20],
+            {"carrier": 2, "compartment": 1},
+            complete=["compartment", "carrier", "all"],
+        )
         results = scoped(e, 5)
 
     everything = [r for r in results if r.get("level") == "all"]
@@ -224,26 +249,37 @@ def test_a_compartment_closed_without_its_carrier_collects_it_on_every_carrier(r
 # -- Scopes per step ---------------------------------------------------
 
 
-@pytest.mark.parametrize("summary_level, comparison_level, expected_summaries", [
-    ("compartment", "carrier", 2),
-    ("group", "compartment", 4),
-    ("group", "carrier", 4),
-])
-def test_the_same_tiles_summarised_at_another_level(recipe, summary_level, comparison_level,
-                                                    expected_summaries):
+@pytest.mark.parametrize(
+    "summary_level, comparison_level, expected_summaries",
+    [
+        ("compartment", "carrier", 2),
+        ("group", "compartment", 4),
+        ("group", "carrier", 4),
+    ],
+)
+def test_the_same_tiles_summarised_at_another_level(
+    recipe, summary_level, comparison_level, expected_summaries
+):
     """Moving a step to another scope changes only how the tiles are grouped."""
     with Engine() as e:
         e.register("p", recipe(summary_level, comparison_level))
         for compartment in (1, 2):
             for group in (1, 2):
-                closes = [level for level, closed in [
-                    ("group", True),
-                    ("compartment", group == 2),
-                    ("carrier", group == 2 and compartment == 2),
-                ] if level in (summary_level, comparison_level) and closed]
-                submit_tiles(e, [compartment * 10 + group] * 2,
-                             {"carrier": 1, "compartment": compartment, "group": group},
-                             complete=closes)
+                closes = [
+                    level
+                    for level, closed in [
+                        ("group", True),
+                        ("compartment", group == 2),
+                        ("carrier", group == 2 and compartment == 2),
+                    ]
+                    if level in (summary_level, comparison_level) and closed
+                ]
+                submit_tiles(
+                    e,
+                    [compartment * 10 + group] * 2,
+                    {"carrier": 1, "compartment": compartment, "group": group},
+                    complete=closes,
+                )
         results = scoped(e, expected_summaries + (2 if comparison_level == "compartment" else 1))
 
     summaries = by_unit(results, summary_level)
@@ -275,10 +311,17 @@ def interleaved_groups(e, complete):
     """Group 1 of compartments 1 and 2, tiles mixed, then both closed."""
     for value in (1, 100):
         for _ in range(2):
-            e.submit("p", {"value": value},
-                     scope={"carrier": 1, "compartment": 1 if value == 1 else 2, "group": 1})
-    e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 1, "group": 1}, complete=complete)
-    e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 2, "group": 1}, complete=complete)
+            e.submit(
+                "p",
+                {"value": value},
+                scope={"carrier": 1, "compartment": 1 if value == 1 else 2, "group": 1},
+            )
+    e.submit(
+        "p", {"value": 0}, scope={"carrier": 1, "compartment": 1, "group": 1}, complete=complete
+    )
+    e.submit(
+        "p", {"value": 0}, scope={"carrier": 1, "compartment": 2, "group": 1}, complete=complete
+    )
 
 
 def test_a_recipe_that_skips_a_level_keeps_units_apart_when_it_declares_its_levels(recipe):
@@ -306,8 +349,9 @@ def test_without_declared_levels_a_skipped_level_is_not_part_of_the_unit(recipe)
 def test_the_unit_is_widest_first_and_empty_for_all(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "all", levels=SAMPLE))
-        submit_tiles(e, [1], {"carrier": 2, "compartment": 3, "group": 4},
-                     complete=["compartment", "all"])
+        submit_tiles(
+            e, [1], {"carrier": 2, "compartment": 3, "group": 4}, complete=["compartment", "all"]
+        )
         results = scoped(e, 2)
 
     units = {r["level"]: r["engine_unit"] for r in results if r["_phase"] > 0}
@@ -329,7 +373,7 @@ def test_a_carrier_reports_a_compartment_not_closed_and_keeps_its_tiles(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
-        submit_tiles(e, [10, 20], {"carrier": 1, "compartment": 2})      # not closed
+        submit_tiles(e, [10, 20], {"carrier": 1, "compartment": 2})  # not closed
         submit_tiles(e, [3], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"])
         results = scoped(e, 3)
         held = e.status("p")["held"]
@@ -341,8 +385,8 @@ def test_a_carrier_reports_a_compartment_not_closed_and_keeps_its_tiles(recipe):
         assert e.status("p")["held"] == {"results": 1, "units": [{"carrier": 1}]}
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    assert carrier["n_inputs"] == 2                 # compartment 1, closed twice
-    assert carrier["n_failures"] == 2               # compartment 2's two tiles
+    assert carrier["n_inputs"] == 2  # compartment 1, closed twice
+    assert carrier["n_failures"] == 2  # compartment 2's two tiles
 
     late = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 2))]
     assert late["total"] == 60
@@ -414,21 +458,26 @@ def test_a_unit_closed_again_runs_again_on_its_new_tiles(recipe):
     assert totals == [(1, 0), (1, 3), (2, 5)]
 
 
-def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(recipe, steps_dir, tmp_path):
+def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(
+    recipe, steps_dir, tmp_path
+):
     """Compartment 2's close is sent after the carrier's, while the carrier
     is still waiting on a slow tile. The carrier must not wait for a signal
     queued behind it, or one engine thread is enough to hang the engine."""
     gate = tmp_path / "gate"
-    (steps_dir / "slow_tile.py").write_text(textwrap.dedent(f"""
+    (steps_dir / "slow_tile.py").write_text(
+        textwrap.dedent(f"""
         import os, time
         def run(pd, state, **p):
             while not os.path.exists({str(gate)!r}):
                 time.sleep(0.02)
             pd["value"] = pd["input"]["value"]
             return pd
-    """))
+    """)
+    )
     yaml = steps_dir / "recipe_slow.yaml"
-    yaml.write_text(textwrap.dedent(f"""
+    yaml.write_text(
+        textwrap.dedent(f"""
         metadata:
           functions_dir: "{steps_dir.as_posix()}"
         wf:
@@ -437,7 +486,8 @@ def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(re
               scope: compartment
           - unit:
               scope: carrier
-    """))
+    """)
+    )
     with Engine(max_concurrent=1) as e:
         e.register("p", str(yaml))
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
@@ -455,14 +505,17 @@ def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(re
 def test_a_shutdown_now_releases_a_waiting_carrier(recipe, steps_dir, tmp_path):
     """The carrier waits on a tile that never finishes; shutdown(wait=False)
     cancels the queued compartment close and must still return."""
-    (steps_dir / "stuck_tile.py").write_text(textwrap.dedent("""
+    (steps_dir / "stuck_tile.py").write_text(
+        textwrap.dedent("""
         import time
         def run(pd, state, **p):
             time.sleep(60)
             return pd
-    """))
+    """)
+    )
     yaml = steps_dir / "recipe_stuck.yaml"
-    yaml.write_text(textwrap.dedent(f"""
+    yaml.write_text(
+        textwrap.dedent(f"""
         metadata:
           functions_dir: "{steps_dir.as_posix()}"
         wf:
@@ -471,12 +524,17 @@ def test_a_shutdown_now_releases_a_waiting_carrier(recipe, steps_dir, tmp_path):
               scope: compartment
           - unit:
               scope: carrier
-    """))
+    """)
+    )
     e = Engine(max_concurrent=1)
     e.register("p", str(yaml))
     e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1}, complete="compartment")
-    e.submit("p", {"value": 2}, scope={"carrier": 1, "compartment": 2},
-             complete=["compartment", "carrier"])
+    e.submit(
+        "p",
+        {"value": 2},
+        scope={"carrier": 1, "compartment": 2},
+        complete=["compartment", "carrier"],
+    )
     time.sleep(0.5)
     t0 = time.monotonic()
     e.shutdown(wait=False)
@@ -490,8 +548,12 @@ def test_many_units_with_few_threads_do_not_deadlock(recipe):
         for carrier in range(1, 7):
             for compartment in (1, 2):
                 closes = ["compartment", "carrier"] if compartment == 2 else "compartment"
-                submit_tiles(e, [carrier] * 2, {"carrier": carrier, "compartment": compartment},
-                             complete=closes)
+                submit_tiles(
+                    e,
+                    [carrier] * 2,
+                    {"carrier": carrier, "compartment": compartment},
+                    complete=closes,
+                )
         results = scoped(e, 12 + 6, timeout=60)
 
     carriers = by_unit(results, "carrier")
@@ -513,7 +575,7 @@ def test_a_failed_tile_reaches_its_compartment_and_no_other(recipe):
     (compartment,) = [r for r in results if r["_phase"] == 1]
     assert compartment["n_inputs"] == 2
     assert compartment["n_failures"] == 1
-    assert len(status["failures"]) == 1      # compartment 2's, still unclaimed
+    assert len(status["failures"]) == 1  # compartment 2's, still unclaimed
 
 
 def test_a_compartment_of_failed_tiles_still_runs(recipe):
@@ -532,22 +594,24 @@ def test_a_failed_compartment_reaches_its_carrier(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
-        submit_tiles(e, [666], {"carrier": 1, "compartment": 2},
-                     complete=["compartment", "carrier"])
+        submit_tiles(
+            e, [666], {"carrier": 1, "compartment": 2}, complete=["compartment", "carrier"]
+        )
         results = scoped(e, 2)
         status = e.status("p")
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
     assert carrier["n_inputs"] == 1
     assert carrier["n_failures"] == 1
-    assert status["failures"] == []           # claimed by the carrier
+    assert status["failures"] == []  # claimed by the carrier
 
 
 def test_a_carrier_of_failed_compartments_still_runs(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        submit_tiles(e, [666], {"carrier": 1, "compartment": 1},
-                     complete=["compartment", "carrier"])
+        submit_tiles(
+            e, [666], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
+        )
         results = scoped(e, 1)
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
@@ -558,7 +622,7 @@ def test_a_carrier_of_failed_compartments_still_runs(recipe):
 def test_a_failure_names_its_step_phase_and_tile(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment"))
-        e.submit("p", {"fail": True}, scope={"compartment": 1})        # idx 0
+        e.submit("p", {"fail": True}, scope={"compartment": 1})  # idx 0
         e.submit("p", {"value": 666}, scope={"compartment": 2}, complete="compartment")  # idx 1
         status = status_when(e, lambda s: len(s["failures"]) == 2)
 
@@ -592,7 +656,7 @@ def test_all_gets_only_the_failures_of_the_phase_before_it(recipe):
 
     (everything,) = [r for r in results if r.get("level") == "all"]
     assert everything["n_inputs"] == 1
-    assert everything["n_failures"] == 1     # compartment 2's step, not the tile
+    assert everything["n_failures"] == 1  # compartment 2's step, not the tile
 
 
 # -- Provenance --------------------------------------------------------
@@ -601,8 +665,9 @@ def test_all_gets_only_the_failures_of_the_phase_before_it(recipe):
 def test_every_level_records_its_own_step_and_scope(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1},
-                     complete=["compartment", "carrier"])
+        submit_tiles(
+            e, [1, 2], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
+        )
         results = scoped(e, 2)
 
     for r in results:
@@ -623,8 +688,12 @@ def test_a_carrier_can_be_traced_back_to_its_tiles(recipe):
     with Engine() as e:
         e.register("p", recipe("group", "compartment", "carrier", then_double=True))
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1, "group": 1}, complete="group")
-        submit_tiles(e, [3], {"carrier": 1, "compartment": 1, "group": 2},
-                     complete=["group", "compartment", "carrier"])
+        submit_tiles(
+            e,
+            [3],
+            {"carrier": 1, "compartment": 1, "group": 2},
+            complete=["group", "compartment", "carrier"],
+        )
         results = scoped(e, 4)
 
     group = by_unit(results, "group")[(("carrier", 1), ("compartment", 1), ("group", 1))]
@@ -635,8 +704,8 @@ def test_a_carrier_can_be_traced_back_to_its_tiles(recipe):
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
     assert carrier["lineage"]["submissions"] == [0, 1, 2]
     assert carrier["lineage"]["failed"] == []
-    assert set(carrier["lineage"]["provenance"]) == {"tile", "unit"}   # below the carrier
-    assert len(carrier["lineage"]["provenance"]["unit"]) == 1     # one environment
+    assert set(carrier["lineage"]["provenance"]) == {"tile", "unit"}  # below the carrier
+    assert len(carrier["lineage"]["provenance"]["unit"]) == 1  # one environment
     assert set(carrier["provenance"]) == {"unit", "double"}
 
 
@@ -649,7 +718,9 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
         results = scoped(e, 1)
 
     (compartment,) = [r for r in results if r["_phase"] == 1]
-    assert compartment["metadata"]["unit"] == {"compartment": 1}   # no levels: carrier is not a phase
+    assert compartment["metadata"]["unit"] == {
+        "compartment": 1
+    }  # no levels: carrier is not a phase
     assert compartment["metadata"]["scope_level"] == "compartment"
     assert compartment["doubled"] == 6
 
@@ -657,13 +728,19 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
 def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})           # idx 0
+        e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})  # idx 0
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")  # idx 1
-        submit_tiles(e, [666], {"carrier": 1, "compartment": 2},                        # idx 2
-                     complete=["compartment", "carrier"])
+        submit_tiles(
+            e,
+            [666],
+            {"carrier": 1, "compartment": 2},  # idx 2
+            complete=["compartment", "carrier"],
+        )
         results = scoped(e, 2)
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    failed = sorted((f["step"], f["phase"], f["submission_idx"]) for f in carrier["lineage"]["failed"])
+    failed = sorted(
+        (f["step"], f["phase"], f["submission_idx"]) for f in carrier["lineage"]["failed"]
+    )
     assert failed == [("tile", 0, 0), ("unit", 1, 2)]
     assert carrier["lineage"]["submissions"] == [1]

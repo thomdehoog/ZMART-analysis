@@ -54,8 +54,10 @@ def _make_ome_tiff(path, array, tile=(32, 32), positions=True):
     n_planes = array.shape[0] * array.shape[1] * array.shape[2]
     metadata = {
         "axes": "TCZYX",
-        "PhysicalSizeX": PIXEL_SIZE, "PhysicalSizeXUnit": "\u00b5m",
-        "PhysicalSizeY": PIXEL_SIZE, "PhysicalSizeYUnit": "\u00b5m",
+        "PhysicalSizeX": PIXEL_SIZE,
+        "PhysicalSizeXUnit": "\u00b5m",
+        "PhysicalSizeY": PIXEL_SIZE,
+        "PhysicalSizeYUnit": "\u00b5m",
         "PhysicalSizeZ": Z_SPACING,
         "Channel": {"Name": ["DAPI", "GFP"]},
     }
@@ -67,8 +69,7 @@ def _make_ome_tiff(path, array, tile=(32, 32), positions=True):
             "PositionXUnit": ["\u00b5m"] * n_planes,
         }
 
-    tifffile.imwrite(path, array, photometric="minisblack", tile=tile,
-                     metadata=metadata)
+    tifffile.imwrite(path, array, photometric="minisblack", tile=tile, metadata=metadata)
 
 
 class OmeZarrTestCase(unittest.TestCase):
@@ -91,8 +92,7 @@ class OmeZarrTestCase(unittest.TestCase):
         }
         _make_position(cls.stores["0.4"], "0.4", cls.array)
         # NGFF 0.5 is Zarr v3, so it can also carry shards.
-        _make_position(cls.stores["0.5"], "0.5", cls.array,
-                       shards=(1, 1, 1, 64, 64))
+        _make_position(cls.stores["0.5"], "0.5", cls.array, shards=(1, 1, 1, 64, 64))
 
         cls.tiff = cls.tmpdir / "position.ome.tif"
         _make_ome_tiff(cls.tiff, cls.array)
@@ -185,12 +185,11 @@ class TestPlaneSelection(OmeZarrTestCase):
         import ngio
 
         for version, store in self.stores.items():
-            for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"},
-                           {"level": 9}):
+            for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"}, {"level": 9}):
                 with self.subTest(ngff=version, **kwargs):
-                    with self.assertRaises((ngio.NgioValueError,
-                                            ngio.NgioValidationError,
-                                            ValueError)):
+                    with self.assertRaises(
+                        (ngio.NgioValueError, ngio.NgioValidationError, ValueError)
+                    ):
                         load_plane(store, **kwargs)
 
     def test_unknown_z_selection_names_the_options(self):
@@ -288,7 +287,8 @@ class TestLazyReading(OmeZarrTestCase):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z=2)
                 self.assertGreater(reads, 0, "the read counter matched nothing")
                 self.assertLessEqual(
-                    reads, 4,
+                    reads,
+                    4,
                     f"read {reads} chunks for a single plane, expected <= 4",
                 )
 
@@ -299,11 +299,11 @@ class TestLazyReading(OmeZarrTestCase):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z="max")
                 self.assertGreater(reads, 0, "the read counter matched nothing")
                 self.assertLessEqual(
-                    reads, 20,
+                    reads,
+                    20,
                     f"read {reads} chunks for one z-stack of 5 planes, "
                     f"expected <= 20 of the 80 in the array",
                 )
-
 
     def test_reads_far_less_than_the_whole_array(self):
         import ngio
@@ -329,7 +329,8 @@ class TestLazyReading(OmeZarrTestCase):
                     container.get_image().get_as_numpy()
 
                 self.assertLess(
-                    plane_reads, len(everything),
+                    plane_reads,
+                    len(everything),
                     f"one plane read {plane_reads} objects, the whole array "
                     f"reads {len(everything)}",
                 )
@@ -344,8 +345,13 @@ class TestAxisVariants(OmeZarrTestCase):
         store = self.tmpdir / name
         array = np.random.default_rng(1).integers(0, 4096, shape, dtype=np.uint16)
         ngio.create_ome_zarr_from_array(
-            store, array, pixelsize=PIXEL_SIZE, axes_names=axes,
-            ngff_version="0.5", levels=1, overwrite=True,
+            store,
+            array,
+            pixelsize=PIXEL_SIZE,
+            axes_names=axes,
+            ngff_version="0.5",
+            levels=1,
+            overwrite=True,
         )
         return store, array
 
@@ -423,10 +429,8 @@ class TestOtherInputs(unittest.TestCase):
         import tifffile
 
         path = self.tmpdir / "stack.tif"
-        stack = np.random.default_rng(3).integers(0, 255, (3, 8, 8),
-                                                 dtype=np.uint8)
-        tifffile.imwrite(path, stack, photometric="minisblack",
-                         metadata={"axes": "ZYX"})
+        stack = np.random.default_rng(3).integers(0, 255, (3, 8, 8), dtype=np.uint8)
+        tifffile.imwrite(path, stack, photometric="minisblack", metadata={"axes": "ZYX"})
 
         plane, meta = load_plane(path, z=2)
         np.testing.assert_array_equal(plane, stack[2])
@@ -468,7 +472,8 @@ class TestPlateInput(OmeZarrTestCase):
 
         store = self.tmpdir / "plate.zarr"
         ngio.create_empty_plate(
-            store, name="plate",
+            store,
+            name="plate",
             images=[ngio.ImageInWellPath(row="B", column="3", path="0")],
             ngff_version="0.5",
         )
@@ -559,8 +564,7 @@ class TestOmeTiff(OmeZarrTestCase):
         self.assertAlmostEqual(physical["x"], 20.0 * PIXEL_SIZE + ORIGIN_YX[1])
 
     def test_out_of_range_selection_raises(self):
-        for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"},
-                       {"level": 9}):
+        for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"}, {"level": 9}):
             with self.subTest(**kwargs):
                 with self.assertRaises(ValueError):
                     load_plane(self.tiff, **kwargs)
@@ -585,11 +589,19 @@ class TestOmeTiff(OmeZarrTestCase):
         path = self.tmpdir / "pyramid_meta.ome.tif"
         full = self.array[0, 0, 0]
         with tifffile.TiffWriter(path) as writer:
-            writer.write(full, subifds=1, tile=(32, 32), photometric="minisblack",
-                         metadata={"axes": "YX", "PhysicalSizeX": PIXEL_SIZE,
-                                   "PhysicalSizeXUnit": "\u00b5m",
-                                   "PhysicalSizeY": PIXEL_SIZE,
-                                   "PhysicalSizeYUnit": "\u00b5m"})
+            writer.write(
+                full,
+                subifds=1,
+                tile=(32, 32),
+                photometric="minisblack",
+                metadata={
+                    "axes": "YX",
+                    "PhysicalSizeX": PIXEL_SIZE,
+                    "PhysicalSizeXUnit": "\u00b5m",
+                    "PhysicalSizeY": PIXEL_SIZE,
+                    "PhysicalSizeYUnit": "\u00b5m",
+                },
+            )
             writer.write(full[::2, ::2], subfiletype=1, tile=(32, 32))
 
         _, meta = load_plane(path, level=1)
@@ -611,8 +623,7 @@ class TestOmeTiff(OmeZarrTestCase):
         import tifffile
 
         path = self.tmpdir / "rgb.tif"
-        tifffile.imwrite(path, np.zeros((16, 16, 3), dtype=np.uint8),
-                         photometric="rgb")
+        tifffile.imwrite(path, np.zeros((16, 16, 3), dtype=np.uint8), photometric="rgb")
 
         with self.assertRaises(ValueError) as caught:
             load_plane(path)
@@ -665,57 +676,74 @@ class TestFormatParity(OmeZarrTestCase):
     """
 
     def _sources(self):
-        return {"ngff 0.4": self.stores["0.4"],
-                "ngff 0.5": self.stores["0.5"],
-                "ome-tiff": self.tiff}
+        return {
+            "ngff 0.4": self.stores["0.4"],
+            "ngff 0.5": self.stores["0.5"],
+            "ome-tiff": self.tiff,
+        }
 
     def test_every_selection_agrees(self):
         selections = (
-            {}, {"z": 0}, {"z": 4}, {"t": 1}, {"c": 1}, {"c": "GFP"},
-            {"t": 1, "c": "GFP", "z": 3}, {"z": "max"}, {"z": "mean"},
+            {},
+            {"z": 0},
+            {"z": 4},
+            {"t": 1},
+            {"c": 1},
+            {"c": "GFP"},
+            {"t": 1, "c": "GFP", "z": 3},
+            {"z": "max"},
+            {"z": "mean"},
             {"t": 1, "z": "max"},
         )
 
         for selection in selections:
-            planes = {name: load_plane(source, **selection)[0]
-                      for name, source in self._sources().items()}
+            planes = {
+                name: load_plane(source, **selection)[0] for name, source in self._sources().items()
+            }
             reference_name, reference = next(iter(planes.items()))
 
             for name, plane in planes.items():
                 with self.subTest(selection=selection, format=name):
                     np.testing.assert_array_equal(
-                        plane, reference,
-                        f"{name} disagrees with {reference_name} "
-                        f"for {selection}",
+                        plane,
+                        reference,
+                        f"{name} disagrees with {reference_name} for {selection}",
                     )
 
     def test_metadata_agrees(self):
-        shared = ("axes", "shape", "dtype", "index", "projection", "channel",
-                  "channel_name", "space_unit")
+        shared = (
+            "axes",
+            "shape",
+            "dtype",
+            "index",
+            "projection",
+            "channel",
+            "channel_name",
+            "space_unit",
+        )
 
-        results = {name: load_plane(source, t=1, c="GFP", z=3)[1]
-                   for name, source in self._sources().items()}
+        results = {
+            name: load_plane(source, t=1, c="GFP", z=3)[1]
+            for name, source in self._sources().items()
+        }
         reference = results["ngff 0.5"]
 
         for name, meta in results.items():
             with self.subTest(format=name):
                 for key in shared:
                     self.assertEqual(meta[key], reference[key], f"{key} differs")
-                self.assertAlmostEqual(meta["pixel_size"]["x"],
-                                       reference["pixel_size"]["x"])
-                self.assertAlmostEqual(meta["origin"]["y"],
-                                       reference["origin"]["y"])
+                self.assertAlmostEqual(meta["pixel_size"]["x"], reference["pixel_size"]["x"])
+                self.assertAlmostEqual(meta["origin"]["y"], reference["origin"]["y"])
 
     def test_physical_coordinates_agree(self):
         for name, source in self._sources().items():
             with self.subTest(format=name):
                 _, meta = load_plane(source)
                 physical = to_physical(12.0, 34.0, meta)
-                self.assertAlmostEqual(physical["y"],
-                                       12.0 * PIXEL_SIZE + ORIGIN_YX[0])
-                self.assertAlmostEqual(physical["x"],
-                                       34.0 * PIXEL_SIZE + ORIGIN_YX[1])
+                self.assertAlmostEqual(physical["y"], 12.0 * PIXEL_SIZE + ORIGIN_YX[0])
+                self.assertAlmostEqual(physical["x"], 34.0 * PIXEL_SIZE + ORIGIN_YX[1])
                 self.assertEqual(physical["unit"], "micrometer")
+
 
 class TestTiffLazyReading(OmeZarrTestCase):
     """TIFF reads decode tiles, not whole files."""
@@ -729,8 +757,7 @@ class TestTiffLazyReading(OmeZarrTestCase):
         reads = []
 
         async def counting_get(self, key, *args, **kwargs):
-            if not str(key).endswith((".zarray", ".zgroup", ".zattrs",
-                                      "zarr.json")):
+            if not str(key).endswith((".zarray", ".zgroup", ".zattrs", "zarr.json")):
                 reads.append(key)
             return await original(self, key, *args, **kwargs)
 
@@ -758,8 +785,7 @@ class TestUnitReconciliation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_units_"))
-        cls.array = np.random.default_rng(5).integers(0, 255, (4, 4),
-                                                     dtype=np.uint8)
+        cls.array = np.random.default_rng(5).integers(0, 255, (4, 4), dtype=np.uint8)
 
     @classmethod
     def tearDownClass(cls):
@@ -770,26 +796,41 @@ class TestUnitReconciliation(unittest.TestCase):
 
         path = self.tmpdir / name
         tifffile.imwrite(
-            path, self.array, photometric="minisblack",
+            path,
+            self.array,
+            photometric="minisblack",
             metadata={
                 "axes": "YX",
-                "PhysicalSizeX": pixel_size, "PhysicalSizeXUnit": pixel_unit,
-                "PhysicalSizeY": pixel_size, "PhysicalSizeYUnit": pixel_unit,
-                "Plane": {"PositionX": [position], "PositionY": [position],
-                          "PositionXUnit": [position_unit],
-                          "PositionYUnit": [position_unit]},
-            })
+                "PhysicalSizeX": pixel_size,
+                "PhysicalSizeXUnit": pixel_unit,
+                "PhysicalSizeY": pixel_size,
+                "PhysicalSizeYUnit": pixel_unit,
+                "Plane": {
+                    "PositionX": [position],
+                    "PositionY": [position],
+                    "PositionXUnit": [position_unit],
+                    "PositionYUnit": [position_unit],
+                },
+            },
+        )
         return path
 
     def test_no_recorded_position_means_the_image_corner(self):
         import tifffile
 
         path = self.tmpdir / "no_position.ome.tif"
-        tifffile.imwrite(path, self.array, photometric="minisblack",
-                         metadata={"axes": "YX", "PhysicalSizeX": 0.5,
-                                   "PhysicalSizeXUnit": "\u00b5m",
-                                   "PhysicalSizeY": 0.5,
-                                   "PhysicalSizeYUnit": "\u00b5m"})
+        tifffile.imwrite(
+            path,
+            self.array,
+            photometric="minisblack",
+            metadata={
+                "axes": "YX",
+                "PhysicalSizeX": 0.5,
+                "PhysicalSizeXUnit": "\u00b5m",
+                "PhysicalSizeY": 0.5,
+                "PhysicalSizeYUnit": "\u00b5m",
+            },
+        )
 
         _, meta = load_plane(path)
         self.assertEqual(meta["origin"], {})
@@ -817,8 +858,7 @@ class TestUnitReconciliation(unittest.TestCase):
 
     def test_unconvertible_position_unit_is_dropped(self):
         # Better no coordinate than a wrong one sent to a microscope.
-        path = self._write("reference.ome.tif", "\u00b5m", 0.5,
-                           "reference frame", 5.0)
+        path = self._write("reference.ome.tif", "\u00b5m", 0.5, "reference frame", 5.0)
 
         _, meta = load_plane(path)
         self.assertEqual(meta["pixel_size"]["x"], 0.5)
@@ -851,8 +891,7 @@ class TestForeignWriters(unittest.TestCase):
             raise unittest.SkipTest("zarr is not installed")
 
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_foreign_"))
-        cls.array = np.random.default_rng(4).integers(
-            0, 4096, (1, 2, 3, 32, 32), dtype=np.uint16)
+        cls.array = np.random.default_rng(4).integers(0, 4096, (1, 2, 3, 32, 32), dtype=np.uint16)
 
     @classmethod
     def tearDownClass(cls):
@@ -861,11 +900,13 @@ class TestForeignWriters(unittest.TestCase):
     @classmethod
     def _datasets(cls, paths_and_scales):
         return [
-            {"path": path,
-             "coordinateTransformations": [
-                 {"type": "scale", "scale": [1, 1, 1, scale, scale]},
-                 {"type": "translation",
-                  "translation": [0, 0, 0, ORIGIN_YX[0], ORIGIN_YX[1]]}]}
+            {
+                "path": path,
+                "coordinateTransformations": [
+                    {"type": "scale", "scale": [1, 1, 1, scale, scale]},
+                    {"type": "translation", "translation": [0, 0, 0, ORIGIN_YX[0], ORIGIN_YX[1]]},
+                ],
+            }
             for path, scale in paths_and_scales
         ]
 
@@ -876,17 +917,25 @@ class TestForeignWriters(unittest.TestCase):
         store = self.tmpdir / name
         group = zarr.create_group(store=str(store), zarr_format=2)
 
-        for path, data in ((dataset_names[0], self.array),
-                           (dataset_names[1], self.array[:, :, :, ::2, ::2])):
-            array = group.create_array(name=path, shape=data.shape,
-                                       dtype=data.dtype, chunks=(1, 1, 1, 16, 16))
+        for path, data in (
+            (dataset_names[0], self.array),
+            (dataset_names[1], self.array[:, :, :, ::2, ::2]),
+        ):
+            array = group.create_array(
+                name=path, shape=data.shape, dtype=data.dtype, chunks=(1, 1, 1, 16, 16)
+            )
             array[:] = data
 
-        group.attrs["multiscales"] = [{
-            "version": "0.4", "name": "position", "axes": self.AXES,
-            "datasets": self._datasets(
-                ((dataset_names[0], PIXEL_SIZE), (dataset_names[1], PIXEL_SIZE * 2))),
-        }]
+        group.attrs["multiscales"] = [
+            {
+                "version": "0.4",
+                "name": "position",
+                "axes": self.AXES,
+                "datasets": self._datasets(
+                    ((dataset_names[0], PIXEL_SIZE), (dataset_names[1], PIXEL_SIZE * 2))
+                ),
+            }
+        ]
         return store
 
     def _write_v05(self, name):
@@ -895,17 +944,21 @@ class TestForeignWriters(unittest.TestCase):
 
         store = self.tmpdir / name
         group = zarr.create_group(store=str(store), zarr_format=3)
-        array = group.create_array(name="0", shape=self.array.shape,
-                                   dtype=self.array.dtype,
-                                   chunks=(1, 1, 1, 16, 16))
+        array = group.create_array(
+            name="0", shape=self.array.shape, dtype=self.array.dtype, chunks=(1, 1, 1, 16, 16)
+        )
         array[:] = self.array
 
         group.attrs["ome"] = {
             "version": "0.5",
-            "multiscales": [{
-                "version": "0.5", "name": "position", "axes": self.AXES,
-                "datasets": self._datasets((("0", PIXEL_SIZE),)),
-            }],
+            "multiscales": [
+                {
+                    "version": "0.5",
+                    "name": "position",
+                    "axes": self.AXES,
+                    "datasets": self._datasets((("0", PIXEL_SIZE),)),
+                }
+            ],
         }
         return store
 
@@ -965,14 +1018,18 @@ class TestForeignWriters(unittest.TestCase):
 
         for series in ("0", "1"):
             image = root.create_group(series)
-            array = image.create_array(name="0", shape=self.array.shape,
-                                       dtype=self.array.dtype,
-                                       chunks=(1, 1, 1, 16, 16))
+            array = image.create_array(
+                name="0", shape=self.array.shape, dtype=self.array.dtype, chunks=(1, 1, 1, 16, 16)
+            )
             array[:] = self.array
-            image.attrs["multiscales"] = [{
-                "version": "0.4", "name": series, "axes": self.AXES,
-                "datasets": self._datasets((("0", PIXEL_SIZE),)),
-            }]
+            image.attrs["multiscales"] = [
+                {
+                    "version": "0.4",
+                    "name": series,
+                    "axes": self.AXES,
+                    "datasets": self._datasets((("0", PIXEL_SIZE),)),
+                }
+            ]
 
         with self.assertRaises(ValueError) as caught:
             load_plane(store)

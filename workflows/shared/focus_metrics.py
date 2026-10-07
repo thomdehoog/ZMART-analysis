@@ -89,6 +89,7 @@ def intensity(plane: np.ndarray, percentile: float) -> float:
     threshold = np.percentile(plane, percentile)
     return float(np.mean(plane[plane >= threshold]))
 
+
 #: The metrics on offer, by the name the YAML uses. Adding one is adding an
 #: entry here; every entry is scored on every run.
 METRICS = {"brenner": brenner, "dct": dct_entropy, "vollath_f4": vollath_f4}
