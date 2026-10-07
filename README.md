@@ -10,7 +10,7 @@
 <td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
 <td valign="middle">
 
-The **ZMART Analysis** engine analyses images while the microscope is still acquiring them, so its results can decide what the experiment images next. It runs on its own, and an interface, an AI agent or any workflow can plug it in.
+The **ZMART Analysis** engine analyses images as the microscope acquires them, so the results can decide what to image next. An interface, an AI agent or any workflow can plug it in.
 
 It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 
