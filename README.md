@@ -5,38 +5,63 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![status](https://img.shields.io/badge/status-release%20candidate-orange)](#status)
 
-<img src="docs/zmart-analysis-icon.png" align="left" width="150" alt="ZMART Analysis">
+<table>
+<tr>
+<td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
+<td valign="middle">
 
-The **ZMART Analysis** engine analyses images while the microscope is still acquiring them, so its results can decide what the experiment images next.
-It runs on its own, and an interface, an AI agent or any workflow can plug it in.
-It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy
-at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
-<br clear="left"/>
+The **ZMART Analysis** engine analyses images while the microscope is still acquiring them, so its results can decide what the experiment images next. It runs on its own, and an interface, an AI agent or any workflow can plug it in.
+
+It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
+
+</td>
+</tr>
+</table>
 
 ## The Problem
 
-Smart microscopy needs image analysis that keeps up with the microscope and
-that others can trust and repeat. Four things usually get in the way:
+When building smart microscopy workflows, you are likely to run into the
+following four problems.
 
-1. **Reproducibility.** An analysis kept in someone's head, or in a notebook
-   that changed since, cannot be repeated or checked by anyone else.
-2. **Compatibility.** Image-analysis tools often need software versions that
-   conflict, so they cannot be installed and used together.
-3. **Real-time analysis.** Starting a program and loading a model for every
-   image is far too slow to keep up with a microscope.
-4. **Scope.** Some questions are about one tile, others about a whole
-   compartment or carrier, and each can only be answered once all of its
-   data is there.
+1. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
+   Each step needs the right environment with the right dependencies, and
+   often there is no single environment in which all steps can run.
+2. **Reproducibility.** Image analysis pipelines can be complex and are often
+   fitted to one use case. They chain many algorithms, each with their own
+   parameters. Making sure that these pipelines are reproducible, properly
+   documented and easy to share is a challenge on its own.
+3. **Time.** The analysis is time sensitive. The microscope waits for the
+   answer, so images must be analysed as soon as they come in and the
+   analysis must keep up with the acquisition.
+4. **Analysis over scopes.** Depending on the experiment, analysis needs to
+   be done over single images, a group of images, a compartment, a carrier,
+   or a whole experiment. However, the data does not come in all at once. A
+   step over a larger scope can only start once the right set of images is
+   in. Keeping track of all these analysis requirements calls for a higher
+   degree of orchestration.
 
 ## The Solution
 
-ZMART Analysis answers each of the four in turn.
+The ZMART Analysis pipeline engine addresses all four of them.
 
-### 1. Reproducibility
+### 1. Every step can be executed in its own environment
 
-An analysis is a YAML recipe: the steps, in order, with every parameter
-written out. The recipe is the record of what was done. Share the file, and
-a colleague runs exactly the same analysis.
+Each step says which conda environment it needs, at the top of the step
+file:
+
+```python
+METADATA = {"environment": "ZMART--object_analysis--cellpose"}
+```
+
+The pipeline engine runs each step in that environment and pieces the steps
+together into one pipeline. Steps that name no environment run in the one
+you started from. In this way, steps can share an environment or be
+separated to neutralise dependency conflicts.
+
+### 2. Pipelines are constructed in YAML files
+
+Which steps are pieced together, in which order, with which parameters, is
+defined in a YAML file:
 
 ```yaml
 focus:
@@ -46,60 +71,46 @@ focus:
       skip_ends: 2
 ```
 
-Every result also records, for each step, the software environment it ran
-in, the Python version, and the versions of the packages it used. The
-recipe says what was asked for, and the result says what actually ran.
+An analysis is always started from this file, so it is reproducible and easy
+to share and document. Every result also records, for each step, the
+environment it ran in, the Python version, and the versions of the packages
+it used. The file says what was asked for, and the result says what actually
+ran.
 
-### 2. Compatibility
+### 3. Environments stay active, and several can run at once
 
-Image-analysis tools often cannot be installed side by side. Cellpose needs
-one version of torch, another model needs another, and neither agrees with
-the plotting library. Here each step runs in its own conda environment, named
-at the top of the step file:
-
-```python
-METADATA = {"environment": "ZMART--object_analysis--cellpose"}
-```
-
-Steps that name no environment run in the one you started from. So you can
-keep everything in one environment, and split off only the step that
-conflicts. A tool someone brings to the facility becomes one more step,
-without breaking the others.
-
-### 3. Real-time analysis
-
-Starting a program and loading a deep-learning model onto the GPU can take
-many seconds. That is too slow to repeat for every tile. Instead, each
-environment gets a worker that starts once and stays running. The engine
-sends it tile after tile, and the model it loaded for the first tile is
-still there for the next:
+During a run, the analysis environments (workers) are started once and stay
+active, so each image is processed the moment it comes in. A model loaded
+for the first image is still there for the next:
 
 ```python
 def run(pipeline_data, state, **params):
-    if "model" not in state:          # only on the first tile
+    if "model" not in state:          # only on the first image
         state["model"] = load_the_model()
     ...
 ```
 
-The recipe also says how many copies of a step may run at the same time:
-one for a model on the GPU, many for work on the processor.
+For one step, several workers can be spawned to analyse images concurrently:
+one for a model on the GPU, many for work on the processor. A queue routes
+incoming work to the right worker and lets urgent jobs go first.
 
 ```yaml
   - detect_objects_fast:
       max_workers: 12
 ```
 
-### 4. Scope
+### 4. Steps declare a scope
 
-A sample is divided into four levels, narrowest first: a **tile**, a
-**group** of tiles, a **compartment** and a **carrier**. Each is a plain
+Each step says over which scope its analysis needs to run: a single image, a
+group, a compartment, a carrier, or the experiment. Each level is a plain
 number, so a compartment can be a well of a plate, a region of a slide or
-part of a cleared sample. A step with a `scope` waits until the acquisition
-says that unit is complete, then runs once on everything collected for it:
+part of a cleared sample. When all the data for a scope is in, the step
+starts. Steps within one pipeline can differ in scope, so per-image steps run
+as each image comes in while a per-carrier step waits for the whole carrier:
 
 ```yaml
 object_analysis:
-  - detect_objects:            # every tile, as soon as it lands
+  - detect_objects:            # every image, as soon as it lands
   - extract_classical_features:
   - build_object_table:
   - summarise_population:      # each compartment, once it is complete
@@ -109,12 +120,12 @@ object_analysis:
 ```
 
 ```python
-engine.submit("scoped", tile, scope={"carrier": 1, "compartment": 3})
-engine.submit("scoped", last_tile, scope={"carrier": 1, "compartment": 3},
+engine.submit("scoped", image, scope={"carrier": 1, "compartment": 3})
+engine.submit("scoped", last_image, scope={"carrier": 1, "compartment": 3},
               complete="compartment")
 ```
 
-The engine never guesses when a unit is done. The acquisition knows, and
+The engine never guesses when a scope is complete. The acquisition knows, and
 says so.
 
 ## Try it yourself
