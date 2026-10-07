@@ -287,6 +287,12 @@ class Engine:
             if name not in self._pipelines:
                 raise KeyError(f"Pipeline '{name}' is not registered")
             state = self._pipelines[name]
+            complete_levels = (
+                [] if not complete
+                else [complete] if isinstance(complete, str)
+                else list(complete)
+            )
+            state.check_complete(complete_levels, scope)
             submission_idx = state.next_submission_idx()
 
             # Submit Phase 0 to thread pool
@@ -297,10 +303,7 @@ class Engine:
             state.add_job_entry(future, scope, submission_idx)
 
             # Handle scope completion signals
-            if complete:
-                complete_levels = (
-                    [complete] if isinstance(complete, str) else list(complete)
-                )
+            if complete_levels:
                 # Each level is marked as running here, synchronously, so a
                 # later signal for a wider scope (a carrier) cannot overtake
                 # a narrower one (a compartment) submitted before it.

@@ -213,6 +213,8 @@ class PipelineState:
 
         self._lock = threading.Lock()
         self._submission_counter = 0
+        # Every scope key a submit has used, for check_complete.
+        self._seen_scope_keys = set()
 
         # Job tracking: [(future, scope_dict, submission_idx)]
         self._job_entries = []
@@ -241,6 +243,27 @@ class PipelineState:
         self._n_running = 0
         self._n_completed = 0
         self._failures = []
+
+    def check_complete(self, levels, scope):
+        """Refuse a close signal that would close the wrong thing.
+
+        A level that is a scope in this pipeline, left out of a scope that
+        earlier submits did name, would match every unit of that level.
+        Raises ScopeError. Then remembers this submit's keys. Under the
+        caller's lock discipline: called from Engine.submit under its lock,
+        and takes this state's lock itself.
+        """
+        with self._lock:
+            for level in levels:
+                if (level not in scope
+                        and level in self._seen_scope_keys
+                        and self.get_triggered_phase_idx(level) is not None):
+                    raise ScopeError(
+                        f"complete={level!r} with scope {scope!r}: the scope "
+                        f"does not name {level!r}, which earlier submits did; "
+                        f"this would close every {level} at once"
+                    )
+            self._seen_scope_keys.update(scope)
 
     def next_submission_idx(self):
         """Get the next submission index (thread-safe)."""
