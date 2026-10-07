@@ -70,6 +70,10 @@ uses it.
 Registering a name twice raises `ValueError`. A missing step file raises
 here, not later.
 
+Each step runs in a conda environment that the workflow's
+`environments/setup_env.py` makes. Run it once before the first `submit`
+(see [Install it](../../README.md#install-it)).
+
 ## Recipes
 
 ```yaml
@@ -89,7 +93,7 @@ focus:
 - The first key that is not `metadata` names the recipe. The list under it
   is the steps, in the order they run.
 - `purpose` and `version` are for the reader. `verbose` reaches every step
-  in `pipeline_data["metadata"]`; default 2.
+  in `pipeline_data["metadata"]`.
 - A step is named after its file. `score_focus` is `score_focus.py` in
   `functions_dir` (default `../steps`).
 - Everything under a step is a parameter for it, except two keys the engine
@@ -103,8 +107,8 @@ focus:
 A step with a `scope` starts a new phase. The steps after it, until the
 next `scope`, run in that same phase, on the same unit.
 
-A recipe never sets a step's `environment`. That belongs in the step file.
-A recipe that tries is refused.
+A recipe cannot set a step's `environment`; the step file does
+([part 2](../2_implement_an_analysis_step/README.md#metadata)).
 
 ## submit
 
@@ -131,11 +135,11 @@ Some analysis runs per image. Some can only start when a whole unit is in:
 a stitch needs every image of a region, a summary needs every region. A
 step with a `scope` waits for that.
 
-The levels are names of your choosing. The shipped workflows use, narrowest
-first, **image**, **group**, **compartment**, **carrier** and **all**. A
-compartment is a well, a region of a slide, or part of a cleared sample. A
-carrier is the plate or the slide. The recipe lists its levels, widest
-first, in `metadata.levels`.
+The levels are names of your choosing. The shipped scoped recipe uses,
+narrowest first, **group**, **compartment** and **carrier**. A compartment
+is a well, a region of a slide, or part of a cleared sample. A carrier is
+the plate or the slide. The recipe lists its levels, widest first, in
+`metadata.levels`.
 
 Each image is submitted with the units it belongs to. The image that closes
 a unit says so:
@@ -175,10 +179,10 @@ What a scoped step receives is in
   compartment still being summarised, if that compartment was closed before
   the carrier. Send a compartment's `complete` before its carrier's.
 - **Nothing is lost quietly.** A carrier step is told about a compartment
-  that failed, and about images of a compartment that was not closed. Those
-  images are kept until their compartment is closed, and `status()` lists
-  them under `held`. An image that arrives after its unit was closed waits
-  the same way, until the unit is closed again.
+  that failed, and about images of a compartment that was never closed.
+  Those images are kept, listed in `status()` under `held`, until their
+  compartment is closed. An image that arrives after its unit was closed
+  is held the same way.
 
 One image may close several levels: `complete=["compartment", "carrier"]`
 runs the compartment step, then the carrier step.
@@ -186,21 +190,17 @@ runs the compartment step, then the carrier step.
 A level no image names in its `scope`, such as `all`, collects everything:
 `scope: all` in the recipe, `complete="all"` on the last image.
 
-The engine never decides on its own that a unit is complete. The
-acquisition knows, and says so.
-
 ## Workers
 
 Every step runs in a worker: a Python process in the conda environment
 named in the step's `METADATA`. A step that names none, or names the
-engine's own, runs in the engine's Python.
+engine's own, runs in a worker started with the engine's own Python.
 
 - A worker starts the first time its step is needed and stays running. A
   step keeps anything expensive, such as a loaded model, in `state`.
 - `max_workers` above one gives a step that many workers.
-- A worker idle longer than `idle_timeout` is stopped. The next job starts
-  a fresh one.
-- A step running longer than `execution_timeout` is killed. Its job fails.
+- `idle_timeout` stops a worker that sits idle; `execution_timeout` kills
+  a step that runs too long. See [Engine()](#engine).
 - A crashing step fails only its own job. The worker is replaced.
 
 ## results
@@ -218,10 +218,11 @@ removes them from the queue. Each is a dictionary:
 | the step's name | What that step published. One key per step. |
 | `input` | What was submitted. |
 | `metadata` | Recipe name and file, the steps that ran, the `scope`, when it ran. |
-| `provenance` | Per step: the conda `environment` it ran in, its `python` version, a `fingerprint` of the installed packages, and the versions of the `packages` it imported. The recipe says what was asked for; this says what ran. |
-| `lineage` | Scoped results only. `submissions`: every image under this unit. `failed`: every failure under it. `provenance`: for every step below, its distinct records. Two records for one step mean the environment changed during the run. |
+| `provenance` | Per step: `environment`, `python`, a `fingerprint` of the installed packages, the versions of the `packages` it imported. What ran, not what was asked. |
+| `lineage` | Scoped results only. `submissions`: every image under this unit. `failed`: every failure under it. `provenance`: every step below, one record per distinct environment. |
 | `_phase` | `0` for a per-image result. `1`, `2`, ... for a scoped one. |
-| `_scope`, `_scope_level` | The scope of the submit that closed a scoped result, and its level. `None` per image. The unit itself is `metadata["unit"]`. |
+| `_scope` | The `scope` of the submit. For a scoped result, of the submit that closed it. The unit itself is `metadata["unit"]`. |
+| `_scope_level` | The level of a scoped result. `None` per image. |
 
 ## status
 
@@ -258,17 +259,18 @@ jobs carry on. You do not catch these; you read them in `status`:
 
 | In `failures` | When |
 |---|---|
-| `StepExecutionError` | The step's `run` raised. The message carries the worker's traceback. |
+| `StepExecutionError` | The step's `run` raised. The message is the exception's name and text. |
 | `WorkerTimeoutError` | The step ran longer than `execution_timeout`. |
 | `WorkerCrashedError` | The worker process died during the step. |
 | `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist: run the workflow's `environments/setup_env.py`. |
 
-Two errors are raised by the calls themselves, so you see them at once:
+Two kinds of error are raised by the calls themselves, so you see them at
+once:
 
 | Raised | When |
 |---|---|
 | `ValueError`, `KeyError`, `RuntimeError` | A bad recipe or name at `register` or `submit`; a call after `shutdown`. |
-| `ScopeError` | A `complete` that names a level the `scope` leaves out, such as `scope={"carrier": 1}, complete="compartment"`. That would close every compartment at once. |
+| `ScopeError` | A `complete` for a level the recipe has a step for, which earlier images named in their `scope` and this one leaves out: `scope={"carrier": 1}, complete="compartment"` after images with a `compartment`. That would close every compartment at once. |
 
 The engine logs what it does through Python's `logging`. To see why a
 scoped step did not run:
@@ -291,7 +293,7 @@ logging.basicConfig(level=logging.INFO)
 
 | Call | What it does | Returns |
 |---|---|---|
-| `Engine(idle_timeout=300, max_concurrent=8, execution_timeout=300)` | Make an engine | the engine |
+| `Engine(idle_timeout=300.0, max_concurrent=8, execution_timeout=300.0)` | Make an engine | the engine |
 | `register(name, yaml_path)` | Read a recipe and its steps' `METADATA` | nothing |
 | `submit(name, data, scope=None, priority=None, complete=None)` | Hand one job to a recipe | nothing |
 | `results(name)` | The results finished since the last call | list of dicts |

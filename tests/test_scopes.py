@@ -642,6 +642,20 @@ def test_a_carrier_can_be_traced_back_to_its_tiles(recipe):
     assert set(carrier["provenance"]) == {"unit", "double"}
 
 
+def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_dict(recipe):
+    """``unit`` returns a new dict without metadata; the result and the
+    next step in the phase still carry the phase's metadata."""
+    with Engine() as e:
+        e.register("p", recipe("compartment", then_double=True))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
+        results = scoped(e, 1)
+
+    (compartment,) = [r for r in results if r["_phase"] == 1]
+    assert compartment["metadata"]["unit"] == {"compartment": 1}   # no levels: carrier is not a phase
+    assert compartment["metadata"]["scope_level"] == "compartment"
+    assert compartment["doubled"] == 6
+
+
 def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))

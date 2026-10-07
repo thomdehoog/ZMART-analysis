@@ -561,14 +561,16 @@ class Engine:
         state.cleanup_consumed_entries(value, submission_idx)
 
         # Execute the scoped phase. The lineage is attached after the step
-        # returns, so a step that builds a new dict cannot drop it.
+        # returns, so a step that builds a new dict cannot drop it; the
+        # same for the phase's metadata.
         lineage = self._lineage(results, failures)
         state.record_start(is_submission=False)
         step_name = [None]
         try:
-            result = self._execute_scoped_phase(
+            result, metadata = self._execute_scoped_phase(
                 state, phase_idx, results, failures, scope, level,
                 value or {}, step_name)
+            result.setdefault("metadata", metadata)
             result["lineage"] = lineage
 
             # Store for next phase if there is one
@@ -592,25 +594,26 @@ class Engine:
         """Execute a scoped phase with accumulated results. ``unit`` is the
         unit being closed, widest level first, ``{}`` for everything. The
         step being run is written to ``step_name[0]`` so a failure can
-        name it."""
+        name it. Returns the last step's result and the phase's metadata."""
         phase = state.phases[phase_idx]
 
+        metadata = {
+            "datetime": datetime.now().strftime("%Y%m%d-%H%M%S"),
+            "workflow_name": state.workflow_name,
+            "yaml_filename": state.yaml_path.name,
+            "steps": [s.name for s in phase.steps],
+            "phase": phase_idx,
+            "scope_level": scope_level,
+            "scope": scope,
+            "unit": unit,
+            "n_accumulated": len(accumulated_results),
+            "n_failures": len(failures),
+            "verbose": state.verbose,
+        }
         pipeline_data = {
             "results": accumulated_results,
             "failures": failures,
-            "metadata": {
-                "datetime": datetime.now().strftime("%Y%m%d-%H%M%S"),
-                "workflow_name": state.workflow_name,
-                "yaml_filename": state.yaml_path.name,
-                "steps": [s.name for s in phase.steps],
-                "phase": phase_idx,
-                "scope_level": scope_level,
-                "scope": scope,
-                "unit": unit,
-                "n_accumulated": len(accumulated_results),
-                "n_failures": len(failures),
-                "verbose": state.verbose,
-            },
+            "metadata": metadata,
         }
 
         for step in phase.steps:
@@ -622,8 +625,11 @@ class Engine:
                     f"Step '{step.name}' returned "
                     f"{type(pipeline_data).__name__}, expected dict"
                 )
+            # A step that built a new dict still hands the next one the
+            # phase's metadata.
+            pipeline_data.setdefault("metadata", metadata)
 
-        return pipeline_data
+        return pipeline_data, metadata
 
     # -- Internal: step execution --------------------------------------
 
