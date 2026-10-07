@@ -47,19 +47,21 @@ def _compartment(carrier, compartment, area_mean, seed, **params):
         "metadata": {
             "scope_level": "compartment",
             # The submit that closed the compartment also named its group;
-            # a compartment's population is not the group's, so it is dropped.
+            # the engine names the unit itself, widest level first.
             "scope": {"carrier": carrier, "compartment": compartment, "group": 7},
+            "unit": {"carrier": carrier, "compartment": compartment},
         },
     }
     return summarise_run(data, {}, **params)
 
 
-def _carrier(results, carrier=1, **params):
+def _carrier(results, carrier=1, failures=(), **params):
     data = {
         "results": results,
-        "failures": [],
+        "failures": list(failures),
         "metadata": {"scope_level": "carrier",
-                     "scope": {"carrier": carrier, "compartment": 6}},
+                     "scope": {"carrier": carrier, "compartment": 6},
+                     "unit": {"carrier": carrier}},
     }
     return compare_run(data, {}, **params)["comparison"]
 
@@ -90,7 +92,7 @@ def test_a_small_unit_is_summarised_without_components():
             "metadata": {"scope_level": "group",
                          "scope": {"carrier": 1, "compartment": 3, "group": 2}}}
     got = summarise_run(data, {}, enough_objects=10)["population"]
-    assert got["scope"] == {"carrier": 1, "compartment": 3, "group": 2}
+    assert got["scope"] == {"carrier": 1, "compartment": 3, "group": 2}   # no unit: the scope stands in
     assert got["n_objects"] == 5 and got["pca"] is None
     assert "area" in got["profile"]
 
@@ -111,6 +113,22 @@ def test_the_carrier_compares_its_compartments_and_flags_the_odd_one():
     assert not any("area" in f for unit, f in got["outlying"].items() if unit != "6")
 
 
+def test_the_carrier_counts_failed_compartments_apart_from_tiles_not_closed():
+    units = [_compartment(1, m, 100.0, m) for m in range(1, 4)]
+    failures = [
+        {"scope": {"carrier": 1, "compartment": 4}, "step": "summarise_population",
+         "error": "ValueError", "phase": 1, "submission_idx": 40},
+        {"scope": {"carrier": 1, "compartment": 5}, "step": "engine",
+         "error": "compartment not closed", "phase": 0, "submission_idx": 50},
+        {"scope": {"carrier": 1, "compartment": 5}, "step": "engine",
+         "error": "compartment not closed", "phase": 0, "submission_idx": 51},
+    ]
+    got = _carrier(units, failures=failures)
+    assert got["n_units"] == 3
+    assert got["n_failed_units"] == 1
+    assert got["n_not_closed"] == 2
+
+
 def test_both_steps_write_their_tables_when_asked(tmp_path):
     one = _compartment(1, 3, 100.0, 0, output_dir=str(tmp_path))
     written = one["population"]["written"]
@@ -125,8 +143,9 @@ def test_the_scoped_recipe_registers_with_its_two_scopes():
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from engine.pipeline import parse_yaml, split_phases
 
-    _, steps, _ = parse_yaml(recipe)
+    _, steps, metadata = parse_yaml(recipe)
     phases = split_phases(steps)
+    assert metadata["levels"] == ["carrier", "compartment", "group"]
     assert [p.scope for p in phases] == [None, "compartment", "carrier"]
     assert [s.name for s in phases[1].steps] == ["summarise_population"]
     assert [s.name for s in phases[2].steps] == ["compare_populations"]

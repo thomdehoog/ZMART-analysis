@@ -52,7 +52,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     meta = pipeline_data.get("metadata", {})
     level = meta.get("scope_level")
-    scope = _unit_of(meta.get("scope", {}) or {}, level)
+    # The engine names the unit, widest level first; an older caller may
+    # hand only the closing submit's scope.
+    scope = meta.get("unit", meta.get("scope", {})) or {}
     tiles = pipeline_data.get("results", [])
     enough_measured = float(params.get("enough_measured", 0.5))
     enough_objects = int(params.get("enough_objects", 10))
@@ -100,24 +102,10 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     }
 
 
-#: The levels a sample is divided into, widest first. The tile is the
-#: narrowest and needs no scope: every per-tile step already runs on one.
-LEVELS = ("carrier", "compartment", "group")
-
-
-def _unit_of(scope: dict, level: str | None) -> dict:
-    """The part of a submit's scope that names this unit: its own level and
-    every wider one. A tile's group says nothing about its compartment's
-    population, so narrower levels are left out."""
-    if level not in LEVELS:
-        return dict(scope)
-    wider = LEVELS[: LEVELS.index(level) + 1]
-    return {k: scope[k] for k in wider if k in scope}
-
-
-def unit_name(scope: dict) -> str:
-    """A file-name stem for a unit, such as ``carrier1_compartment3``."""
-    return "_".join(f"{k}{scope[k]}" for k in LEVELS if k in scope) or "all"
+def unit_name(unit: dict) -> str:
+    """A file-name stem for a unit, such as ``carrier1_compartment3``, in
+    the order the engine gives it: widest level first."""
+    return "_".join(f"{k}{v}" for k, v in unit.items()) or "all"
 
 
 def _write(folder: Path, scope: dict, population, components) -> dict:
