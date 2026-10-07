@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Make the engine package importable regardless of where pytest is invoked
 ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:

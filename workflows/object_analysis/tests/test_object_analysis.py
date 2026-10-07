@@ -15,7 +15,6 @@ from detect_objects import (  # noqa: E402
     segmentation_params_hash,
 )
 
-
 WORKFLOW = Path(__file__).resolve().parents[1]
 STEPS_DIR = WORKFLOW / "steps"
 CLASSICAL_YAML = WORKFLOW / "pipelines" / "object_analysis.yaml"
@@ -104,6 +103,7 @@ def _run_classical(tmp_path, **payload_extra):
 
 def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180):
     import time
+
     from engine import Engine
 
     with Engine() as engine:
@@ -131,7 +131,9 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
     the classical environment; naming the engine's own after it makes the
     steps run on this interpreter, which has their packages."""
     import time
+
     import yaml
+
     from engine import Engine
 
     monkeypatch.setenv("CONDA_DEFAULT_ENV", "ZMART--object_analysis--classical")

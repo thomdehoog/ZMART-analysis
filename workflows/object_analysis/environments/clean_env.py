@@ -15,6 +15,5 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "engine"))
 
 from conda_utils import clean_workflow_envs  # noqa: E402
 
-
 if __name__ == "__main__":
     clean_workflow_envs(workflow="object_analysis")

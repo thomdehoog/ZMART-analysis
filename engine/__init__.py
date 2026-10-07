@@ -31,11 +31,11 @@ Architecture
 from .engine import Engine
 from .pipeline import ScopeError
 from .workers import (
+    StepExecutionError,
+    WorkerCrashedError,
     WorkerError,
     WorkerSpawnError,
-    WorkerCrashedError,
     WorkerTimeoutError,
-    StepExecutionError,
 )
 
 __version__ = "1.0.0rc1"

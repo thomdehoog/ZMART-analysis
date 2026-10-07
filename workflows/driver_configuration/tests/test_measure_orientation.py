@@ -19,7 +19,11 @@ from scipy.ndimage import gaussian_filter
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
 from measure_orientation import (  # noqa: E402
-    STAGE_FROM_ORIENTATION, orientation_document, reorient, run, unorient,
+    STAGE_FROM_ORIENTATION,
+    orientation_document,
+    reorient,
+    run,
+    unorient,
 )
 
 PIXEL_UM = 2.5

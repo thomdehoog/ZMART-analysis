@@ -199,8 +199,8 @@ def _load_ome_zarr(source, level, t, c, z):
         "channel_name": (channel_labels[channel_index]
                          if channel_index is not None and channel_labels
                          else None),
-        "pixel_size": dict(zip(image.axes, image.dataset.scale)),
-        "origin": dict(zip(image.axes, image.dataset.translation)),
+        "pixel_size": dict(zip(image.axes, image.dataset.scale, strict=False)),
+        "origin": dict(zip(image.axes, image.dataset.translation, strict=False)),
         "space_unit": image.space_unit,
     }
 

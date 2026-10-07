@@ -41,6 +41,17 @@ Repository = "https://github.com/thomdehoog/ZMART-analysis"
 [tool.setuptools.packages.find]
 include = ["engine*"]
 
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# Long lines are tolerated in tests and in the steps' parameter tables.
+ignore = ["E501"]
+per-file-ignores = {"tests/*" = ["B017", "B904", "B023"], "workflows/*/tests/*" = ["B017", "B904", "B023"]}
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "workflows"]
 python_files = ["test_*.py"]

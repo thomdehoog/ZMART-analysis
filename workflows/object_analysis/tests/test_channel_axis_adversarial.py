@@ -10,9 +10,11 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from detect_objects import segmentation_params, segmentation_params_hash  # noqa: E402
-from detect_objects import select_channels  # noqa: E402
-
+from detect_objects import (  # noqa: E402
+    segmentation_params,
+    segmentation_params_hash,
+    select_channels,  # noqa: E402
+)
 
 pytestmark = pytest.mark.adversarial
 

@@ -18,7 +18,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "engine"))
 
 from conda_utils import setup_workflow_env  # noqa: E402
 
-
 WORKFLOW = "driver_configuration"
 PYTHON_VERSION = "3.12"
 

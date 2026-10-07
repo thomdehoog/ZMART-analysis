@@ -21,7 +21,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows"))
 from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
 
-
 PIXEL_SIZE = 0.325
 Z_SPACING = 1.0
 ORIGIN_YX = (1000.0, 2000.0)
@@ -261,6 +260,7 @@ class TestLazyReading(OmeZarrTestCase):
     def _count_chunk_reads(self, **kwargs):
         """Number of distinct chunk or shard objects touched by one load."""
         from unittest.mock import patch
+
         from zarr.storage import LocalStore
 
         original = LocalStore.get
@@ -313,6 +313,7 @@ class TestLazyReading(OmeZarrTestCase):
                 plane_reads = self._count_chunk_reads(source=store, z=2)
 
                 from unittest.mock import patch
+
                 from zarr.storage import LocalStore
 
                 original = LocalStore.get
@@ -721,6 +722,7 @@ class TestTiffLazyReading(OmeZarrTestCase):
 
     def test_single_plane_decodes_few_tiles(self):
         from unittest.mock import patch
+
         from tifffile.zarr import ZarrTiffStore
 
         original = ZarrTiffStore.get

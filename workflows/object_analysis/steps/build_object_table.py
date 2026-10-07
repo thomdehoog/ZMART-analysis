@@ -1,14 +1,14 @@
 """build_object_table -- publish the object_analysis public contract."""
 
 from __future__ import annotations
-from typing import Any
-from collections.abc import Mapping
-import math
-import json
 
+import json
+import math
 import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
