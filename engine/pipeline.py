@@ -95,7 +95,7 @@ class StepConfig:
     ``provenance``.
     """
     name: str
-    params: dict
+    params: dict[str, object]
     #: The pipeline's word on how many of this step may run at once, over
     #: the step file's own METADATA. A step file is written for its heaviest
     #: caller; a pipeline whose work is light (a watershed, not Cellpose)
@@ -106,8 +106,15 @@ class StepConfig:
 @dataclass
 class Phase:
     """A group of sequential steps with an optional scope trigger."""
-    steps: list
+    steps: list[StepConfig]
     scope: str | None = None
+
+
+class ScopeError(Exception):
+    """A close signal whose scope leaves out the level it closes.
+
+    Raised by ``Engine.submit``; see ``PipelineState.check_complete``.
+    """
 
 
 # -- YAML parsing ------------------------------------------------------
@@ -198,14 +205,14 @@ def split_phases(steps_config):
 
 class PipelineState:
     """
-    Internal state for one registered pipeline.
+    Internal state for one registered recipe.
 
-    Tracks jobs, scope groups, result accumulation, and status counters.
+    Tracks jobs, units, collected results and status counters.
     Thread-safe: all mutable state is protected by _lock.
     """
 
     def __init__(self, name, yaml_path, phases, functions_dir,
-                 step_settings, verbose, levels=None):
+                 step_settings, verbose, levels=None, workflow_name=None):
         self.name = name
         self.yaml_path = Path(yaml_path)
         self.phases = phases
@@ -215,7 +222,8 @@ class PipelineState:
         self.functions_dir = functions_dir
         self.step_settings = step_settings
         self.verbose = verbose
-        self.workflow_name = name
+        #: The recipe's top-level key, for the results' metadata.
+        self.workflow_name = workflow_name or name
 
         self._lock = threading.Lock()
         self._submission_counter = 0
@@ -244,7 +252,6 @@ class PipelineState:
         # Status counters. The failed count is always derived from
         # _failures so the two cannot drift apart when scope collection
         # drains consumed failures.
-        self._n_submitted = 0
         self._n_pending = 0
         self._n_running = 0
         self._n_completed = 0
@@ -276,7 +283,6 @@ class PipelineState:
         with self._lock:
             idx = self._submission_counter
             self._submission_counter += 1
-            self._n_submitted += 1
             self._n_pending += 1
             return idx
 
@@ -290,7 +296,8 @@ class PipelineState:
         )
 
     def record_start(self, is_submission=True):
-        """Move an operation from pending to running."""
+        """Move an operation from pending to running. A scoped phase was
+        never pending: only submits count there."""
         with self._lock:
             if is_submission:
                 self._n_pending = max(0, self._n_pending - 1)
@@ -371,10 +378,9 @@ class PipelineState:
                 return i
         return None
 
-    def collect_for_scope(self, phase_idx, value, before):
+    def collect_for_scope(self, phase_idx, unit, before):
         """
-        Collect the previous phase's results and failures for the unit
-        *value*, from submits up to and including *before*.
+        Collect the previous phase's results and failures for *unit*, from submits up to and including *before*.
 
         For Phase 1 (prev=0): collects from Phase 0 results.
         For Phase N (prev=N-1): collects from phase_results[N-1].
@@ -385,7 +391,7 @@ class PipelineState:
         prev_idx = phase_idx - 1
 
         if prev_idx > 0:
-            self._wait_for_scoped(prev_idx, value, before)
+            self._wait_for_scoped(prev_idx, unit, before)
 
         with self._lock:
             if prev_idx == 0:
@@ -395,7 +401,7 @@ class PipelineState:
             matching, remaining = [], []
             for entry in entries:
                 idx, entry_scope, result = entry
-                if idx <= before and _matches(entry_scope, value):
+                if idx <= before and _matches(entry_scope, unit):
                     matching.append((idx, result))
                 else:
                     remaining.append(entry)
@@ -405,22 +411,23 @@ class PipelineState:
                 self._phase_results[prev_idx] = remaining
             matching.sort(key=lambda x: x[0])
             results = [r for _, r in matching]
-            failures = self._take_failures(prev_idx, value, before)
+            failures = self._take_failures(prev_idx, unit, before)
             return results, failures
 
-    def held_for(self, phase_idx, value, before):
-        """What this unit still holds from the phases below *phase_idx* - 1:
-        results and failures a narrower level never closed. Reported to the
-        step as failures (``step: "engine"``) and kept, since that level's
-        signal may still come.
+    def held_for(self, phase_idx, unit, before):
+        """What *unit* still holds from every phase before the one being
+        collected: results and failures a narrower level never closed.
+        Reported to the step as failures (``step: "engine"``) and kept,
+        since that level's signal may still come.
         """
         held = []
         with self._lock:
             for k in range(phase_idx - 1):
+                # Phase k's results wait for phase k+1's level to close.
                 entries = self._phase0_results if k == 0 else self._phase_results[k]
                 not_closed = self.phases[k + 1].scope
                 for idx, entry_scope, _ in entries:
-                    if idx <= before and _matches(entry_scope, value):
+                    if idx <= before and _matches(entry_scope, unit):
                         held.append({
                             "scope": entry_scope,
                             "step": "engine",
@@ -431,18 +438,18 @@ class PipelineState:
                 held += [
                     f for f in self._failures
                     if f["phase"] == k and f["submission_idx"] <= before
-                    and _matches(f["scope"], value)
+                    and _matches(f["scope"], unit)
                 ]
         held.sort(key=lambda f: f["submission_idx"])
         return held
 
-    def _take_failures(self, phase_idx, value, before):
+    def _take_failures(self, phase_idx, unit, before):
         """Remove and return the failures of phase *phase_idx* that belong
-        to the unit *value*, from submits up to *before*. Under _lock."""
+        to *unit*, from submits up to *before*. Under _lock."""
         taken, remaining = [], []
         for f in self._failures:
             if (f["phase"] == phase_idx and f["submission_idx"] <= before
-                    and _matches(f["scope"], value)):
+                    and _matches(f["scope"], unit)):
                 taken.append(f)
             else:
                 remaining.append(f)
@@ -473,14 +480,14 @@ class PipelineState:
                 ]
         done.set()
 
-    def _wait_for_scoped(self, phase_idx, value, before):
+    def _wait_for_scoped(self, phase_idx, unit, before):
         """Wait until every phase *phase_idx* of this unit signalled up to
         *before* is done."""
         with self._lock:
             waiting = [
                 done for entry_scope, idx, done
                 in self._scoped_in_flight[phase_idx]
-                if idx <= before and _matches(entry_scope, value)
+                if idx <= before and _matches(entry_scope, unit)
             ]
         for done in waiting:
             done.wait()
@@ -492,20 +499,20 @@ class PipelineState:
             self._phase_results[phase_idx].append(
                 (submission_idx, dict(scope), result))
 
-    def get_matching_futures(self, value, before):
-        """Phase 0 futures of the unit *value*, submitted up to *before*."""
+    def get_matching_futures(self, unit, before):
+        """Phase 0 futures of *unit*, submitted up to *before*."""
         with self._lock:
             return [
                 f for f, scope, idx in self._job_entries
-                if idx <= before and _matches(scope, value)
+                if idx <= before and _matches(scope, unit)
             ]
 
-    def cleanup_consumed_entries(self, value, before):
+    def cleanup_consumed_entries(self, unit, before):
         """Remove consumed job entries after scope collection."""
         with self._lock:
             self._job_entries = [
                 (f, s, idx) for f, s, idx in self._job_entries
-                if not (idx <= before and _matches(s, value))
+                if not (idx <= before and _matches(s, unit))
             ]
 
     def drain_results(self):
@@ -538,7 +545,3 @@ class PipelineState:
                 "failures": list(self._failures),
                 "held": {"results": n_held, "units": list(held_units.values())},
             }
-
-
-class ScopeError(Exception):
-    """Invalid scope configuration, missing results, or bad completion signal."""

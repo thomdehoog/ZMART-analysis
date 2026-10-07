@@ -23,8 +23,6 @@ from engine import Engine, ScopeError
 
 pytestmark = pytest.mark.integration
 
-LEVELS = ["group", "compartment", "carrier"]
-
 TILE = """
     def run(pd, state, **p):
         if pd["input"].get("fail"):
@@ -50,7 +48,7 @@ UNIT = """
             "n_failures": len(pd["failures"]),
             "level": level,
             "unit": {k: meta["scope"][k] for k in wider if k in meta["scope"]},
-        "engine_unit": meta["unit"],
+            "engine_unit": meta["unit"],
             "inputs_provenance": [sorted(r.get("provenance", {})) for r in pd["results"]],
         }
 """

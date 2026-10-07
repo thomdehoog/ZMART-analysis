@@ -14,15 +14,16 @@ importing only the standard library.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import platform
+import re
+import shutil
+import subprocess
 import sys
 import time
-import subprocess
-import platform
-import shutil
-import json
-import re
 from pathlib import Path
+
 
 def _find_conda() -> str:
     """The conda program to run.
@@ -52,13 +53,8 @@ CONDA_CMD = _find_conda()
 
 
 def get_conda_info():
-    """Get conda configuration via 'conda info --json'.
-
-    This is the single source of truth for the conda executable,
-    environment directories, and existing environments.
-
-    Uses CONDA_EXE environment variable to find conda, which is set
-    automatically by conda activation and propagates to subprocesses.
+    """Conda's configuration, from ``conda info --json``: the executable,
+    the environment directories, and the environments that exist.
 
     Returns
     -------
@@ -158,6 +154,8 @@ def detect_gpu():
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
 
+    # nvidia-smi is there but its driver version did not parse: the build
+    # most drivers of the last years run.
     return "cu124"
 
 
@@ -288,9 +286,7 @@ def setup_workflow_env(
     banner("ZMART Analysis -- Environment Setup")
 
     section("System")
-    import platform as pf
-
-    info("Platform", f"{pf.system()} ({pf.machine()})")
+    info("Platform", f"{platform.system()} ({platform.machine()})")
     info("Python target", args.python)
     info("GPU backend", gpu_label(gpu) if install_torch else "not used")
 
