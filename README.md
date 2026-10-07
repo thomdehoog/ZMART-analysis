@@ -33,8 +33,7 @@ following four problems.
    documented and easy to share is a challenge on its own.
 
 3. **Time.** The analysis is often time sensitive. The microscope waits for the
-   answer, so images must be analysed as soon as they come in and the
-   analysis must keep up with the acquisition.
+   answer, so images must be analysed as soon as they come in.
 
 4. **Analysis over scopes.** Depending on the experiment, analysis needs to
    be done over single images, a group of images, a compartment, a carrier,
