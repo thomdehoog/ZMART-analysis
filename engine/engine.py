@@ -200,6 +200,15 @@ class Engine:
             verbose = metadata.get("verbose", 2)
 
             phases = split_phases(steps_config)
+            levels = metadata.get("levels")
+            if levels is not None and (
+                    not isinstance(levels, list)
+                    or not all(isinstance(l, str) for l in levels)
+                    or len(set(levels)) != len(levels)):
+                raise ValueError(
+                    "metadata 'levels' must be a list of distinct level "
+                    f"names, widest first, got {levels!r}"
+                )
 
             # Read METADATA from all step files
             step_settings = {}
@@ -230,6 +239,7 @@ class Engine:
                 functions_dir=functions_dir,
                 step_settings=step_settings,
                 verbose=verbose,
+                levels=levels,
             )
             state.workflow_name = workflow_name
 
@@ -491,9 +501,11 @@ class Engine:
             except Exception:
                 pass  # Failures already recorded by Phase 0 handler
 
-        # Collect results from previous phase
+        # Collect results from previous phase, and what a narrower level
+        # never closed
         results, failures = state.collect_for_scope(
             phase_idx, value, submission_idx)
+        failures += state.held_for(phase_idx, value, submission_idx)
 
         if not results and not failures:
             logger.warning("No results for scope '%s' (value=%s) in '%s'",
@@ -508,7 +520,8 @@ class Engine:
         step_name = [None]
         try:
             result = self._execute_scoped_phase(
-                state, phase_idx, results, failures, scope, level, step_name)
+                state, phase_idx, results, failures, scope, level,
+                value or {}, step_name)
 
             # Store for next phase if there is one
             next_phase = phase_idx + 1
@@ -527,9 +540,11 @@ class Engine:
                          phase_idx, state.name, e)
 
     def _execute_scoped_phase(self, state, phase_idx, accumulated_results,
-                               failures, scope, scope_level, step_name):
-        """Execute a scoped phase with accumulated results. The step being
-        run is written to ``step_name[0]`` so a failure can name it."""
+                               failures, scope, scope_level, unit, step_name):
+        """Execute a scoped phase with accumulated results. ``unit`` is the
+        unit being closed, widest level first, ``{}`` for everything. The
+        step being run is written to ``step_name[0]`` so a failure can
+        name it."""
         phase = state.phases[phase_idx]
 
         pipeline_data = {
@@ -543,6 +558,7 @@ class Engine:
                 "phase": phase_idx,
                 "scope_level": scope_level,
                 "scope": scope,
+                "unit": unit,
                 "n_accumulated": len(accumulated_results),
                 "n_failures": len(failures),
                 "verbose": state.verbose,
