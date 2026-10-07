@@ -88,7 +88,7 @@ raises fails only its own job. The message and traceback appear in
 | `scope` | The `scope` given at submit, e.g. `{"carrier": 1, "compartment": 3}`. |
 | `submission_idx` | The job's number, from zero, in submission order. |
 | `datetime` | When the job started, `YYYYMMDD-HHMMSS`. |
-| `verbose` | The recipe's `metadata.verbose`. Default 2. |
+| `verbose` | The recipe's `metadata.verbose`. Default 2. Print progress when it is above 0, nothing when it is 0. |
 
 ## METADATA
 
@@ -147,6 +147,23 @@ python workflows/object_analysis/environments/setup_env.py --step cellpose
 | `--gpu cu128\|cu124\|cu121\|mps\|cpu` | Which PyTorch build, for workflows that use torch. Default: detect. |
 | `--check` | Run the checks on an existing environment. Installs nothing. |
 | `--dry-run` | Print the commands without running them. |
+
+`setup_env.py` is a short script that calls `setup_workflow_env`:
+
+| Parameter | What it is |
+|---|---|
+| `workflow` | The workflow folder's name. |
+| `pip_packages` | What to install, as pip spells it, e.g. `"cellpose>=4,<5"`. |
+| `diagnostics` | Checks run inside the new environment: `(label, one-liner)` pairs, each printing a short result. |
+| `python_version` | Default `"3.12"`. |
+| `install_torch` | Whether to install PyTorch for the detected GPU. Default `True`. |
+| `default_step` | The environment made when `--step` is not given. Default `"main"`. |
+| `steps_dir` | The workflow's `steps/` folder. `__STEPS__` in a one-liner is replaced with it, so a check can import a step. |
+
+A workflow with several environments keeps one profile per environment
+and picks it from `--step` before the call.
+`workflows/object_analysis/environments/setup_env.py` is the example. The
+step files say which environment they want, so nothing else changes.
 
 Every environment is built from conda-forge; packages are installed with
 pip inside it. `clean_env.py` beside it removes the environments again.
