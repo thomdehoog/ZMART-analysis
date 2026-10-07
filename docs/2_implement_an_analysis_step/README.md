@@ -19,20 +19,15 @@ reference. The [tutorial](tutorial.ipynb), a notebook, walks you through writing
 
 ## The idea
 
-A step is one Python file with one function, `run`. A recipe (YAML) says
-which steps run, in which order, with which parameters. The engine starts a
-worker in the conda environment the step asks for, hands it the image, and
-passes what the step returns to the next step.
-
-```
-  recipe (YAML) ──► engine ──► worker in the step's environment ──► run(...)
-```
+A step is one Python file with one function, `run`. The engine runs it in
+a worker, in the conda environment the step names, and hands what it
+returns to the next step.
 
 A step is a plain function. A test or a notebook can call it without the
 engine. The engine never imports the step; the heavy imports happen in the
 worker.
 
-How recipes are registered and images submitted is in
+Registering recipes and submitting images is
 [part 1](../1_use_the_engine/README.md).
 
 ## The smallest step
@@ -75,8 +70,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 **Return `pipeline_data`** with your output added under your step's name.
 
 A step that returns anything but a dictionary fails its job. A step that
-raises fails only its own job. The message and traceback appear in
-`engine.status()`.
+raises fails only its own job. Its name and message appear under
+`failures` in `engine.status()`.
 
 `pipeline_data["metadata"]` on a per-image job:
 
@@ -129,15 +124,15 @@ METADATA = {"environment": "ZMART--object_analysis--cellpose"}
 
 Names follow `ZMART--<workflow>--<step>`: the workflow folder, then a short
 word for the environment. A workflow with one environment calls it `main`.
-`object_analysis` has `cellpose` and `classical`, so a run that only needs
-the second does not pay for the first.
+`object_analysis` has `cellpose`, `classical` and `umap`, so a run that
+needs only the classical steps does not pay for torch.
 
 The workflow's `environments/setup_env.py` lists the packages and a few
 checks. It hands the work to `engine/conda_utils.py`:
 
 ```bash
 python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main
-python workflows/object_analysis/environments/setup_env.py --step cellpose
+python workflows/object_analysis/environments/setup_env.py --step classical
 ```
 
 | Option | What it does |
@@ -147,6 +142,9 @@ python workflows/object_analysis/environments/setup_env.py --step cellpose
 | `--gpu cu128\|cu124\|cu121\|mps\|cpu` | Which PyTorch build, for workflows that use torch. Default: detect. |
 | `--check` | Run the checks on an existing environment. Installs nothing. |
 | `--dry-run` | Print the commands without running them. |
+
+An environment that exists is left alone: `--check` tests it,
+`clean_env.py --step <name>` removes it.
 
 `setup_env.py` is a short script that calls `setup_workflow_env`:
 
@@ -166,11 +164,11 @@ and picks it from `--step` before the call.
 step files say which environment they want, so nothing else changes.
 
 Every environment is built from conda-forge; packages are installed with
-pip inside it. `clean_env.py` beside it removes the environments again.
+pip inside it.
 
 The engine starts a worker with `conda run -n <environment>`. The step sees
 that environment's packages and no other. A step that names the engine's
-own environment runs in the engine's interpreter.
+own environment runs in a worker started with the engine's own Python.
 
 ## Keep a model loaded
 
@@ -216,7 +214,7 @@ Such a step receives a different `pipeline_data`:
 | Key | What it is |
 |---|---|
 | `results` | One entry per image, or per narrower unit, in submission order: what the previous phase returned. |
-| `failures` | What failed under this unit. Each has `scope`, `step`, `error`, `phase` and `submission_idx`. A `step` of `"engine"` means an image of a narrower unit that was not closed when this one was. |
+| `failures` | What failed under this unit. Each has `scope`, `step`, `error`, `phase` and `submission_idx`. A `step` of `"engine"` is the engine's own record: an image of a narrower unit that was not closed, or a job cancelled by `shutdown(wait=False)`. |
 | `metadata["unit"]` | Which unit, widest level first, e.g. `{"carrier": 1, "compartment": 3}`. `{}` for a step over everything. |
 | `metadata["scope_level"]` | The level, e.g. `"compartment"`. |
 | `metadata["scope"]` | The scope of the image that closed the unit. It may name narrower levels too. |
@@ -225,9 +223,10 @@ Such a step receives a different `pipeline_data`:
 There is no `input`.
 
 **Return a new dictionary** with your output. Copying the per-image results
-forward only uses memory. The engine adds `lineage` to your result after it
-returns: the images under this unit, the failures under it, and where every
-step below ran. You carry nothing over.
+forward only uses memory. The engine adds `metadata` and `lineage` to your
+result after it returns: the images under this unit, the failures under
+it, and where every step below ran. You carry nothing over. A step after
+yours in the same phase receives what you returned.
 
 `workflows/object_analysis/steps/summarise_population.py` is the worked
 example.
