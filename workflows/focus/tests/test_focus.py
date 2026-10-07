@@ -67,9 +67,7 @@ def _write_stack(path, blur_at):
     """A 9-plane stack, sharpest at plane 4, blurred by ``blur_at(z)`` either side."""
     sharp = np.random.default_rng(0).integers(0, 4096, size=(64, 64)).astype(np.float64)
     planes = [_blurred(sharp, blur_at(z)) for z in range(N_PLANES)]
-    tifffile.imwrite(
-        path, np.stack(planes).astype(np.uint16), metadata={"axes": "ZYX"}
-    )
+    tifffile.imwrite(path, np.stack(planes).astype(np.uint16), metadata={"axes": "ZYX"})
     return path
 
 
@@ -298,7 +296,9 @@ def test_a_constant_background_offset_changes_no_metrics_verdict(tmp_path):
     entropy metric the same score, since it leaves the mean out."""
     dark = _cell_like_stack(tmp_path / "dark.tiff")
     planes = tifffile.imread(dark)
-    tifffile.imwrite(tmp_path / "bright.tiff", (planes + 2000).astype(np.uint16), metadata={"axes": "ZYX"})
+    tifffile.imwrite(
+        tmp_path / "bright.tiff", (planes + 2000).astype(np.uint16), metadata={"axes": "ZYX"}
+    )
     a = _scored(dark)["metrics"]
     b = _scored(tmp_path / "bright.tiff")["metrics"]
     for name in ("brenner", "dct", "vollath_f4"):
@@ -333,16 +333,12 @@ def test_real_pixels_find_focus_between_planes(tmp_path, true_focus_um):
     rng = np.random.default_rng(0)
     z_um = [100.0 + 2.0 * i for i in range(15)]
     planes = [
-        rng.poisson(ndimage.gaussian_filter(image, 0.35 * abs(z - true_focus_um)))
-        for z in z_um
+        rng.poisson(ndimage.gaussian_filter(image, 0.35 * abs(z - true_focus_um))) for z in z_um
     ]
     path = tmp_path / "defocus.tiff"
-    tifffile.imwrite(
-        path, np.stack(planes).astype(np.uint16), metadata={"axes": "ZYX"}
-    )
+    tifffile.imwrite(path, np.stack(planes).astype(np.uint16), metadata={"axes": "ZYX"})
 
-    data_in = {"input": {"image_path": str(path), "z_um": z_um},
-               "metadata": {"verbose": 0}}
+    data_in = {"input": {"image_path": str(path), "z_um": z_um}, "metadata": {"verbose": 0}}
     result = run(data_in, {})["score_focus"]
 
     for name in ("brenner", "dct"):
@@ -374,16 +370,15 @@ def test_an_artefact_frame_would_beat_real_focus_on_brenner(tmp_path):
     path = tmp_path / "artefact.tiff"
     tifffile.imwrite(path, stack, metadata={"axes": "ZYX"})
 
-    data_in = {"input": {"image_path": str(path), "z_um": z_um},
-               "metadata": {"verbose": 0}}
+    data_in = {"input": {"image_path": str(path), "z_um": z_um}, "metadata": {"verbose": 0}}
     result = run(data_in, {})["score_focus"]
 
     brenner = np.asarray(result["metrics"]["brenner"]["scores"])
     dct = np.asarray(result["metrics"]["dct"]["scores"])
     lo, hi = result["considered"]
-    assert brenner[0] > 10 * brenner[lo:hi + 1].max()
-    assert dct[0] > dct[lo:hi + 1].max()
-    assert int(np.argmax(dct[lo:hi + 1])) + lo == int(np.argmax(brenner[lo:hi + 1])) + lo
+    assert brenner[0] > 10 * brenner[lo : hi + 1].max()
+    assert dct[0] > dct[lo : hi + 1].max()
+    assert int(np.argmax(dct[lo : hi + 1])) + lo == int(np.argmax(brenner[lo : hi + 1])) + lo
     assert result["peak_z_um"] == pytest.approx(108.0, abs=0.25)
 
 
@@ -398,11 +393,14 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
     the YAML is usable.
     """
     _require_focus_environment()
-    stack = np.stack([
-        np.full((32, 32), 100, dtype=np.uint16) if z != 4
-        else np.random.default_rng(0).integers(0, 4096, size=(32, 32)).astype(np.uint16)
-        for z in range(9)
-    ])
+    stack = np.stack(
+        [
+            np.full((32, 32), 100, dtype=np.uint16)
+            if z != 4
+            else np.random.default_rng(0).integers(0, 4096, size=(32, 32)).astype(np.uint16)
+            for z in range(9)
+        ]
+    )
     path = tmp_path / "stack.tiff"
     tifffile.imwrite(path, stack, metadata={"axes": "ZYX"})
     z_um = [100.0 + 2.0 * z for z in range(9)]
@@ -432,8 +430,14 @@ def test_a_channel_is_taken_from_a_four_axis_stack(tmp_path):
     tifffile.imwrite(path, stack.astype(np.uint16), metadata={"axes": "ZCYX"})
 
     data = {"input": {"image_path": str(path)}, "metadata": {"verbose": 0}}
-    assert run(data, {}, channel=0, skip_ends=0)["score_focus"]["metrics"]["brenner"]["scores"][0] == 0.0
-    assert run(data, {}, channel=1, skip_ends=0)["score_focus"]["metrics"]["brenner"]["scores"][0] > 0.0
+    assert (
+        run(data, {}, channel=0, skip_ends=0)["score_focus"]["metrics"]["brenner"]["scores"][0]
+        == 0.0
+    )
+    assert (
+        run(data, {}, channel=1, skip_ends=0)["score_focus"]["metrics"]["brenner"]["scores"][0]
+        > 0.0
+    )
     with pytest.raises(ValueError, match="Index 2 is out of range for 'c' of size 2"):
         run(data, {}, channel=2, skip_ends=0)
 
@@ -457,7 +461,7 @@ def zarr_position(tmp_path):
 
     sharp = np.random.default_rng(0).integers(0, 4096, size=(64, 64)).astype(np.float64)
     planes = [_blurred(sharp, abs(z - SHARP_AT)) for z in range(N_PLANES)]
-    stack = np.stack(planes)[None, None]                      # t, c, z, y, x
+    stack = np.stack(planes)[None, None]  # t, c, z, y, x
     flat = np.zeros_like(stack)
     array = np.concatenate([stack, flat], axis=1).astype(np.uint16)
 

@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from build_object_table import validate_targets, validate_tile_detection  # noqa: E402
+from build_object_table import validate_tile_detection  # noqa: E402
 from detect_objects import (  # noqa: E402
     area_filter_params,
     segmentation_params,
@@ -35,19 +35,6 @@ extract_classical_features = _load_step("extract_classical_features")
 build_object_table = _load_step("build_object_table")
 
 
-def _load_target_discovery_step():
-    path = WORKFLOW.parent / "target_discovery" / "steps" / "select_targets.py"
-    if not path.is_file():
-        # ZMART vendors only the workflows it runs; target_discovery is not
-        # one of them. See ../../README.md for what was taken and why.
-        pytest.skip("target_discovery is not part of this checkout")
-    spec = importlib.util.spec_from_file_location("select_targets", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-
 def _write_synthetic_tile(tmp_path):
     import tifffile
 
@@ -68,9 +55,7 @@ def _write_immunohistochemistry_tile(tmp_path):
     # which is what makes it stand in for a three-channel tile at all.
     image = immunohistochemistry()
     path = tmp_path / "immunohistochemistry.tif"
-    tifffile.imwrite(
-        path, np.moveaxis(image, -1, 0), metadata={"axes": "CYX"}
-    )
+    tifffile.imwrite(path, np.moveaxis(image, -1, 0), metadata={"axes": "CYX"})
     return path, image
 
 
@@ -157,9 +142,13 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
                 scope = {"carrier": carrier, "compartment": compartment}
                 engine.submit("scoped", _payload(image_path, gpu=False), scope=scope)
                 if (carrier, compartment) == (2, 1):
-                    engine.submit("scoped", _payload(tmp_path / "missing.tif", gpu=False), scope=scope)
+                    engine.submit(
+                        "scoped", _payload(tmp_path / "missing.tif", gpu=False), scope=scope
+                    )
                 closes = ["compartment", "carrier"] if compartment == 2 else "compartment"
-                engine.submit("scoped", _payload(image_path, gpu=False), scope=scope, complete=closes)
+                engine.submit(
+                    "scoped", _payload(image_path, gpu=False), scope=scope, complete=closes
+                )
         results, deadline = [], time.monotonic() + 240
         while time.monotonic() < deadline:
             results += engine.results("scoped")
@@ -169,12 +158,14 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
         else:
             raise AssertionError(f"timed out; status {engine.status('scoped')}")
 
-    compartments = {tuple(r["population"]["scope"].values()): r for r in results if r["_phase"] == 1}
+    compartments = {
+        tuple(r["population"]["scope"].values()): r for r in results if r["_phase"] == 1
+    }
     carriers = {r["comparison"]["scope"]["carrier"]: r for r in results if r["_phase"] == 2}
     assert set(compartments) == {(1, 1), (1, 2), (2, 1), (2, 2)}
     assert compartments[(2, 1)]["population"]["n_tiles"] == 2
     assert compartments[(2, 1)]["population"]["n_failed_tiles"] == 1
-    assert compartments[(1, 1)]["population"]["n_objects"] == 2 * 2    # two objects per tile
+    assert compartments[(1, 1)]["population"]["n_objects"] == 2 * 2  # two objects per tile
     for carrier in (1, 2):
         comparison = carriers[carrier]["comparison"]
         assert comparison["n_units"] == 2 and comparison["n_failed_units"] == 0
@@ -267,7 +258,9 @@ def test_the_pipelines_register(tmp_path):
         engine.register("detection", str(DETECTION_YAML))
         engine.register("fast", str(FAST_YAML))
         placed = {
-            "classical": engine._pipelines["classical"].step_settings["detect_objects"]["environment"],
+            "classical": engine._pipelines["classical"].step_settings["detect_objects"][
+                "environment"
+            ],
             "fast": engine._pipelines["fast"].step_settings["detect_objects_fast"]["environment"],
         }
     finally:
@@ -299,7 +292,7 @@ def test_the_fast_detector_runs_the_watershed_and_answers_as_detect_objects(tmp_
     yy, xx = np.mgrid[0:96, 0:96]
     plane = np.zeros((96, 96))
     for cy, cx in [(24, 24), (24, 72), (72, 24), (72, 72)]:
-        plane += 1500.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 6.0 ** 2))
+        plane += 1500.0 * np.exp(-((yy - cy) ** 2 + (xx - cx) ** 2) / (2 * 6.0**2))
     path = tmp_path / "field.tif"
     tifffile.imwrite(path, plane.astype(np.uint16))
     data = {
@@ -326,27 +319,6 @@ def test_the_fast_pipeline_leaves_out_the_per_object_texture_crops():
     )
     assert not extras & {"glrlm", "lbp", "fft"}
     assert extras == set(extract_classical_features.EXTRAS) - {"glrlm", "lbp", "fft"}
-
-
-def test_object_analysis_hands_off_to_target_discovery(tmp_path):
-    result = _run_classical(tmp_path)
-    tile = result["object_analysis"]
-    select_targets = _load_target_discovery_step()
-
-    discovery_pd = {
-        "input": {
-            "tiles": [tile],
-            "feature": "area",
-            "direction": "high",
-            "n_per_tile": 1,
-        },
-        "metadata": {"verbose": 0},
-    }
-    targets = select_targets.run(discovery_pd, {})["target_discovery"]
-    validated = validate_targets(targets)
-
-    assert len(validated["targets"]) == 1
-    assert validated["targets"][0]["object_label"] == 2
 
 
 def _used_gpu(root: Path) -> bool:
@@ -384,10 +356,7 @@ def test_real_cellpose_object_analysis_end_to_end(tmp_path, cellpose_device):
     assert _used_gpu(tmp_path) is (cellpose_device == "cuda")
     assert tile["objects"]["n_objects"] > 0
     assert tile["objects"]["properties"]["object_id"][0].startswith("IHC_r000_c000_obj")
-    assert all(
-        isinstance(value, float)
-        for value in tile["objects"]["properties"]["stage_x_um"]
-    )
+    assert all(isinstance(value, float) for value in tile["objects"]["properties"]["stage_x_um"])
 
 
 @pytest.mark.cellpose
@@ -450,15 +419,26 @@ def test_a_single_object_field_survives_to_builtin_and_the_table():
     assert build_object_table.to_builtin(np.int32(5)) == 5
     assert detect_objects.to_builtin(np.array([2.0])) == [2.0]
 
-    props = {name: np.array([value]) for name, value in [
-        ("label", 1), ("centroid-0", 5.0), ("centroid-1", 6.0),
-        ("bbox-0", 1), ("bbox-1", 2), ("bbox-2", 9), ("bbox-3", 9),
-        ("area", 64.0), ("intensity_mean", 10.0), ("eccentricity", 0.5),
-    ]}
+    props = {
+        name: np.array([value])
+        for name, value in [
+            ("label", 1),
+            ("centroid-0", 5.0),
+            ("centroid-1", 6.0),
+            ("bbox-0", 1),
+            ("bbox-1", 2),
+            ("bbox-2", 9),
+            ("bbox-3", 9),
+            ("area", 64.0),
+            ("intensity_mean", 10.0),
+            ("eccentricity", 0.5),
+        ]
+    }
     data = {
         "metadata": {},
         "input": {
-            "tile_id": ["overview", 2, 0], "tile_stage_xy_um": [0.0, 0.0],
+            "tile_id": ["overview", 2, 0],
+            "tile_stage_xy_um": [0.0, 0.0],
             "source_pixel_size_um": [4.0, 4.0],
             "source_image_size_px": [64, 64],
             "image_to_stage": [[1, 0], [0, 1]],

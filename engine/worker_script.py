@@ -87,8 +87,7 @@ def _environment_record():
         for dist in metadata.distributions()
     )
     return {
-        "environment": os.environ.get("CONDA_DEFAULT_ENV")
-        or os.path.basename(sys.prefix),
+        "environment": os.environ.get("CONDA_DEFAULT_ENV") or os.path.basename(sys.prefix),
         "python": platform.python_version(),
         "fingerprint": hashlib.sha256("\n".join(installed).encode()).hexdigest()[:16],
     }
@@ -178,8 +177,9 @@ def main():
     parser = argparse.ArgumentParser(description="Pipeline engine worker")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--authkey", required=True)
-    parser.add_argument("--parent-pid", type=int, default=None,
-                        help="Engine PID to watch; defaults to os.getppid()")
+    parser.add_argument(
+        "--parent-pid", type=int, default=None, help="Engine PID to watch; defaults to os.getppid()"
+    )
     args = parser.parse_args()
 
     log_level = os.environ.get("ZMART_LOG_LEVEL", "WARNING")
@@ -190,13 +190,10 @@ def main():
     )
     logger = logging.getLogger("engine.worker")
 
-    parent_pid = (args.parent_pid if args.parent_pid is not None
-                  else os.getppid())
-    logger.info("Worker starting: pid=%d, port=%d, parent=%d",
-                os.getpid(), args.port, parent_pid)
+    parent_pid = args.parent_pid if args.parent_pid is not None else os.getppid()
+    logger.info("Worker starting: pid=%d, port=%d, parent=%d", os.getpid(), args.port, parent_pid)
 
-    conn = Client(("localhost", args.port),
-                  authkey=bytes.fromhex(args.authkey))
+    conn = Client(("localhost", args.port), authkey=bytes.fromhex(args.authkey))
     logger.info("Connected to parent on port %d", args.port)
 
     module_cache = {}
@@ -226,8 +223,7 @@ def main():
             step_path, pipeline_data, params = message
             step_name = os.path.basename(step_path)
             request_count += 1
-            logger.info("Request #%d: step=%s (%d bytes)",
-                        request_count, step_name, len(raw))
+            logger.info("Request #%d: step=%s (%d bytes)", request_count, step_name, len(raw))
 
             # Load or reuse cached module
             if step_path not in module_cache:
@@ -242,25 +238,24 @@ def main():
 
             try:
                 result = module.run(pipeline_data, state, **params)
-                result = _stamp(
-                    result, os.path.splitext(step_name)[0], env_record, module_to_dists
-                )
+                result = _stamp(result, os.path.splitext(step_name)[0], env_record, module_to_dists)
                 response = ("ok", result)
                 logger.info("Request #%d completed", request_count)
             except Exception:
                 tb = traceback.format_exc()
                 logger.error("Request #%d failed:\n%s", request_count, tb)
-                response = ("error", {
-                    "message": traceback.format_exception_only(
-                        *sys.exc_info()[:2])[0].strip(),
-                    "traceback": tb,
-                })
+                response = (
+                    "error",
+                    {
+                        "message": traceback.format_exception_only(*sys.exc_info()[:2])[0].strip(),
+                        "traceback": tb,
+                    },
+                )
 
             conn.send_bytes(pickle.dumps(response, protocol=2))
     finally:
         conn.close()
-        logger.info("Worker exiting: pid=%d, requests=%d",
-                    os.getpid(), request_count)
+        logger.info("Worker exiting: pid=%d, requests=%d", os.getpid(), request_count)
 
 
 if __name__ == "__main__":

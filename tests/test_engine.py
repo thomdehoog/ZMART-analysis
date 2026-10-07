@@ -83,7 +83,6 @@ def _capture_exception(errors, function):
 
 
 class TestErrors(unittest.TestCase):
-
     def test_worker_hierarchy(self):
         self.assertTrue(issubclass(WorkerSpawnError, WorkerError))
         self.assertTrue(issubclass(WorkerCrashedError, WorkerError))
@@ -113,7 +112,6 @@ class TestErrors(unittest.TestCase):
 
 
 class TestLoader(unittest.TestCase):
-
     def test_defaults_no_metadata(self):
         path = _temp_step("def run(pd, state, **p): return pd")
         s = get_step_settings(Path(path))
@@ -156,7 +154,6 @@ class TestLoader(unittest.TestCase):
 
 
 class TestPhases(unittest.TestCase):
-
     def test_no_scope_single_phase(self):
         steps = [{"a": None}, {"b": {"x": 1}}]
         phases = split_phases(steps)
@@ -183,11 +180,9 @@ class TestPhases(unittest.TestCase):
         phases = split_phases(steps)
         self.assertEqual(len(phases), 2)
         self.assertIsNone(phases[0].scope)
-        self.assertEqual([s.name for s in phases[0].steps],
-                         ["preprocess", "segment"])
+        self.assertEqual([s.name for s in phases[0].steps], ["preprocess", "segment"])
         self.assertEqual(phases[1].scope, "group")
-        self.assertEqual([s.name for s in phases[1].steps],
-                         ["stitch", "analyze"])
+        self.assertEqual([s.name for s in phases[1].steps], ["stitch", "analyze"])
 
     def test_two_scopes_three_phases(self):
         steps = [
@@ -230,9 +225,9 @@ class TestPhases(unittest.TestCase):
 
 
 class TestWorkerProtocol(unittest.TestCase):
-
     def test_execute_returns_result(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             def run(pd, state, **p):
                 pd["ran"] = True
@@ -250,6 +245,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_different_steps_same_worker(self):
         from engine.workers import Worker
+
         path_a = _temp_step("""
             def run(pd, state, **p): pd["from"] = "a"; return pd
         """)
@@ -267,6 +263,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_module_caching(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             _n = 0
             def run(pd, state, **p):
@@ -287,6 +284,7 @@ class TestWorkerProtocol(unittest.TestCase):
     def test_state_dict_persists(self):
         """State dict persists across calls for the same step."""
         from engine.workers import Worker
+
         path = _temp_step("""
             def run(pd, state, **p):
                 state.setdefault("count", 0)
@@ -308,6 +306,7 @@ class TestWorkerProtocol(unittest.TestCase):
     def test_state_dict_isolated_per_step(self):
         """Different steps get separate state dicts."""
         from engine.workers import Worker
+
         path_a = _temp_step("""
             def run(pd, state, **p):
                 state.setdefault("key", "a")
@@ -331,6 +330,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_persistent_reuses_process(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -345,6 +345,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_shutdown_and_respawn(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -360,9 +361,12 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_complex_types(self):
         from engine.workers import Worker
+
         path = _temp_step("def run(pd, state, **p): return pd")
         data = {
-            "tuple": (1, 2), "set": {3, 4}, "bytes": b"\xff",
+            "tuple": (1, 2),
+            "set": {3, 4},
+            "bytes": b"\xff",
             "nested": {"a": [None, True, {"b": 2.5}]},
         }
         w = Worker(environment=None, connect_timeout=10)
@@ -376,6 +380,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_worker_status(self):
         from engine.workers import Worker
+
         w = Worker(environment=None, connect_timeout=10)
         s = w.status
         self.assertEqual(s["state"], "stopped")
@@ -386,9 +391,9 @@ class TestWorkerProtocol(unittest.TestCase):
 
 
 class TestWorkerErrorPaths(unittest.TestCase):
-
     def test_crash_raises_worker_crashed(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             import os
             def run(pd, state, **p): os._exit(1)
@@ -400,6 +405,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
 
     def test_timeout_raises_worker_timeout_error(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             import time
             def run(pd, state, **p): time.sleep(30); return pd
@@ -414,6 +420,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
 
     def test_step_error_has_traceback(self):
         from engine.workers import Worker
+
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("test")
         """)
@@ -470,15 +477,21 @@ class TestWorkerErrorPaths(unittest.TestCase):
         port = listener.address[1]
         listener._listener._socket.settimeout(15)
 
-        fake_parent = _sp.Popen(
-            [sys.executable, "-c", "import time; time.sleep(300)"]
+        fake_parent = _sp.Popen([sys.executable, "-c", "import time; time.sleep(300)"])
+        worker = _sp.Popen(
+            [
+                sys.executable,
+                str(WORKER_SCRIPT),
+                "--port",
+                str(port),
+                "--authkey",
+                authkey.hex(),
+                "--parent-pid",
+                str(fake_parent.pid),
+            ],
+            stdout=_sp.DEVNULL,
+            stderr=_sp.DEVNULL,
         )
-        worker = _sp.Popen([
-            sys.executable, str(WORKER_SCRIPT),
-            "--port", str(port),
-            "--authkey", authkey.hex(),
-            "--parent-pid", str(fake_parent.pid),
-        ], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
 
         try:
             conn = listener.accept()  # worker connected -> it is running
@@ -522,19 +535,15 @@ class TestWorkerErrorPaths(unittest.TestCase):
                 self.closed.append(handle)
 
         cases = (
-            (0x00000102, True),   # WAIT_TIMEOUT: process still running
+            (0x00000102, True),  # WAIT_TIMEOUT: process still running
             (0x00000000, False),  # WAIT_OBJECT_0: process terminated
             (0xFFFFFFFF, False),  # WAIT_FAILED: do not claim it is alive
         )
         for wait_result, expected in cases:
             with self.subTest(wait_result=wait_result):
                 kernel32 = FakeKernel32(wait_result)
-                self.assertEqual(
-                    _windows_process_alive(4321, kernel32), expected
-                )
-                self.assertEqual(
-                    kernel32.open_args, (0x00100000, False, 4321)
-                )
+                self.assertEqual(_windows_process_alive(4321, kernel32), expected)
+                self.assertEqual(kernel32.open_args, (0x00100000, False, 4321))
                 self.assertEqual(kernel32.wait_args, (123, 0))
                 self.assertEqual(kernel32.closed, [123])
 
@@ -547,7 +556,6 @@ class TestWorkerErrorPaths(unittest.TestCase):
 
 
 class TestPool(unittest.TestCase):
-
     def test_a_steps_concurrency_is_its_own_at_each_width(self):
         """Two pipelines sharing a step file may run it at different widths.
 
@@ -556,6 +564,7 @@ class TestPool(unittest.TestCase):
         the other way round, depending on registration order.
         """
         from engine.workers import WorkerPool
+
         pool = WorkerPool()
         try:
             one = pool._get_semaphore("/steps/detect.py", 1)
@@ -568,6 +577,7 @@ class TestPool(unittest.TestCase):
 
     def test_per_env_worker_reuse(self):
         from engine.workers import WorkerPool
+
         path = _temp_step("""
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
@@ -580,6 +590,7 @@ class TestPool(unittest.TestCase):
 
     def test_shutdown_before_use(self):
         from engine.workers import WorkerPool
+
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool()
         pool.shutdown_all()
@@ -588,6 +599,7 @@ class TestPool(unittest.TestCase):
 
     def test_error_through_pool(self):
         from engine.workers import WorkerPool
+
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("pool err")
         """)
@@ -599,13 +611,13 @@ class TestPool(unittest.TestCase):
 
     def test_reaper_removes_idle(self):
         from engine.workers import WorkerPool
+
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=0.2)
         pool.execute(None, path, {}, {}, timeout=10)
 
         env_pool = pool._env_pools[None]
-        self.assertTrue(len(env_pool._idle) > 0
-                        or len(env_pool._busy) > 0)
+        self.assertTrue(len(env_pool._idle) > 0 or len(env_pool._busy) > 0)
 
         time.sleep(0.4)
         env_pool.reap_idle()
@@ -620,6 +632,7 @@ class TestPool(unittest.TestCase):
         minutes after the last one found them reaped and paid it again.
         """
         from engine.workers import Worker, WorkerPool
+
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=None)
         pool.execute(None, path, {}, {}, timeout=10)
@@ -636,6 +649,7 @@ class TestPool(unittest.TestCase):
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
         from engine.workers import WorkerPool
+
         path = _temp_step("""
             import time
             def run(pd, state, **p):
@@ -660,12 +674,12 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
         self.assertEqual(len(results), 2)
-        self.assertGreater(elapsed, 0.5,
-                           "max_workers=1 should serialize execution")
+        self.assertGreater(elapsed, 0.5, "max_workers=1 should serialize execution")
 
     def test_semaphore_allows_parallelism(self):
         """max_workers=4 allows parallel execution."""
         from engine.workers import WorkerPool
+
         path = _temp_step("""
             import time
             def run(pd, state, **p):
@@ -695,19 +709,18 @@ class TestPool(unittest.TestCase):
         # a wall-clock limit failed on slow two-core machines.
         last_start = max(r["start"] for r in results)
         first_end = min(r["end"] for r in results)
-        self.assertLess(last_start, first_end,
-                        "max_workers=4 should allow parallel execution")
+        self.assertLess(last_start, first_end, "max_workers=4 should allow parallel execution")
 
 
 # ---- Engine (register) -----------------------------------------------
 
 
 class TestEngineRegister(unittest.TestCase):
-
     def test_register_simple(self):
         _temp_step("def run(pd, state, **p): return pd", name="reg_a")
         yaml = _temp_yaml("wf:\n  - reg_a:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
 
@@ -715,6 +728,7 @@ class TestEngineRegister(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="reg_b")
         yaml = _temp_yaml("wf:\n  - reg_b:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             with self.assertRaises(ValueError):
@@ -724,6 +738,7 @@ class TestEngineRegister(unittest.TestCase):
         path = Path(_TEMP_DIR) / f"bad_{_next_id()}.yaml"
         path.write_text("metadata:\n  functions_dir: .")
         from engine import Engine
+
         with Engine() as e:
             with self.assertRaises(ValueError):
                 e.register("bad", str(path))
@@ -763,13 +778,17 @@ class TestEngineRegister(unittest.TestCase):
         """Provenance: each step's result names its environment, the Python
         it ran on, a fingerprint of every installed package, and the
         version of each package it actually imported."""
-        _temp_step("""
+        _temp_step(
+            """
             import yaml
             def run(pd, state, **p):
                 pd["seen"] = True
                 return pd
-        """, name="reg_provenance")
+        """,
+            name="reg_provenance",
+        )
         from engine import Engine
+
         with Engine() as e:
             e.register("test", _temp_yaml("wf:\n  - reg_provenance:"))
             e.submit("test", {})
@@ -784,15 +803,18 @@ class TestEngineRegister(unittest.TestCase):
 
 
 class TestEngineSubmit(unittest.TestCase):
-
     def test_simple_submit(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["ok"] = True
                 return pd
-        """, name="sub_a")
+        """,
+            name="sub_a",
+        )
         yaml = _temp_yaml("wf:\n  - sub_a:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -801,18 +823,25 @@ class TestEngineSubmit(unittest.TestCase):
         self.assertTrue(results[0]["ok"])
 
     def test_multi_step(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["s1"] = 1
                 return pd
-        """, name="ms_a")
-        _temp_step("""
+        """,
+            name="ms_a",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["s2"] = pd["s1"] + 1
                 return pd
-        """, name="ms_b")
+        """,
+            name="ms_b",
+        )
         yaml = _temp_yaml("wf:\n  - ms_a:\n  - ms_b:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -821,18 +850,25 @@ class TestEngineSubmit(unittest.TestCase):
         self.assertEqual(results[0]["s2"], 2)
 
     def test_data_flows_between_steps(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["from_a"] = "hello"
                 return pd
-        """, name="df_a")
-        _temp_step("""
+        """,
+            name="df_a",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["saw"] = pd.get("from_a")
                 return pd
-        """, name="df_b")
+        """,
+            name="df_b",
+        )
         yaml = _temp_yaml("wf:\n  - df_a:\n  - df_b:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -843,6 +879,7 @@ class TestEngineSubmit(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="inp")
         yaml = _temp_yaml("wf:\n  - inp:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {"key": "val"})
@@ -850,13 +887,17 @@ class TestEngineSubmit(unittest.TestCase):
         self.assertEqual(results[0]["input"]["key"], "val")
 
     def test_params_from_yaml(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["x"] = p.get("x")
                 return pd
-        """, name="par")
+        """,
+            name="par",
+        )
         yaml = _temp_yaml("wf:\n  - par:\n      x: 42")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -864,13 +905,17 @@ class TestEngineSubmit(unittest.TestCase):
         self.assertEqual(results[0]["x"], 42)
 
     def test_concurrent_submits(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["job"] = pd["input"]["job"]
                 return pd
-        """, name="conc")
+        """,
+            name="conc",
+        )
         yaml = _temp_yaml("wf:\n  - conc:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             for i in range(5):
@@ -884,45 +929,66 @@ class TestEngineSubmit(unittest.TestCase):
 
 
 class TestEngineScopes(unittest.TestCase):
-
     def test_two_carriers_at_once_keep_their_compartments_apart(self):
         """Tiles of two carriers arrive interleaved, with the same
         compartment numbers on both. Each compartment is summed, then each
         carrier sums only its own compartments."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["value"] = pd["input"]["value"]
                 return pd
-        """, name="carriers_tile")
-        _temp_step("""
+        """,
+            name="carriers_tile",
+        )
+        _temp_step(
+            """
             import time
             def run(pd, state, **p):
                 time.sleep(0.2)   # a slow compartment, so a carrier signal could overtake it
                 return {"compartment_sum": sum(r["value"] for r in pd["results"]),
                         "compartment": pd["metadata"]["scope"]["compartment"]}
-        """, name="carriers_compartment")
-        _temp_step("""
+        """,
+            name="carriers_compartment",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 return {"carrier_sum": sum(r["compartment_sum"] for r in pd["results"]),
                         "compartments": sorted(r["compartment"] for r in pd["results"]),
                         "carrier": pd["metadata"]["scope"]["carrier"]}
-        """, name="carriers_carrier")
+        """,
+            name="carriers_carrier",
+        )
         yaml = _temp_yaml(
             "wf:\n  - carriers_tile:\n"
             "  - carriers_compartment:\n      scope: compartment\n"
             "  - carriers_carrier:\n      scope: carrier"
         )
         from engine import Engine
+
         with Engine(max_concurrent=8) as e:
             e.register("test", yaml)
             layout = [(1, 1, 1), (2, 1, 100), (1, 2, 2), (2, 2, 200)]
             for carrier, compartment, value in layout:
                 for _ in range(3):
-                    e.submit("test", {"value": value}, scope={"carrier": carrier, "compartment": compartment})
-                e.submit("test", {"value": 0}, scope={"carrier": carrier, "compartment": compartment},
-                         complete="compartment")
-            e.submit("test", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
-            e.submit("test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier")
+                    e.submit(
+                        "test",
+                        {"value": value},
+                        scope={"carrier": carrier, "compartment": compartment},
+                    )
+                e.submit(
+                    "test",
+                    {"value": 0},
+                    scope={"carrier": carrier, "compartment": compartment},
+                    complete="compartment",
+                )
+            e.submit(
+                "test", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier"
+            )
+            e.submit(
+                "test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier"
+            )
             results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
         carriers = {r["carrier"]: r for r in results if "carrier_sum" in r}
         self.assertEqual(carriers[1]["carrier_sum"], 3 * 1 + 3 * 2)
@@ -930,20 +996,25 @@ class TestEngineScopes(unittest.TestCase):
         self.assertEqual(carriers[1]["compartments"], [1, 2])
         self.assertEqual(carriers[2]["compartments"], [1, 2])
 
-
     def test_scope_collects_results(self):
         """Scoped step receives accumulated results from all jobs."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["tile"] = pd["input"]["tile"]
                 return pd
-        """, name="sc_seg")
-        _temp_step("""
+        """,
+            name="sc_seg",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 tiles = [r["tile"] for r in pd["results"]]
                 pd["tiles"] = sorted(tiles)
                 return pd
-        """, name="sc_stitch")
+        """,
+            name="sc_stitch",
+        )
         yaml = _temp_yaml("""
             wf:
               - sc_seg:
@@ -951,13 +1022,12 @@ class TestEngineScopes(unittest.TestCase):
                   scope: group
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             for i in range(3):
                 complete = "group" if i == 2 else None
-                e.submit("test", {"tile": i},
-                         scope={"group": "R1"},
-                         complete=complete)
+                e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
             results = _wait_for_results(e, "test", 4, timeout=15)
 
         # Should have 3 Phase 0 results + 1 scoped result
@@ -968,18 +1038,24 @@ class TestEngineScopes(unittest.TestCase):
         self.assertEqual(scoped[0]["tiles"], [0, 1, 2])
 
     def test_scope_preserves_submission_order(self):
-        _temp_step("""
+        _temp_step(
+            """
             import time
             def run(pd, state, **p):
                 time.sleep(0.05)
                 pd["val"] = pd["input"]["val"]
                 return pd
-        """, name="ord_step")
-        _temp_step("""
+        """,
+            name="ord_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["order"] = [r["val"] for r in pd["results"]]
                 return pd
-        """, name="ord_collect")
+        """,
+            name="ord_collect",
+        )
         yaml = _temp_yaml("""
             wf:
               - ord_step:
@@ -987,13 +1063,12 @@ class TestEngineScopes(unittest.TestCase):
                   scope: group
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             for i in range(5):
                 complete = "group" if i == 4 else None
-                e.submit("test", {"val": i},
-                         scope={"group": "G1"},
-                         complete=complete)
+                e.submit("test", {"val": i}, scope={"group": "G1"}, complete=complete)
             results = _wait_for_results(e, "test", 6, timeout=20)
 
         scoped = [r for r in results if r.get("_phase") == 1]
@@ -1002,16 +1077,22 @@ class TestEngineScopes(unittest.TestCase):
 
     def test_multiple_scope_groups(self):
         """Different scope groups are collected independently."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["val"] = pd["input"]["val"]
                 return pd
-        """, name="mg_step")
-        _temp_step("""
+        """,
+            name="mg_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["vals"] = sorted([r["val"] for r in pd["results"]])
                 return pd
-        """, name="mg_collect")
+        """,
+            name="mg_collect",
+        )
         yaml = _temp_yaml("""
             wf:
               - mg_step:
@@ -1019,17 +1100,16 @@ class TestEngineScopes(unittest.TestCase):
                   scope: group
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             # Group A: values 10, 20
             e.submit("test", {"val": 10}, scope={"group": "A"})
-            e.submit("test", {"val": 20}, scope={"group": "A"},
-                     complete="group")
+            e.submit("test", {"val": 20}, scope={"group": "A"}, complete="group")
             # Group B: values 30, 40, 50
             e.submit("test", {"val": 30}, scope={"group": "B"})
             e.submit("test", {"val": 40}, scope={"group": "B"})
-            e.submit("test", {"val": 50}, scope={"group": "B"},
-                     complete="group")
+            e.submit("test", {"val": 50}, scope={"group": "B"}, complete="group")
             results = _wait_for_results(e, "test", 7, timeout=20)
 
         scoped = [r for r in results if r.get("_phase") == 1]
@@ -1039,22 +1119,31 @@ class TestEngineScopes(unittest.TestCase):
 
     def test_complete_list(self):
         """complete parameter accepts a list of scope levels."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["v"] = pd["input"]["v"]
                 return pd
-        """, name="cl_step")
-        _temp_step("""
+        """,
+            name="cl_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["group_vals"] = [r["v"] for r in pd["results"]]
                 return pd
-        """, name="cl_group")
-        _temp_step("""
+        """,
+            name="cl_group",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["all_vals"] = [r.get("group_vals", [])
                                    for r in pd["results"]]
                 return pd
-        """, name="cl_all")
+        """,
+            name="cl_all",
+        )
         yaml = _temp_yaml("""
             wf:
               - cl_step:
@@ -1064,11 +1153,11 @@ class TestEngineScopes(unittest.TestCase):
                   scope: all
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {"v": 1}, scope={"group": "G1"})
-            e.submit("test", {"v": 2}, scope={"group": "G1"},
-                     complete=["group", "all"])
+            e.submit("test", {"v": 2}, scope={"group": "G1"}, complete=["group", "all"])
             results = _wait_for_results(e, "test", 4, timeout=20)
 
         phase2 = [r for r in results if r.get("_phase") == 2]
@@ -1076,16 +1165,22 @@ class TestEngineScopes(unittest.TestCase):
 
     def test_all_scope_collects_everything(self):
         """Scope 'all' (not a key in any scope dict) collects everything."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["v"] = pd["input"]["v"]
                 return pd
-        """, name="al_step")
-        _temp_step("""
+        """,
+            name="al_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["total"] = sum(r["v"] for r in pd["results"])
                 return pd
-        """, name="al_sum")
+        """,
+            name="al_sum",
+        )
         yaml = _temp_yaml("""
             wf:
               - al_step:
@@ -1093,12 +1188,12 @@ class TestEngineScopes(unittest.TestCase):
                   scope: all
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {"v": 10}, scope={"group": "A"})
             e.submit("test", {"v": 20}, scope={"group": "B"})
-            e.submit("test", {"v": 30}, scope={"group": "C"},
-                     complete="all")
+            e.submit("test", {"v": 30}, scope={"group": "C"}, complete="all")
             results = _wait_for_results(e, "test", 4, timeout=15)
 
         scoped = [r for r in results if r.get("_phase") == 1]
@@ -1108,21 +1203,27 @@ class TestEngineScopes(unittest.TestCase):
     def test_failures_reach_scoped_step(self):
         """Phase 0 failures are aggregated into pipeline_data['failures']
         for the scoped step to inspect."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 if pd["input"]["v"] == 99:
                     raise ValueError("deliberate failure")
                 pd["v"] = pd["input"]["v"]
                 return pd
-        """, name="fr_step")
-        _temp_step("""
+        """,
+            name="fr_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["n_results"] = len(pd["results"])
                 pd["n_failures"] = len(pd["failures"])
                 pd["failure_steps"] = [f.get("step") for f in pd["failures"]]
                 pd["failure_errors"] = [f.get("error") for f in pd["failures"]]
                 return pd
-        """, name="fr_collect")
+        """,
+            name="fr_collect",
+        )
         yaml = _temp_yaml("""
             wf:
               - fr_step:
@@ -1130,12 +1231,12 @@ class TestEngineScopes(unittest.TestCase):
                   scope: group
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {"v": 1}, scope={"group": "G"})
             e.submit("test", {"v": 99}, scope={"group": "G"})
-            e.submit("test", {"v": 2}, scope={"group": "G"},
-                     complete="group")
+            e.submit("test", {"v": 2}, scope={"group": "G"}, complete="group")
             results = _wait_for_results(e, "test", 3, timeout=15)
 
         scoped = [r for r in results if r.get("_phase") == 1]
@@ -1147,19 +1248,25 @@ class TestEngineScopes(unittest.TestCase):
 
     def test_scope_collection_prunes_consumed_failures(self):
         """Consumed scope failures leave status; unrelated failures remain."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 if pd["input"].get("fail"):
                     raise ValueError(f"failed {pd['input']['group']}")
                 pd["group"] = pd["input"]["group"]
                 return pd
-        """, name="pf_step")
-        _temp_step("""
+        """,
+            name="pf_step",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["n_results"] = len(pd["results"])
                 pd["failure_errors"] = [f["error"] for f in pd["failures"]]
                 return pd
-        """, name="pf_collect")
+        """,
+            name="pf_collect",
+        )
         yaml = _temp_yaml("""
             wf:
               - pf_step:
@@ -1167,16 +1274,14 @@ class TestEngineScopes(unittest.TestCase):
                   scope: group
         """)
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
-            e.submit("test", {"group": "A", "fail": True},
-                     scope={"group": "A"})
-            e.submit("test", {"group": "B", "fail": True},
-                     scope={"group": "B"})
+            e.submit("test", {"group": "A", "fail": True}, scope={"group": "A"})
+            e.submit("test", {"group": "B", "fail": True}, scope={"group": "B"})
             _wait_for_status(e, "test", expected_total=2, timeout=15)
 
-            e.submit("test", {"group": "A", "fail": False},
-                     scope={"group": "A"}, complete="group")
+            e.submit("test", {"group": "A", "fail": False}, scope={"group": "A"}, complete="group")
             results = _wait_for_results(e, "test", 2, timeout=15)
             status = e.status("test")
 
@@ -1198,11 +1303,11 @@ class TestEngineScopes(unittest.TestCase):
 
 
 class TestEngineResults(unittest.TestCase):
-
     def test_results_consumed_on_retrieval(self):
         _temp_step("def run(pd, state, **p): return pd", name="drain")
         yaml = _temp_yaml("wf:\n  - drain:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1215,6 +1320,7 @@ class TestEngineResults(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="tag")
         yaml = _temp_yaml("wf:\n  - tag:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1224,6 +1330,7 @@ class TestEngineResults(unittest.TestCase):
 
     def test_unregistered_pipeline_raises(self):
         from engine import Engine
+
         with Engine() as e:
             with self.assertRaises(KeyError):
                 e.results("nonexistent")
@@ -1233,11 +1340,11 @@ class TestEngineResults(unittest.TestCase):
 
 
 class TestEngineConcurrency(unittest.TestCase):
-
     def test_a_yaml_max_workers_below_one_is_refused_at_register(self):
         _temp_step("def run(pd, state, **p): return pd", name="narrow")
         yaml = _temp_yaml("wf:\n  - narrow:\n      max_workers: 0")
         from engine import Engine
+
         with Engine() as e:
             with self.assertRaises(ValueError):
                 e.register("test", yaml)
@@ -1246,18 +1353,23 @@ class TestEngineConcurrency(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="wide")
         yaml = _temp_yaml("wf:\n  - wide:\n      max_workers: 3")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             self.assertEqual(e._pipelines["test"].step_settings["wide"]["max_workers"], 3)
 
     def test_many_concurrent_jobs(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["idx"] = pd["input"]["idx"]
                 return pd
-        """, name="many")
+        """,
+            name="many",
+        )
         yaml = _temp_yaml("wf:\n  - many:")
         from engine import Engine
+
         with Engine(max_concurrent=8) as e:
             e.register("test", yaml)
             for i in range(20):
@@ -1271,18 +1383,21 @@ class TestEngineConcurrency(unittest.TestCase):
 
 
 class TestEngineErrors(unittest.TestCase):
-
     def test_failed_job_does_not_crash_pipeline(self):
         """Other jobs continue when one fails."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 if pd["input"].get("fail"):
                     raise ValueError("deliberate failure")
                 pd["ok"] = True
                 return pd
-        """, name="graceful")
+        """,
+            name="graceful",
+        )
         yaml = _temp_yaml("wf:\n  - graceful:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {"fail": True})
@@ -1293,11 +1408,15 @@ class TestEngineErrors(unittest.TestCase):
         self.assertGreaterEqual(status["failed"], 1)
 
     def test_failures_in_status(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p): raise RuntimeError("boom")
-        """, name="fail_status")
+        """,
+            name="fail_status",
+        )
         yaml = _temp_yaml("wf:\n  - fail_status:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1307,11 +1426,15 @@ class TestEngineErrors(unittest.TestCase):
         self.assertIn("boom", status["failures"][0]["error"])
 
     def test_return_non_dict_raises(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p): return "not a dict"
-        """, name="bad_ret")
+        """,
+            name="bad_ret",
+        )
         yaml = _temp_yaml("wf:\n  - bad_ret:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1323,11 +1446,11 @@ class TestEngineErrors(unittest.TestCase):
 
 
 class TestEngineLifecycle(unittest.TestCase):
-
     def test_context_manager(self):
         _temp_step("def run(pd, state, **p): return pd", name="ctx")
         yaml = _temp_yaml("wf:\n  - ctx:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1337,6 +1460,7 @@ class TestEngineLifecycle(unittest.TestCase):
     def test_shutdown_then_register_raises(self):
         """register() after shutdown raises RuntimeError."""
         from engine import Engine
+
         _temp_step("def run(pd, state, **p): return pd", name="shut_reg")
         yaml = _temp_yaml("wf:\n  - shut_reg:")
         e = Engine()
@@ -1365,9 +1489,7 @@ class TestEngineLifecycle(unittest.TestCase):
         e = Engine()
         with patch("engine.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
-                target=lambda: _capture_exception(
-                    errors, lambda: e.register("test", yaml)
-                )
+                target=lambda: _capture_exception(errors, lambda: e.register("test", yaml))
             )
             thread.start()
             self.assertTrue(parse_started.wait(timeout=5))
@@ -1402,9 +1524,7 @@ class TestEngineLifecycle(unittest.TestCase):
         e = Engine()
         with patch("engine.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
-                target=lambda: _capture_exception(
-                    errors, lambda: e.register("late", yaml)
-                )
+                target=lambda: _capture_exception(errors, lambda: e.register("late", yaml))
             )
             thread.start()
             self.assertTrue(parse_started.wait(timeout=5))
@@ -1436,6 +1556,7 @@ class TestEngineLifecycle(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="shut_sub")
         yaml = _temp_yaml("wf:\n  - shut_sub:")
         from engine import Engine
+
         e = Engine()
         e.register("test", yaml)
         e.shutdown()
@@ -1444,17 +1565,21 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_double_shutdown(self):
         from engine import Engine
+
         e = Engine()
         e.shutdown()
         e.shutdown()  # should not raise
 
     def test_shutdown_without_wait_cancels_queue_and_closes_workers(self):
-        _temp_step("""
+        _temp_step(
+            """
             import time
             def run(pd, state, **p):
                 time.sleep(0.3)
                 return pd
-        """, name="shutdown_slow")
+        """,
+            name="shutdown_slow",
+        )
         yaml = _temp_yaml("wf:\n  - shutdown_slow:")
         from engine import Engine
 
@@ -1490,11 +1615,11 @@ class TestEngineLifecycle(unittest.TestCase):
 
 
 class TestEngineStatus(unittest.TestCase):
-
     def test_status_single_pipeline(self):
         _temp_step("def run(pd, state, **p): return pd", name="st")
         yaml = _temp_yaml("wf:\n  - st:")
         from engine import Engine
+
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
@@ -1508,6 +1633,7 @@ class TestEngineStatus(unittest.TestCase):
         _temp_step("def run(pd, state, **p): return pd", name="st2")
         yaml = _temp_yaml("wf:\n  - st2:")
         from engine import Engine
+
         with Engine() as e:
             e.register("a", yaml)
             e.register("b", yaml)
@@ -1517,6 +1643,7 @@ class TestEngineStatus(unittest.TestCase):
 
     def test_status_nonexistent_raises(self):
         from engine import Engine
+
         with Engine() as e:
             with self.assertRaises(KeyError):
                 e.status("ghost")
@@ -1527,18 +1654,24 @@ class TestEngineStatus(unittest.TestCase):
         # list, not held in a separate counter that keeps the stale failure
         # and desyncs status() -- which also made the documented poll pattern
         # `status["failures"][0] if status["failed"]` raise IndexError.
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 if pd["input"]["tile"] == 1:
                     raise ValueError("bad tile")
                 pd["tile"] = pd["input"]["tile"]
                 return pd
-        """, name="drift_seg")
-        _temp_step("""
+        """,
+            name="drift_seg",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["tiles"] = sorted(r["tile"] for r in pd["results"])
                 return pd
-        """, name="drift_stitch")
+        """,
+            name="drift_stitch",
+        )
         yaml = _temp_yaml("""
             wf:
               - drift_seg:
@@ -1551,8 +1684,7 @@ class TestEngineStatus(unittest.TestCase):
             e.register("test", yaml)
             for i in range(3):
                 complete = "group" if i == 2 else None
-                e.submit("test", {"tile": i},
-                         scope={"group": "R1"}, complete=complete)
+                e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
 
             # 2 surviving Phase-0 results + 1 scoped result (the failed tile
             # produces no Phase-0 result).
@@ -1573,12 +1705,15 @@ class TestEngineStatus(unittest.TestCase):
             _ = status["failures"][0]
 
     def test_status_tracks_pending_and_running_jobs(self):
-        _temp_step("""
+        _temp_step(
+            """
             import time
             def run(pd, state, **p):
                 time.sleep(0.3)
                 return pd
-        """, name="status_slow")
+        """,
+            name="status_slow",
+        )
         yaml = _temp_yaml("wf:\n  - status_slow:")
         from engine import Engine
 
@@ -1610,16 +1745,19 @@ class TestEngineStatus(unittest.TestCase):
 
 
 class TestEngineMultiPipeline(unittest.TestCase):
-
     def test_two_pipelines_shared_workers(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["from"] = p.get("from", "unknown")
                 return pd
-        """, name="shared")
+        """,
+            name="shared",
+        )
         yaml_a = _temp_yaml("wf_a:\n  - shared:\n      from: a")
         yaml_b = _temp_yaml("wf_b:\n  - shared:\n      from: b")
         from engine import Engine
+
         with Engine() as e:
             e.register("a", yaml_a)
             e.register("b", yaml_b)
@@ -1641,15 +1779,19 @@ class TestEnginePriority(unittest.TestCase):
 
     def test_higher_priority_runs_before_lower(self):
         """High-priority pending jobs execute before low-priority pending ones."""
-        _temp_step("""
+        _temp_step(
+            """
             import time
             def run(pd, state, **p):
                 time.sleep(0.15)
                 pd["mark"] = pd["input"]["mark"]
                 return pd
-        """, name="prio_step")
+        """,
+            name="prio_step",
+        )
         yaml = _temp_yaml("wf:\n  - prio_step:")
         from engine import Engine
+
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
             # First submit grabs the only worker thread immediately.
@@ -1677,13 +1819,17 @@ class TestEnginePriority(unittest.TestCase):
 
     def test_default_priority_preserves_fifo(self):
         """No priority specified -> submission order is preserved."""
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["i"] = pd["input"]["i"]
                 return pd
-        """, name="fifo_step")
+        """,
+            name="fifo_step",
+        )
         yaml = _temp_yaml("wf:\n  - fifo_step:")
         from engine import Engine
+
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
             for i in range(5):
@@ -1694,16 +1840,22 @@ class TestEnginePriority(unittest.TestCase):
         self.assertEqual(order, [0, 1, 2, 3, 4])
 
     def test_scope_completion_does_not_block_lower_priority_phase0(self):
-        _temp_step("""
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["value"] = pd["input"]["value"]
                 return pd
-        """, name="priority_scoped_input")
-        _temp_step("""
+        """,
+            name="priority_scoped_input",
+        )
+        _temp_step(
+            """
             def run(pd, state, **p):
                 pd["total"] = sum(item["value"] for item in pd["results"])
                 return pd
-        """, name="priority_scoped_collect")
+        """,
+            name="priority_scoped_collect",
+        )
         yaml = _temp_yaml("""
             wf:
               - priority_scoped_input:
@@ -1733,30 +1885,41 @@ class TestEnginePriority(unittest.TestCase):
 
 
 class TestPackageAPI(unittest.TestCase):
-
     def test_public_imports(self):
         import engine
-        for name in ("Engine", "WorkerError", "WorkerSpawnError", "WorkerCrashedError",
-                     "WorkerTimeoutError", "StepExecutionError", "ScopeError"):
+
+        for name in (
+            "Engine",
+            "WorkerError",
+            "WorkerSpawnError",
+            "WorkerCrashedError",
+            "WorkerTimeoutError",
+            "StepExecutionError",
+            "ScopeError",
+        ):
             self.assertTrue(hasattr(engine, name), name)
 
     def test_version(self):
         import engine
+
         self.assertEqual(engine.__version__, "1.0.0rc1")
 
     def test_engine_in_all(self):
         import engine
+
         self.assertIn("Engine", engine.__all__)
 
 
 # ---- The brake: a shutdown that does not wait ---------------------------
+
 
 def _alive(pid):
     """Whether a process is still running, on either platform."""
     if sys.platform == "win32":
         out = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         ).stdout
         return f'"{pid}"' in out
     try:
@@ -1808,12 +1971,14 @@ class TestTheBrake(unittest.TestCase):
     def test_a_shutdown_now_puts_a_busy_worker_down_at_once(self):
         from engine import WorkerCrashedError
         from engine.workers import Worker
+
         pid_file = os.path.join(_TEMP_DIR, f"busy_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=10)
         errors = []
-        t = threading.Thread(target=_capture_exception,
-                             args=(errors, lambda: w.execute(path, {}, {}, timeout=60)))
+        t = threading.Thread(
+            target=_capture_exception, args=(errors, lambda: w.execute(path, {}, {}, timeout=60))
+        )
         t.start()
         pid = _wait_for_file(pid_file)
         t0 = time.monotonic()
@@ -1829,20 +1994,25 @@ class TestTheBrake(unittest.TestCase):
         """Under a wrapper, as `conda run` is, the grandchild dies too."""
         import engine.workers as worker_module
         from engine.workers import Worker
-        wrapper = _temp_step("""
+
+        wrapper = _temp_step(
+            """
             import subprocess, sys
             # What `conda run -n <env> python` does: start the interpreter as a
             # child and wait for it -- the worker is this process's grandchild.
             raise SystemExit(subprocess.run([sys.executable] + sys.argv[1:]).returncode)
-        """, name="fake_conda_run")
+        """,
+            name="fake_conda_run",
+        )
         pid_file = os.path.join(_TEMP_DIR, f"tree_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         real = worker_module._the_python_of
         worker_module._the_python_of = lambda environment: [sys.executable, wrapper]
         try:
             w = Worker(environment="fake-env", connect_timeout=20)
-            t = threading.Thread(target=_capture_exception,
-                                 args=([], lambda: w.execute(path, {}, {}, timeout=60)))
+            t = threading.Thread(
+                target=_capture_exception, args=([], lambda: w.execute(path, {}, {}, timeout=60))
+            )
             t.start()
             grandchild = _wait_for_file(pid_file)
             wrapper_pid = w._process.pid
@@ -1857,14 +2027,18 @@ class TestTheBrake(unittest.TestCase):
 
     def test_an_engine_shut_down_without_waiting_stops_its_running_step(self):
         from engine import Engine
+
         pid_file = os.path.join(_TEMP_DIR, f"engine_{_next_id()}.pid")
-        _temp_step(f"""
+        _temp_step(
+            f"""
             import os, time
             def run(pd, state, **p):
                 open({str(pid_file)!r}, "w").write(str(os.getpid()))
                 time.sleep(30)
                 return pd
-        """, name="brake_step")
+        """,
+            name="brake_step",
+        )
         yaml = _temp_yaml("wf:\n  - brake_step:")
         e = Engine(execution_timeout=None)
         e.register("brake", yaml)
@@ -1872,7 +2046,9 @@ class TestTheBrake(unittest.TestCase):
         pid = _wait_for_file(pid_file)
         t0 = time.monotonic()
         e.shutdown(wait=False)
-        self.assertLess(time.monotonic() - t0, 3.0, "shutting down without waiting must not wait for the step")
+        self.assertLess(
+            time.monotonic() - t0, 3.0, "shutting down without waiting must not wait for the step"
+        )
         time.sleep(0.5)
         self.assertFalse(_alive(pid), "the step's worker must be gone")
         s = e.status("brake")
@@ -1890,12 +2066,16 @@ class TestTheBrake(unittest.TestCase):
         import engine.workers as worker_module
         from engine import WorkerCrashedError, WorkerSpawnError
         from engine.workers import Worker
-        wrapper = _temp_step("""
+
+        wrapper = _temp_step(
+            """
             import subprocess, sys, time
             # An activation takes its time before the interpreter is started.
             time.sleep(1.5)
             raise SystemExit(subprocess.run([sys.executable] + sys.argv[1:]).returncode)
-        """, name="slow_conda_run")
+        """,
+            name="slow_conda_run",
+        )
         pid_file = os.path.join(_TEMP_DIR, f"spawn_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         real = worker_module._the_python_of
@@ -1903,8 +2083,10 @@ class TestTheBrake(unittest.TestCase):
         try:
             w = Worker(environment="slow-env", connect_timeout=20)
             errors = []
-            t = threading.Thread(target=_capture_exception,
-                                 args=(errors, lambda: w.execute(path, {}, {}, timeout=60)))
+            t = threading.Thread(
+                target=_capture_exception,
+                args=(errors, lambda: w.execute(path, {}, {}, timeout=60)),
+            )
             t.start()
             time.sleep(0.5)
             wrapper_pid = w._process.pid
@@ -1915,8 +2097,10 @@ class TestTheBrake(unittest.TestCase):
             self.assertIsInstance(errors[0], (WorkerCrashedError, WorkerSpawnError))
             time.sleep(3.0)
             self.assertFalse(_alive(wrapper_pid), "the wrapper must be gone")
-            self.assertFalse(os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
-                             "an interpreter born after the press must be gone too")
+            self.assertFalse(
+                os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
+                "an interpreter born after the press must be gone too",
+            )
             self.assertFalse(w.is_alive())
         finally:
             worker_module._the_python_of = real
@@ -1932,6 +2116,7 @@ class TestTheBrake(unittest.TestCase):
         import engine.workers as worker_module
         from engine import WorkerCrashedError, WorkerSpawnError
         from engine.workers import Worker
+
         pid_file = os.path.join(_TEMP_DIR, f"late_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=20)
@@ -1956,8 +2141,10 @@ class TestTheBrake(unittest.TestCase):
         worker_module.subprocess.Popen = popen_that_remembers
         try:
             errors = []
-            t = threading.Thread(target=_capture_exception,
-                                 args=(errors, lambda: w.execute(path, {}, {}, timeout=60)))
+            t = threading.Thread(
+                target=_capture_exception,
+                args=(errors, lambda: w.execute(path, {}, {}, timeout=60)),
+            )
             t.start()
             time.sleep(0.3)
             w.shutdown(now=True)
@@ -1973,8 +2160,10 @@ class TestTheBrake(unittest.TestCase):
             time.sleep(2.0)
             for pid in spawned:
                 self.assertFalse(_alive(pid), "a process spawned after the press must be put down")
-            self.assertFalse(os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
-                             "the step must not be running anywhere")
+            self.assertFalse(
+                os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
+                "the step must not be running anywhere",
+            )
             self.assertFalse(w.is_alive())
         finally:
             worker_module.subprocess.Popen = real_popen

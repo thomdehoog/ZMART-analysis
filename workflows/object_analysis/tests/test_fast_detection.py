@@ -50,7 +50,7 @@ def test_finds_the_nuclei_that_were_laid_down():
     assert abs(found - laid) <= laid * 0.1, (found, laid)
     # Every object is a nucleus-sized thing, not a fragment or a clump.
     areas = np.bincount(masks.ravel())[1:]
-    disc = np.pi * 9 ** 2
+    disc = np.pi * 9**2
     assert areas.min() > disc / 8 and areas.max() < disc * 5
     assert used["threshold"] == 100.0 and used["background_radius_px"] == 18
 

@@ -94,6 +94,7 @@ class StepConfig:
     and the package versions in it, is recorded in every result under
     ``provenance``.
     """
+
     name: str
     params: dict[str, object]
     #: The pipeline's word on how many of this step may run at once, over
@@ -106,6 +107,7 @@ class StepConfig:
 @dataclass
 class Phase:
     """A group of sequential steps with an optional scope trigger."""
+
     steps: list[StepConfig]
     scope: str | None = None
 
@@ -141,9 +143,7 @@ def parse_yaml(yaml_path):
             break
 
     if not workflow_name:
-        raise ValueError(
-            "No workflow found in YAML (need a key other than 'metadata')"
-        )
+        raise ValueError("No workflow found in YAML (need a key other than 'metadata')")
 
     steps = config[workflow_name] or []
     if not steps:
@@ -189,7 +189,8 @@ def split_phases(steps_config):
 
         current_steps.append(
             StepConfig(
-                name=name, params=raw_params,
+                name=name,
+                params=raw_params,
                 max_workers=int(max_workers) if max_workers is not None else None,
             )
         )
@@ -211,8 +212,17 @@ class PipelineState:
     Thread-safe: all mutable state is protected by _lock.
     """
 
-    def __init__(self, name, yaml_path, phases, functions_dir,
-                 step_settings, verbose, levels=None, workflow_name=None):
+    def __init__(
+        self,
+        name,
+        yaml_path,
+        phases,
+        functions_dir,
+        step_settings,
+        verbose,
+        levels=None,
+        workflow_name=None,
+    ):
         self.name = name
         self.yaml_path = Path(yaml_path)
         self.phases = phases
@@ -268,9 +278,11 @@ class PipelineState:
         """
         with self._lock:
             for level in levels:
-                if (level not in scope
-                        and level in self._seen_scope_keys
-                        and self.get_triggered_phase_idx(level) is not None):
+                if (
+                    level not in scope
+                    and level in self._seen_scope_keys
+                    and self.get_triggered_phase_idx(level) is not None
+                ):
                     raise ScopeError(
                         f"complete={level!r} with scope {scope!r}: the scope "
                         f"does not name {level!r}, which earlier submits did; "
@@ -291,8 +303,9 @@ class PipelineState:
         with self._lock:
             self._job_entries.append((future, scope, submission_idx))
         future.add_done_callback(
-            lambda done: self.record_cancellation(scope, submission_idx)
-            if done.cancelled() else None
+            lambda done: (
+                self.record_cancellation(scope, submission_idx) if done.cancelled() else None
+            )
         )
 
     def record_start(self, is_submission=True):
@@ -326,34 +339,38 @@ class PipelineState:
         ``submission_idx`` the tile, or the submit that closed the unit."""
         with self._lock:
             self._n_running = max(0, self._n_running - 1)
-            self._failures.append({
-                "scope": scope,
-                "step": step_name,
-                "error": error_msg,
-                "phase": phase,
-                "submission_idx": submission_idx,
-            })
+            self._failures.append(
+                {
+                    "scope": scope,
+                    "step": step_name,
+                    "error": error_msg,
+                    "phase": phase,
+                    "submission_idx": submission_idx,
+                }
+            )
 
     def record_cancellation(self, scope, submission_idx):
         """Record a queued submission cancelled during engine shutdown."""
         with self._lock:
             self._n_pending = max(0, self._n_pending - 1)
-            self._failures.append({
-                "scope": scope,
-                "step": "engine",
-                "error": "Cancelled during engine shutdown",
-                "phase": 0,
-                "submission_idx": submission_idx,
-            })
+            self._failures.append(
+                {
+                    "scope": scope,
+                    "step": "engine",
+                    "error": "Cancelled during engine shutdown",
+                    "phase": 0,
+                    "submission_idx": submission_idx,
+                }
+            )
 
     def wider_levels(self, level):
         """The levels wider than *level*, widest first: from the recipe's
         ``levels`` when it has them, else from the later phases' scopes."""
         if self.levels is not None:
             levels = self.levels
-            return levels[:levels.index(level)] if level in levels else []
+            return levels[: levels.index(level)] if level in levels else []
         phases = [phase.scope for phase in self.phases if phase.scope]
-        wider = phases[phases.index(level) + 1:] if level in phases else []
+        wider = phases[phases.index(level) + 1 :] if level in phases else []
         return wider[::-1]
 
     def scope_key(self, level, scope):
@@ -428,16 +445,20 @@ class PipelineState:
                 not_closed = self.phases[k + 1].scope
                 for idx, entry_scope, _ in entries:
                     if idx <= before and _matches(entry_scope, unit):
-                        held.append({
-                            "scope": entry_scope,
-                            "step": "engine",
-                            "error": f"{not_closed} not closed",
-                            "phase": k,
-                            "submission_idx": idx,
-                        })
+                        held.append(
+                            {
+                                "scope": entry_scope,
+                                "step": "engine",
+                                "error": f"{not_closed} not closed",
+                                "phase": k,
+                                "submission_idx": idx,
+                            }
+                        )
                 held += [
-                    f for f in self._failures
-                    if f["phase"] == k and f["submission_idx"] <= before
+                    f
+                    for f in self._failures
+                    if f["phase"] == k
+                    and f["submission_idx"] <= before
                     and _matches(f["scope"], unit)
                 ]
         held.sort(key=lambda f: f["submission_idx"])
@@ -448,8 +469,11 @@ class PipelineState:
         to *unit*, from submits up to *before*. Under _lock."""
         taken, remaining = [], []
         for f in self._failures:
-            if (f["phase"] == phase_idx and f["submission_idx"] <= before
-                    and _matches(f["scope"], unit)):
+            if (
+                f["phase"] == phase_idx
+                and f["submission_idx"] <= before
+                and _matches(f["scope"], unit)
+            ):
                 taken.append(f)
             else:
                 remaining.append(f)
@@ -465,8 +489,7 @@ class PipelineState:
         done = threading.Event()
         if phase_idx is not None:
             with self._lock:
-                self._scoped_in_flight[phase_idx].append(
-                    (dict(scope), submission_idx, done))
+                self._scoped_in_flight[phase_idx].append((dict(scope), submission_idx, done))
         return phase_idx, done
 
     def end_scoped(self, token):
@@ -475,8 +498,7 @@ class PipelineState:
         if phase_idx is not None:
             with self._lock:
                 self._scoped_in_flight[phase_idx] = [
-                    entry for entry in self._scoped_in_flight[phase_idx]
-                    if entry[2] is not done
+                    entry for entry in self._scoped_in_flight[phase_idx] if entry[2] is not done
                 ]
         done.set()
 
@@ -485,8 +507,8 @@ class PipelineState:
         *before* is done."""
         with self._lock:
             waiting = [
-                done for entry_scope, idx, done
-                in self._scoped_in_flight[phase_idx]
+                done
+                for entry_scope, idx, done in self._scoped_in_flight[phase_idx]
                 if idx <= before and _matches(entry_scope, unit)
             ]
         for done in waiting:
@@ -496,22 +518,21 @@ class PipelineState:
         """Store a scoped phase result, with its scope and the submit that
         closed it, for the next phase."""
         with self._lock:
-            self._phase_results[phase_idx].append(
-                (submission_idx, dict(scope), result))
+            self._phase_results[phase_idx].append((submission_idx, dict(scope), result))
 
     def get_matching_futures(self, unit, before):
         """Phase 0 futures of *unit*, submitted up to *before*."""
         with self._lock:
             return [
-                f for f, scope, idx in self._job_entries
-                if idx <= before and _matches(scope, unit)
+                f for f, scope, idx in self._job_entries if idx <= before and _matches(scope, unit)
             ]
 
     def cleanup_consumed_entries(self, unit, before):
         """Remove consumed job entries after scope collection."""
         with self._lock:
             self._job_entries = [
-                (f, s, idx) for f, s, idx in self._job_entries
+                (f, s, idx)
+                for f, s, idx in self._job_entries
                 if not (idx <= before and _matches(s, unit))
             ]
 

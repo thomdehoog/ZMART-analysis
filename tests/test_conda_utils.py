@@ -213,12 +213,19 @@ class TestCheckAnExistingEnvironment(unittest.TestCase):
 
         info = {"conda_version": "26.1.0", "envs": envs, "envs_dirs": ["/envs"], "root_prefix": "/"}
         ran = []
-        with mock.patch.object(conda_utils, "get_conda_info", return_value=info), \
-                mock.patch.object(conda_utils.subprocess, "run",
-                                  side_effect=lambda cmd, **_: ran.append(cmd) or _Ran()), \
-                mock.patch("sys.argv", ["setup_env.py", *argv]):
+        with (
+            mock.patch.object(conda_utils, "get_conda_info", return_value=info),
+            mock.patch.object(
+                conda_utils.subprocess,
+                "run",
+                side_effect=lambda cmd, **_: ran.append(cmd) or _Ran(),
+            ),
+            mock.patch("sys.argv", ["setup_env.py", *argv]),
+        ):
             conda_utils.setup_workflow_env(
-                workflow="demo", pip_packages=["numpy"], diagnostics=[("numpy", "import numpy")],
+                workflow="demo",
+                pip_packages=["numpy"],
+                diagnostics=[("numpy", "import numpy")],
                 install_torch=False,
             )
         return ran
@@ -254,9 +261,11 @@ class TestFindingConda(unittest.TestCase):
             exe = Path(root) / ("Scripts/conda.exe" if os.name == "nt" else "bin/conda")
             exe.parent.mkdir()
             exe.write_text("")
-            with mock.patch.dict(os.environ, {}, clear=False), \
-                    mock.patch.object(conda_utils.shutil, "which", return_value=None), \
-                    mock.patch.object(conda_utils.sys, "prefix", str(env)):
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch.object(conda_utils.shutil, "which", return_value=None),
+                mock.patch.object(conda_utils.sys, "prefix", str(env)),
+            ):
                 os.environ.pop("CONDA_EXE", None)
                 self.assertEqual(conda_utils._find_conda(), str(exe))
 

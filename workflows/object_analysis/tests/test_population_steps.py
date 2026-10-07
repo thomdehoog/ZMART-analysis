@@ -59,9 +59,11 @@ def _carrier(results, carrier=1, failures=(), **params):
     data = {
         "results": results,
         "failures": list(failures),
-        "metadata": {"scope_level": "carrier",
-                     "scope": {"carrier": carrier, "compartment": 6},
-                     "unit": {"carrier": carrier}},
+        "metadata": {
+            "scope_level": "carrier",
+            "scope": {"carrier": carrier, "compartment": 6},
+            "unit": {"carrier": carrier},
+        },
     }
     return compare_run(data, {}, **params)["comparison"]
 
@@ -88,11 +90,17 @@ def test_a_population_says_how_much_spread_its_components_carry():
 
 def test_a_small_unit_is_summarised_without_components():
     rng = np.random.default_rng(0)
-    data = {"results": [_tile(rng, 5, 100.0, "t0")], "failures": [],
-            "metadata": {"scope_level": "group",
-                         "scope": {"carrier": 1, "compartment": 3, "group": 2}}}
+    data = {
+        "results": [_tile(rng, 5, 100.0, "t0")],
+        "failures": [],
+        "metadata": {"scope_level": "group", "scope": {"carrier": 1, "compartment": 3, "group": 2}},
+    }
     got = summarise_run(data, {}, enough_objects=10)["population"]
-    assert got["scope"] == {"carrier": 1, "compartment": 3, "group": 2}   # no unit: the scope stands in
+    assert got["scope"] == {
+        "carrier": 1,
+        "compartment": 3,
+        "group": 2,
+    }  # no unit: the scope stands in
     assert got["n_objects"] == 5 and got["pca"] is None
     assert "area" in got["profile"]
 
@@ -116,12 +124,27 @@ def test_the_carrier_compares_its_compartments_and_flags_the_odd_one():
 def test_the_carrier_counts_failed_compartments_apart_from_tiles_not_closed():
     units = [_compartment(1, m, 100.0, m) for m in range(1, 4)]
     failures = [
-        {"scope": {"carrier": 1, "compartment": 4}, "step": "summarise_population",
-         "error": "ValueError", "phase": 1, "submission_idx": 40},
-        {"scope": {"carrier": 1, "compartment": 5}, "step": "engine",
-         "error": "compartment not closed", "phase": 0, "submission_idx": 50},
-        {"scope": {"carrier": 1, "compartment": 5}, "step": "engine",
-         "error": "compartment not closed", "phase": 0, "submission_idx": 51},
+        {
+            "scope": {"carrier": 1, "compartment": 4},
+            "step": "summarise_population",
+            "error": "ValueError",
+            "phase": 1,
+            "submission_idx": 40,
+        },
+        {
+            "scope": {"carrier": 1, "compartment": 5},
+            "step": "engine",
+            "error": "compartment not closed",
+            "phase": 0,
+            "submission_idx": 50,
+        },
+        {
+            "scope": {"carrier": 1, "compartment": 5},
+            "step": "engine",
+            "error": "compartment not closed",
+            "phase": 0,
+            "submission_idx": 51,
+        },
     ]
     got = _carrier(units, failures=failures)
     assert got["n_units"] == 3

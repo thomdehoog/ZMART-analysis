@@ -29,13 +29,13 @@ STEP_PROFILES = {
             "tifffile>=2026.6.1",
             "imagecodecs",
             "pooch",
-            "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
-            "ome-types",     # OME-XML metadata
+            "ngio",  # OME-Zarr, NGFF 0.4 and 0.5
+            "ome-types",  # OME-XML metadata
             # Pinned to one major version: the default network and what
             # `diameter: null` means both changed between 3 and 4, and a
             # table must say which produced it (see detector_params).
             "cellpose>=4,<5",
-            "scikit-image>=0.23",   # the fast detector's watershed
+            "scikit-image>=0.23",  # the fast detector's watershed
         ],
         "diagnostics": [
             (
@@ -70,8 +70,8 @@ STEP_PROFILES = {
             # the cellpose one does: the same readers, torch left out.
             "tifffile>=2026.6.1",
             "imagecodecs",
-            "ngio",          # OME-Zarr, NGFF 0.4 and 0.5
-            "ome-types",     # OME-XML metadata
+            "ngio",  # OME-Zarr, NGFF 0.4 and 0.5
+            "ome-types",  # OME-XML metadata
             # The well and plate summaries (object_analysis_scoped.yaml):
             # tables, median imputation, robust scaling and PCA.
             "pandas",
@@ -125,9 +125,9 @@ STEP_PROFILES = {
         "pip_packages": [
             "pyyaml",
             "numpy",
-            "pandas",        # the population table
+            "pandas",  # the population table
             "scikit-learn",  # principal components
-            "umap-learn",    # the UMAP layout, through numba and pynndescent
+            "umap-learn",  # the UMAP layout, through numba and pynndescent
         ],
         "diagnostics": [
             ("principal components", "from sklearn.decomposition import PCA; print('OK')"),

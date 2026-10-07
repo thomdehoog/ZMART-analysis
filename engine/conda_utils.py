@@ -69,7 +69,8 @@ def get_conda_info():
     try:
         result = subprocess.run(
             [CONDA_CMD, "info", "--json"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             return json.loads(result.stdout)
@@ -132,7 +133,10 @@ def detect_gpu():
 
     try:
         result = subprocess.run(
-            [nvidia_smi], capture_output=True, text=True, timeout=10,
+            [nvidia_smi],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             return "cpu"
@@ -175,11 +179,9 @@ def get_torch_install_args(gpu):
     if gpu == "mps":
         return ["torch", "torchvision"]
     elif gpu == "cpu":
-        return ["torch", "torchvision",
-                "--index-url", "https://download.pytorch.org/whl/cpu"]
+        return ["torch", "torchvision", "--index-url", "https://download.pytorch.org/whl/cpu"]
     else:
-        return ["torch", "torchvision",
-                "--index-url", f"https://download.pytorch.org/whl/{gpu}"]
+        return ["torch", "torchvision", "--index-url", f"https://download.pytorch.org/whl/{gpu}"]
 
 
 # --------------------------------------------------------------------------
@@ -246,12 +248,9 @@ def setup_workflow_env(
     """
     if steps_dir is not None:
         diagnostics = [
-            (label, code.replace("__STEPS__", str(steps_dir)))
-            for label, code in diagnostics
+            (label, code.replace("__STEPS__", str(steps_dir))) for label, code in diagnostics
         ]
-    parser = argparse.ArgumentParser(
-        description=f"Set up conda env for {workflow} workflow"
-    )
+    parser = argparse.ArgumentParser(description=f"Set up conda env for {workflow} workflow")
     parser.add_argument(
         "--step",
         default=default_step,
@@ -433,9 +432,7 @@ def setup_workflow_env(
 def clean_workflow_envs(*, workflow: str) -> None:
     """Remove the ZMART--<workflow>--* conda environments, or one of them
     with ``--step``. ``--dry-run`` lists them without removing anything."""
-    parser = argparse.ArgumentParser(
-        description=f"Remove conda envs for {workflow} workflow"
-    )
+    parser = argparse.ArgumentParser(description=f"Remove conda envs for {workflow} workflow")
     parser.add_argument(
         "--step",
         default=None,
@@ -537,9 +534,7 @@ def _warn_old_conda(conda_version: str) -> None:
         return
 
 
-def _run_diagnostics(
-    conda: str, env_name: str, diagnostics: list[tuple[str, str]]
-) -> None:
+def _run_diagnostics(conda: str, env_name: str, diagnostics: list[tuple[str, str]]) -> None:
     all_passed = True
     for label, code in diagnostics:
         result = subprocess.run(

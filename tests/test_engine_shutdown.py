@@ -23,10 +23,7 @@ def _workflow_files(tmp_path):
     )
     yaml_path = tmp_path / "workflow.yaml"
     yaml_path.write_text(
-        "metadata:\n"
-        f"  functions_dir: {tmp_path.as_posix()}\n"
-        "workflow:\n"
-        "  - noop:\n",
+        f"metadata:\n  functions_dir: {tmp_path.as_posix()}\nworkflow:\n  - noop:\n",
         encoding="utf-8",
     )
     return yaml_path
@@ -110,8 +107,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
     engine = Engine(max_concurrent=1)
     with patch("engine.engine.parse_yaml", blocked_parse_yaml):
         threads = [
-            threading.Thread(target=register, args=(index,))
-            for index in range(registration_count)
+            threading.Thread(target=register, args=(index,)) for index in range(registration_count)
         ]
         for thread in threads:
             thread.start()

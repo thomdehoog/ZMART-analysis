@@ -43,7 +43,7 @@ def _window(scene, x_um: float, y_um: float) -> np.ndarray:
     moves +Y."""
     col = 400 + int(round(x_um / PIXEL_UM))
     row = 400 + int(round(y_um / PIXEL_UM))
-    return scene[row:row + WINDOW, col:col + WINDOW]
+    return scene[row : row + WINDOW, col : col + WINDOW]
 
 
 def _three_raw(scene, rotation_deg: int, reflection: bool):
@@ -82,7 +82,7 @@ def test_the_pixel_size_comes_with_it(scene, rotation_deg, reflection):
 def test_the_correction_it_names_lines_the_picture_up(scene):
     """The document is only worth adopting if applying it undoes the camera."""
     aligned = _window(scene, 0, 0)
-    for (rotation_deg, reflection) in STAGE_FROM_ORIENTATION:
+    for rotation_deg, reflection in STAGE_FROM_ORIENTATION:
         raw = unorient(aligned, rotation_deg, reflection)
         out = _measured(_three_raw(scene, rotation_deg, reflection))
         doc = out["orientation"]
@@ -98,13 +98,15 @@ def test_a_rig_turned_by_part_of_a_turn_is_refused(scene):
     def slanted(x_um, y_um):
         col = 400 + int(round(x_um / PIXEL_UM))
         row = 400 + int(round(y_um / PIXEL_UM))
-        big = scene[row - WINDOW // 2:row + WINDOW + WINDOW // 2,
-                    col - WINDOW // 2:col + WINDOW + WINDOW // 2]
+        big = scene[
+            row - WINDOW // 2 : row + WINDOW + WINDOW // 2,
+            col - WINDOW // 2 : col + WINDOW + WINDOW // 2,
+        ]
         # Turning by interpolation leaves a faint lattice fixed to the output
         # pixels, identical in every picture; a real camera has no such
         # thing, and left in it would register with itself at zero shift.
         turned = gaussian_filter(rotate(big, 25.0, reshape=False, order=3), 1.0)
-        return turned[WINDOW // 2:WINDOW // 2 + WINDOW, WINDOW // 2:WINDOW // 2 + WINDOW]
+        return turned[WINDOW // 2 : WINDOW // 2 + WINDOW, WINDOW // 2 : WINDOW // 2 + WINDOW]
 
     out = _measured([slanted(0, 0), slanted(MOVE_UM, 0), slanted(0, MOVE_UM)])
     assert out["accepted"] is False
@@ -119,11 +121,17 @@ def test_a_field_that_did_not_move_is_a_loud_error(scene):
 
 def test_the_document_says_what_each_stage_axis_comes_from():
     assert orientation_document(0, False)["sign_convention"] == {
-        "stage_x_from_image": "+X", "stage_y_from_image": "+Y"}
+        "stage_x_from_image": "+X",
+        "stage_y_from_image": "+Y",
+    }
     assert orientation_document(90, False)["sign_convention"] == {
-        "stage_x_from_image": "-Y", "stage_y_from_image": "+X"}
+        "stage_x_from_image": "-Y",
+        "stage_y_from_image": "+X",
+    }
     assert orientation_document(0, True)["sign_convention"] == {
-        "stage_x_from_image": "-X", "stage_y_from_image": "+Y"}
+        "stage_x_from_image": "-X",
+        "stage_y_from_image": "+Y",
+    }
 
 
 def test_the_diagnostic_picture_is_written(scene, tmp_path):

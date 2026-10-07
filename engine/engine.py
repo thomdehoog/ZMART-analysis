@@ -49,7 +49,9 @@ class _PriorityThreadPool:
         self._workers = []
         for i in range(max_workers):
             t = threading.Thread(
-                target=self._run, name=f"engine-worker-{i}", daemon=True,
+                target=self._run,
+                name=f"engine-worker-{i}",
+                daemon=True,
             )
             self._workers.append(t)
             t.start()
@@ -114,8 +116,7 @@ class Engine:
         Seconds one step may run before it is killed (default: 300).
     """
 
-    def __init__(self, idle_timeout=300.0, max_concurrent=8,
-                 execution_timeout=300.0):
+    def __init__(self, idle_timeout=300.0, max_concurrent=8, execution_timeout=300.0):
         self.execution_timeout = execution_timeout
         self._pool = WorkerPool(idle_timeout=idle_timeout)
         self._executor = _PriorityThreadPool(max_workers=max_concurrent)
@@ -133,14 +134,14 @@ class Engine:
         self._lock = threading.Lock()
 
         # Detect orchestrator's conda environment
-        self._default_env = (
-            os.environ.get("CONDA_DEFAULT_ENV")
-            or Path(sys.prefix).name
-        )
+        self._default_env = os.environ.get("CONDA_DEFAULT_ENV") or Path(sys.prefix).name
 
-        logger.debug("Engine created: idle_timeout=%s, "
-                     "max_concurrent=%d, default_env=%s",
-                     idle_timeout, max_concurrent, self._default_env)
+        logger.debug(
+            "Engine created: idle_timeout=%s, max_concurrent=%d, default_env=%s",
+            idle_timeout,
+            max_concurrent,
+            self._default_env,
+        )
 
     # -- Public API ----------------------------------------------------
 
@@ -178,9 +179,10 @@ class Engine:
             phases = split_phases(steps_config)
             levels = metadata.get("levels")
             if levels is not None and (
-                    not isinstance(levels, list)
-                    or not all(isinstance(level, str) for level in levels)
-                    or len(set(levels)) != len(levels)):
+                not isinstance(levels, list)
+                or not all(isinstance(level, str) for level in levels)
+                or len(set(levels)) != len(levels)
+            ):
                 raise ValueError(
                     "metadata 'levels' must be a list of distinct level "
                     f"names, widest first, got {levels!r}"
@@ -202,8 +204,10 @@ class Engine:
                         settings["environment"] = env
                         if step.max_workers is not None:
                             settings["max_workers"] = step.max_workers
-                        if (not isinstance(settings["max_workers"], int)
-                                or settings["max_workers"] < 1):
+                        if (
+                            not isinstance(settings["max_workers"], int)
+                            or settings["max_workers"] < 1
+                        ):
                             raise ValueError(
                                 f"Step '{step.name}': max_workers must be a "
                                 f"whole number of 1 or more, got "
@@ -230,9 +234,13 @@ class Engine:
             with self._lock:
                 self._registering.discard(name)
 
-        logger.info("Registered pipeline '%s': workflow=%s, %d phases, "
-                     "%d steps", name, workflow_name, len(phases),
-                     sum(len(p.steps) for p in phases))
+        logger.info(
+            "Registered pipeline '%s': workflow=%s, %d phases, %d steps",
+            name,
+            workflow_name,
+            len(phases),
+            sum(len(p.steps) for p in phases),
+        )
 
     def submit(self, name, data, scope=None, priority=None, complete=None):
         """
@@ -273,16 +281,18 @@ class Engine:
                 raise KeyError(f"Pipeline '{name}' is not registered")
             state = self._pipelines[name]
             complete_levels = (
-                [] if not complete
-                else [complete] if isinstance(complete, str)
-                else list(complete)
+                [] if not complete else [complete] if isinstance(complete, str) else list(complete)
             )
             state.check_complete(complete_levels, scope)
             submission_idx = state.next_submission_idx()
 
             # Submit Phase 0 to thread pool
             future = self._executor.submit(
-                self._execute_phase0, state, data, scope, submission_idx,
+                self._execute_phase0,
+                state,
+                data,
+                scope,
+                submission_idx,
                 priority=priority_value,
             )
             state.add_job_entry(future, scope, submission_idx)
@@ -293,22 +303,23 @@ class Engine:
                 # later signal for a wider scope (a carrier) cannot overtake
                 # a narrower one (a compartment) submitted before it.
                 tokens = [
-                    state.begin_scoped(
-                        state.get_triggered_phase_idx(level), scope,
-                        submission_idx)
+                    state.begin_scoped(state.get_triggered_phase_idx(level), scope, submission_idx)
                     for level in complete_levels
                 ]
                 # Process levels sequentially in one thread so that
                 # chained scopes (e.g., ["group", "all"]) execute in order.
                 chain = self._scope_executor.submit(
-                    self._handle_scope_complete_chain, state,
-                    complete_levels, scope, tokens, submission_idx,
+                    self._handle_scope_complete_chain,
+                    state,
+                    complete_levels,
+                    scope,
+                    tokens,
+                    submission_idx,
                 )
                 # A chain cancelled by shutdown(wait=False) never runs, so
                 # its marks are cleared here, or a waiter would hang.
                 chain.add_done_callback(
-                    lambda done: [state.end_scoped(t) for t in tokens]
-                    if done.cancelled() else None
+                    lambda done: [state.end_scoped(t) for t in tokens] if done.cancelled() else None
                 )
 
     def status(self, name=None):
@@ -332,9 +343,7 @@ class Engine:
             return state.status
 
         with self._lock:
-            return {
-                n: s.status for n, s in self._pipelines.items()
-            }
+            return {n: s.status for n, s in self._pipelines.items()}
 
     def results(self, name):
         """
@@ -396,8 +405,7 @@ class Engine:
 
     # -- Internal: scope completion chain --------------------------------
 
-    def _handle_scope_complete_chain(self, state, levels, scope, tokens,
-                                     submission_idx):
+    def _handle_scope_complete_chain(self, state, levels, scope, tokens, submission_idx):
         """Process multiple scope completion levels sequentially.
 
         Each level must complete before the next starts, so chained
@@ -408,8 +416,7 @@ class Engine:
             try:
                 self._handle_scope_complete(state, level, scope, submission_idx)
             except Exception as e:
-                logger.error("Scope chain failed at level '%s': %s",
-                             level, e)
+                logger.error("Scope chain failed at level '%s': %s", level, e)
             finally:
                 state.end_scoped(token)
 
@@ -437,19 +444,16 @@ class Engine:
         try:
             for step in phase.steps:
                 step_name = step.name
-                pipeline_data = self._execute_step(
-                    state, step, pipeline_data)
+                pipeline_data = self._execute_step(state, step, pipeline_data)
 
                 if not isinstance(pipeline_data, dict):
                     raise TypeError(
-                        f"Step '{step.name}' returned "
-                        f"{type(pipeline_data).__name__}, expected dict"
+                        f"Step '{step.name}' returned {type(pipeline_data).__name__}, expected dict"
                     )
 
             # Store result for scope collection if next phase is scoped
             if len(state.phases) > 1 and state.phases[1].scope is not None:
-                state.store_phase0_result(submission_idx, scope,
-                                          pipeline_data)
+                state.store_phase0_result(submission_idx, scope, pipeline_data)
 
             # Publish Phase 0 result
             state.publish_result(dict(pipeline_data), 0, scope, None)
@@ -457,8 +461,13 @@ class Engine:
 
         except Exception as e:
             state.record_failure(scope, step_name, str(e), 0, submission_idx)
-            logger.error("Phase 0 failed in '%s' (submission %d, step %s): %s",
-                         state.name, submission_idx, step_name, e)
+            logger.error(
+                "Phase 0 failed in '%s' (submission %d, step %s): %s",
+                state.name,
+                submission_idx,
+                step_name,
+                e,
+            )
             raise
 
     # -- Internal: scope completion ------------------------------------
@@ -496,8 +505,7 @@ class Engine:
                     submissions.append(idx)
             for step, record in r.get("provenance", {}).items():
                 add(step, record)
-        return {"submissions": sorted(submissions), "failed": failed,
-                "provenance": provenance}
+        return {"submissions": sorted(submissions), "failed": failed, "provenance": provenance}
 
     def _handle_scope_complete(self, state, level, scope, submission_idx):
         """Handle a scope completion signal.
@@ -507,8 +515,7 @@ class Engine:
         """
         phase_idx = state.get_triggered_phase_idx(level)
         if phase_idx is None:
-            logger.warning("No phase with scope '%s' in pipeline '%s'",
-                           level, state.name)
+            logger.warning("No phase with scope '%s' in pipeline '%s'", level, state.name)
             return
 
         # The unit being closed: this level's value and every wider level's,
@@ -525,13 +532,11 @@ class Engine:
 
         # Collect results from previous phase, and what a narrower level
         # never closed
-        results, failures = state.collect_for_scope(
-            phase_idx, unit, submission_idx)
+        results, failures = state.collect_for_scope(phase_idx, unit, submission_idx)
         failures += state.held_for(phase_idx, unit, submission_idx)
 
         if not results and not failures:
-            logger.warning("No results for scope '%s' (unit=%s) in '%s'",
-                           level, unit, state.name)
+            logger.warning("No results for scope '%s' (unit=%s) in '%s'", level, unit, state.name)
             return
 
         # Clean up consumed job entries
@@ -544,15 +549,15 @@ class Engine:
         state.record_start(is_submission=False)
         try:
             result, metadata = self._execute_scoped_phase(
-                state, phase_idx, results, failures, scope, level, unit or {})
+                state, phase_idx, results, failures, scope, level, unit or {}
+            )
             result.setdefault("metadata", metadata)
             result["lineage"] = lineage
 
             # Store for next phase if there is one
             next_phase = phase_idx + 1
             if next_phase < len(state.phases):
-                state.store_phase_result(
-                    phase_idx, result, scope, submission_idx)
+                state.store_phase_result(phase_idx, result, scope, submission_idx)
 
             # Publish scoped result
             state.publish_result(dict(result), phase_idx, scope, level)
@@ -560,13 +565,19 @@ class Engine:
 
         except Exception as e:
             step_name = getattr(e, "step", None)
-            state.record_failure(
-                scope, step_name, str(e), phase_idx, submission_idx)
-            logger.error("Phase %d failed in '%s' (submission %d, step %s): %s",
-                         phase_idx, state.name, submission_idx, step_name, e)
+            state.record_failure(scope, step_name, str(e), phase_idx, submission_idx)
+            logger.error(
+                "Phase %d failed in '%s' (submission %d, step %s): %s",
+                phase_idx,
+                state.name,
+                submission_idx,
+                step_name,
+                e,
+            )
 
-    def _execute_scoped_phase(self, state, phase_idx, accumulated_results,
-                               failures, scope, scope_level, unit):
+    def _execute_scoped_phase(
+        self, state, phase_idx, accumulated_results, failures, scope, scope_level, unit
+    ):
         """Execute a scoped phase with accumulated results. ``unit`` is the
         unit being closed, widest level first, ``{}`` for everything. An
         exception from a step carries the step's name as ``.step``.
@@ -597,8 +608,7 @@ class Engine:
                 pipeline_data = self._execute_step(state, step, pipeline_data)
                 if not isinstance(pipeline_data, dict):
                     raise TypeError(
-                        f"Step '{step.name}' returned "
-                        f"{type(pipeline_data).__name__}, expected dict"
+                        f"Step '{step.name}' returned {type(pipeline_data).__name__}, expected dict"
                     )
             except Exception as e:
                 e.step = step.name
@@ -660,9 +670,12 @@ def get_step_settings(step_path: Path) -> dict:
         "environment": metadata.get("environment", None),
         "max_workers": metadata.get("max_workers", 1),
     }
-    logger.debug("Step settings for %s: environment=%s, max_workers=%d",
-                 step_path.name, settings["environment"],
-                 settings["max_workers"])
+    logger.debug(
+        "Step settings for %s: environment=%s, max_workers=%d",
+        step_path.name,
+        settings["environment"],
+        settings["max_workers"],
+    )
     return settings
 
 
@@ -672,13 +685,16 @@ def _extract_metadata(step_path: Path) -> dict:
         tree = ast.parse(f.read())
 
     for node in ast.iter_child_nodes(tree):
-        if (isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id == "METADATA"):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "METADATA"
+        ):
             result = ast.literal_eval(node.value)
-            logger.debug("Extracted METADATA from %s (line %d): %s",
-                         step_path.name, node.lineno, result)
+            logger.debug(
+                "Extracted METADATA from %s (line %d): %s", step_path.name, node.lineno, result
+            )
             return result
 
     logger.debug("No METADATA found in %s, using defaults", step_path.name)

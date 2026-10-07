@@ -31,9 +31,7 @@ def _load_run_pipeline_module():
 @pytest.mark.parametrize("axis", [0, -1, 2])
 def test_explicit_axis_selection_matches_numpy_reference(n_channels, axis):
     rng = np.random.default_rng(20260711 + n_channels)
-    channel_last = rng.integers(
-        0, 65535, size=(11, 17, n_channels), dtype=np.uint16
-    )
+    channel_last = rng.integers(0, 65535, size=(11, 17, n_channels), dtype=np.uint16)
     image = np.moveaxis(channel_last, -1, 0) if axis == 0 else channel_last
     requested = list(range(min(n_channels, 3)))
 
@@ -45,9 +43,7 @@ def test_explicit_axis_selection_matches_numpy_reference(n_channels, axis):
     np.testing.assert_array_equal(actual, expected)
 
 
-@pytest.mark.parametrize(
-    "axis", [1, -2, 3, "0", True, False, 0.0, -1.0, 2.0]
-)
+@pytest.mark.parametrize("axis", [1, -2, 3, "0", True, False, 0.0, -1.0, 2.0])
 def test_invalid_axis_values_are_rejected_consistently(axis):
     image = np.zeros((3, 11, 17), dtype=np.uint8)
     with pytest.raises(ValueError, match="channel_axis must be"):
@@ -105,9 +101,7 @@ def test_cli_image_size_comes_from_the_image(tmp_path):
 
     run_pipeline = _load_run_pipeline_module()
     image_path = tmp_path / "declared.tif"
-    tifffile.imwrite(
-        image_path, np.zeros((3, 10, 3), dtype=np.uint8), metadata={"axes": "CYX"}
-    )
+    tifffile.imwrite(image_path, np.zeros((3, 10, 3), dtype=np.uint8), metadata={"axes": "CYX"})
 
     assert run_pipeline._image_size_px(image_path) == [3, 10]
     # The old flag is accepted and ignored rather than changing the answer.

@@ -76,6 +76,7 @@ def _label(environment):
     """An environment's name in messages; the engine's own has none."""
     return environment or "orchestrator"
 
+
 #: How long one accept() turn waits before checking for a shutdown, seconds.
 _ACCEPT_TURN_S = 0.25
 
@@ -109,7 +110,9 @@ def _the_prefix_of(environment):
         try:
             _prefixes = {Path(env).name: Path(env) for env in get_conda_info().get("envs", [])}
         except Exception as why:  # noqa: BLE001 -- conda unreachable: fall back to the name
-            logger.warning("could not list conda environments (%s); naming the interpreter as 'python'", why)
+            logger.warning(
+                "could not list conda environments (%s); naming the interpreter as 'python'", why
+            )
             _prefixes = {}
     return _prefixes.get(environment)
 
@@ -173,8 +176,7 @@ class Worker:
         Seconds to wait for the subprocess to connect back.
     """
 
-    def __init__(self, environment=None, idle_timeout=300.0,
-                 connect_timeout=60.0):
+    def __init__(self, environment=None, idle_timeout=300.0, connect_timeout=60.0):
         self.environment = environment
         self.idle_timeout = idle_timeout
         self.connect_timeout = connect_timeout
@@ -208,15 +210,15 @@ class Worker:
         # other spawn in the process.
         self._listener._listener._socket.settimeout(_ACCEPT_TURN_S)
 
-        python = ([sys.executable] if self.environment is None
-                  else _the_python_of(self.environment))
+        python = [sys.executable] if self.environment is None else _the_python_of(self.environment)
         cmd = python + [str(WORKER_SCRIPT)]
 
         # Pass the engine's own PID for orphan detection. The worker cannot
         # rely on os.getppid(): under `conda run` its direct parent is the
         # wrapper process, which outlives a crashed engine.
-        cmd.extend(["--port", str(port), "--authkey", authkey.hex(),
-                    "--parent-pid", str(os.getpid())])
+        cmd.extend(
+            ["--port", str(port), "--authkey", authkey.hex(), "--parent-pid", str(os.getpid())]
+        )
 
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
@@ -240,18 +242,18 @@ class Worker:
         with _spawn_turn:
             try:
                 self._process = subprocess.Popen(
-                    cmd, env=env, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE, **kwargs,
+                    cmd,
+                    env=env,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    **kwargs,
                 )
             except Exception as e:
                 logger.error("Worker spawn failed for env=%s: %s", env_label, e)
                 self._cleanup()
-                raise WorkerSpawnError(
-                    f"Failed to start worker for '{env_label}': {e}"
-                ) from e
+                raise WorkerSpawnError(f"Failed to start worker for '{env_label}': {e}") from e
 
-            logger.debug("Worker process started: pid=%d, env=%s",
-                         self._process.pid, env_label)
+            logger.debug("Worker process started: pid=%d, env=%s", self._process.pid, env_label)
             self._refuse_if_put_down()
 
             self._stderr_drainer = _StderrDrainer(self._process.stderr)
@@ -263,8 +265,12 @@ class Worker:
                 # that, not as a worker that could not connect.
                 self._refuse_if_put_down()
                 stderr = self._stderr_drainer.get_output() if self._stderr_drainer else ""
-                logger.error("Worker connect failed: pid=%d, env=%s, stderr=%s",
-                             self._process.pid, env_label, stderr[:500])
+                logger.error(
+                    "Worker connect failed: pid=%d, env=%s, stderr=%s",
+                    self._process.pid,
+                    env_label,
+                    stderr[:500],
+                )
                 self._cleanup()
                 raise WorkerSpawnError(
                     f"Worker for '{env_label}' failed to connect "
@@ -273,8 +279,7 @@ class Worker:
 
         self._refuse_if_put_down()
         self._last_active = time.monotonic()
-        logger.info("Worker ready: pid=%d, env=%s",
-                     self._process.pid, env_label)
+        logger.info("Worker ready: pid=%d, env=%s", self._process.pid, env_label)
 
     def _accept_in_turns(self):
         """Wait for the worker to connect, a short turn at a time.
@@ -292,13 +297,10 @@ class Worker:
             self._refuse_if_put_down()
             if self._process is not None and self._process.poll() is not None:
                 raise OSError(
-                    f"worker process exited with code {self._process.returncode} "
-                    "before connecting"
+                    f"worker process exited with code {self._process.returncode} before connecting"
                 )
             if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    f"no connection within {self.connect_timeout}s"
-                )
+                raise TimeoutError(f"no connection within {self.connect_timeout}s")
 
     def _refuse_if_put_down(self):
         """A shutdown that landed at any point of the spawn wins.
@@ -345,38 +347,31 @@ class Worker:
         message = (str(step_path), pipeline_data, params)
         try:
             data = pickle.dumps(message, protocol=2)
-            logger.debug("Worker execute: sending %d bytes to pid=%d "
-                         "(step=%s)", len(data), pid, step_name)
+            logger.debug(
+                "Worker execute: sending %d bytes to pid=%d (step=%s)", len(data), pid, step_name
+            )
             self._conn.send_bytes(data)
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            logger.error("Worker send failed: pid=%d, step=%s: %s",
-                         pid, step_name, e)
+            logger.error("Worker send failed: pid=%d, step=%s: %s", pid, step_name, e)
             self._cleanup()
             env_label = _label(self.environment)
-            raise WorkerCrashedError(
-                f"Worker for '{env_label}' lost connection: {e}"
-            ) from e
+            raise WorkerCrashedError(f"Worker for '{env_label}' lost connection: {e}") from e
 
         try:
             if not self._conn.poll(timeout=timeout):
-                logger.error("Worker timed out: pid=%d, step=%s, "
-                             "timeout=%.0fs", pid, step_name, timeout)
+                logger.error(
+                    "Worker timed out: pid=%d, step=%s, timeout=%.0fs", pid, step_name, timeout
+                )
                 self._cleanup()
                 env_label = _label(self.environment)
-                raise WorkerTimeoutError(
-                    f"Worker for '{env_label}' timed out after {timeout}s"
-                )
+                raise WorkerTimeoutError(f"Worker for '{env_label}' timed out after {timeout}s")
             raw = self._conn.recv_bytes()
         except (EOFError, ConnectionResetError, OSError) as e:
-            stderr = (self._stderr_drainer.get_output()
-                      if self._stderr_drainer else "")
-            logger.error("Worker crashed: pid=%d, step=%s, stderr=%s",
-                         pid, step_name, stderr[:500])
+            stderr = self._stderr_drainer.get_output() if self._stderr_drainer else ""
+            logger.error("Worker crashed: pid=%d, step=%s, stderr=%s", pid, step_name, stderr[:500])
             self._cleanup()
             env_label = _label(self.environment)
-            raise WorkerCrashedError(
-                f"Worker for '{env_label}' crashed. stderr: {stderr}"
-            ) from e
+            raise WorkerCrashedError(f"Worker for '{env_label}' crashed. stderr: {stderr}") from e
 
         elapsed = time.monotonic() - t0
         response = pickle.loads(raw)
@@ -385,25 +380,19 @@ class Worker:
 
         if not isinstance(response, tuple) or len(response) != 2:
             env_label = _label(self.environment)
-            raise WorkerCrashedError(
-                f"Worker for '{env_label}' sent invalid response"
-            )
+            raise WorkerCrashedError(f"Worker for '{env_label}' sent invalid response")
 
         status, payload = response
         if status == "error":
-            logger.warning("Step error: pid=%d, step=%s, elapsed=%.2fs",
-                           pid, step_name, elapsed)
+            logger.warning("Step error: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
             raise StepExecutionError(
                 payload.get("message", "Unknown error"),
                 remote_traceback=payload.get("traceback"),
             )
         if status != "ok":
-            raise WorkerCrashedError(
-                f"Worker sent unknown status: {status!r}"
-            )
+            raise WorkerCrashedError(f"Worker sent unknown status: {status!r}")
 
-        logger.debug("Worker execute done: pid=%d, step=%s, elapsed=%.2fs",
-                     pid, step_name, elapsed)
+        logger.debug("Worker execute done: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
         return payload
 
     def is_idle(self, now=None):
@@ -485,7 +474,8 @@ class Worker:
         if sys.platform == "win32":
             subprocess.run(
                 ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         else:
             try:
@@ -598,8 +588,7 @@ class _EnvPool:
 
         if to_shutdown:
             env_label = _label(self.environment)
-            logger.info("Reaped %d idle worker(s) of %s",
-                        len(to_shutdown), env_label)
+            logger.info("Reaped %d idle worker(s) of %s", len(to_shutdown), env_label)
 
     def shutdown_all(self, now=False):
         """Shut down all workers in this pool; with ``now``, at once."""
@@ -650,8 +639,7 @@ class WorkerPool:
         self._reaper = None
         self._closed = False
 
-    def execute(self, environment, step_path, pipeline_data, params,
-                max_workers=1, timeout=300.0):
+    def execute(self, environment, step_path, pipeline_data, params, max_workers=1, timeout=300.0):
         """
         Execute a step in a worker subprocess.
 
@@ -679,8 +667,7 @@ class WorkerPool:
             pool = self._get_env_pool(environment)
             worker = pool.acquire()
             try:
-                return worker.execute(step_path, pipeline_data, params,
-                                      timeout=timeout)
+                return worker.execute(step_path, pipeline_data, params, timeout=timeout)
             finally:
                 pool.release(worker)
         finally:
@@ -695,7 +682,9 @@ class WorkerPool:
                 env_label = _label(environment)
                 logger.info("Creating env pool for %s", env_label)
                 self._env_pools[environment] = _EnvPool(
-                    environment, self.idle_timeout, self.connect_timeout,
+                    environment,
+                    self.idle_timeout,
+                    self.connect_timeout,
                 )
                 self._ensure_reaper()
             return self._env_pools[environment]
@@ -718,10 +707,10 @@ class WorkerPool:
     def _ensure_reaper(self):
         """Start the reaper thread on first pool creation."""
         if self._reaper is None:
-            logger.debug("Starting reaper (idle_timeout=%s)",
-                         self.idle_timeout)
+            logger.debug("Starting reaper (idle_timeout=%s)", self.idle_timeout)
             self._reaper = threading.Thread(
-                target=self._reaper_loop, daemon=True,
+                target=self._reaper_loop,
+                daemon=True,
             )
             self._reaper.start()
 

@@ -99,9 +99,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     planes, metadata = _stack(inp, level=level, t=t, channel=channel)
     z_um = inp.get("z_um") or _heights_from(metadata, len(planes))
     if z_um is not None and len(z_um) != len(planes):
-        raise ValueError(
-            f"z_um has {len(z_um)} heights but the stack has {len(planes)} planes."
-        )
+        raise ValueError(f"z_um has {len(z_um)} heights but the stack has {len(planes)} planes.")
     # The sweep's ends are skipped to dodge edge artefacts -- when there is
     # room. A short stack is scored whole instead of refused: the answer an
     # incomplete capture can give, flagged by `found` and the curve itself,
@@ -202,8 +200,7 @@ def _planes(source, *, level, t, channel) -> tuple[list[np.ndarray], dict]:
         )
     depth = int(metadata["shape"][axes.index("z")])
     planes = [first] + [
-        load_plane(source, level=level, t=t, c=channel, z=index)[0]
-        for index in range(1, depth)
+        load_plane(source, level=level, t=t, c=channel, z=index)[0] for index in range(1, depth)
     ]
     return [plane.astype(np.float64) for plane in planes], metadata
 
@@ -253,7 +250,7 @@ def _inside_the_sweep(best: int, n_planes: int, skip_ends: int, scores: list[flo
 
 def _best_plane(scores: list[float], skip_ends: int) -> int:
     """The sharpest plane among those allowed to win."""
-    interior = scores[skip_ends: len(scores) - skip_ends]
+    interior = scores[skip_ends : len(scores) - skip_ends]
     return skip_ends + int(np.argmax(interior))
 
 
@@ -270,7 +267,7 @@ def _refine_peak(scores: list[float], best: int) -> float:
     """
     if best == 0 or best == len(scores) - 1:
         return float(best)
-    triple = np.asarray(scores[best - 1: best + 2], dtype=float)
+    triple = np.asarray(scores[best - 1 : best + 2], dtype=float)
     if np.all(triple > 0):
         triple = np.log(triple)
     before, here, after = triple

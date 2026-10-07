@@ -75,7 +75,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     components = None
     if len(population) >= enough_objects and len(features) >= 2:
         components, explained, loadings = principal_components(
-            conditioned(population, features), features, seed=seed,
+            conditioned(population, features),
+            features,
+            seed=seed,
             n_components=int(params.get("components", 10)),
         )
         pca = {"explained_variance_ratio": explained, "loadings": loadings}
@@ -116,7 +118,11 @@ def _write(folder: Path, scope: dict, population, components) -> dict:
     population.to_csv(written["objects"], index=False)
     if components is not None:
         written["pca"] = folder / f"{stem}_pca.csv"
-        frame = population[["object_id"]].copy() if "object_id" in population else population.iloc[:, :0].copy()
+        frame = (
+            population[["object_id"]].copy()
+            if "object_id" in population
+            else population.iloc[:, :0].copy()
+        )
         frame["pca_1"], frame["pca_2"] = components[:, 0], components[:, 1]
         frame.to_csv(written["pca"], index=False)
     return {key: str(path) for key, path in written.items()}

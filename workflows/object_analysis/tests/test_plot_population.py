@@ -23,19 +23,49 @@ def _a_population(where: Path, n: int = 60) -> Path:
     Two groups of objects differ in size, shape and brightness."""
     rng = np.random.default_rng(0)
     table = where / "overview_abc123_objects.csv"
-    columns = ["field", "position_label", "id", "x_um", "y_um", "area", "intensity", "r",
-               "label", "centroid_row_px", "bbox_min_row_px", "bg_global_mean", "eccentricity",
-               "intensity_mean", "solidity", "rarely"]
+    columns = [
+        "field",
+        "position_label",
+        "id",
+        "x_um",
+        "y_um",
+        "area",
+        "intensity",
+        "r",
+        "label",
+        "centroid_row_px",
+        "bbox_min_row_px",
+        "bg_global_mean",
+        "eccentricity",
+        "intensity_mean",
+        "solidity",
+        "rarely",
+    ]
     with table.open("w", encoding="utf-8", newline="") as out:
         rows = csv.writer(out)
         rows.writerow(columns)
         for i in range(n):
             group = i % 2
-            rows.writerow([
-                i // 10, f"P{i // 10}", f"cell{i}", 100.0 * i, 3.0 * i, 20 + 30 * group + rng.normal(),
-                500 + i, 4.0, i, 1.0, 2.0, 99.0, 0.2 + 0.5 * group + 0.01 * rng.normal(),
-                400 + 300 * group + rng.normal(), 0.9 - 0.1 * group, "" if i % 5 else 1.0,
-            ])
+            rows.writerow(
+                [
+                    i // 10,
+                    f"P{i // 10}",
+                    f"cell{i}",
+                    100.0 * i,
+                    3.0 * i,
+                    20 + 30 * group + rng.normal(),
+                    500 + i,
+                    4.0,
+                    i,
+                    1.0,
+                    2.0,
+                    99.0,
+                    0.2 + 0.5 * group + 0.01 * rng.normal(),
+                    400 + 300 * group + rng.normal(),
+                    0.9 - 0.1 * group,
+                    "" if i % 5 else 1.0,
+                ]
+            )
     return table
 
 
@@ -47,7 +77,11 @@ def _plotted(table: Path, kind: str, ids=None) -> dict:
 def _columns(path: str) -> tuple[list[str], list[str], np.ndarray]:
     with open(path, encoding="utf-8", newline="") as source:
         rows = list(csv.reader(source))
-    return rows[0], [row[0] for row in rows[1:]], np.array([[float(v) for v in row[1:]] for row in rows[1:]])
+    return (
+        rows[0],
+        [row[0] for row in rows[1:]],
+        np.array([[float(v) for v in row[1:]] for row in rows[1:]]),
+    )
 
 
 def test_only_the_measured_columns_are_plotted(tmp_path):

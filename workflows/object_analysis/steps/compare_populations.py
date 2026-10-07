@@ -47,8 +47,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     meta = pipeline_data.get("metadata", {})
     level = meta.get("scope_level")
     own = meta.get("unit", meta.get("scope", {})) or {}
-    units = [r["population"] for r in pipeline_data.get("results", [])
-             if "population" in r]
+    units = [r["population"] for r in pipeline_data.get("results", []) if "population" in r]
     compared = units[0]["level"] if units else None
     # A unit below this one that failed, and tiles whose unit was never
     # closed when this one was; the engine reports both as failures.

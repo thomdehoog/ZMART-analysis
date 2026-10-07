@@ -25,11 +25,23 @@ import numpy as np
 
 #: Columns that say which object it is or where it sits, not what it is like.
 NOT_MEASURED = {
-    "field", "position_label", "id", "x_um", "y_um", "intensity", "r", "label",
-    "object_id", "tile_name",
+    "field",
+    "position_label",
+    "id",
+    "x_um",
+    "y_um",
+    "intensity",
+    "r",
+    "label",
+    "object_id",
+    "tile_name",
 }
 NOT_MEASURED_PREFIXES = (
-    "bbox_", "centroid_", "weighted_centroid", "stage_", "bg_global_mean",
+    "bbox_",
+    "centroid_",
+    "weighted_centroid",
+    "stage_",
+    "bg_global_mean",
 )
 
 #: Scales a median absolute deviation to the standard deviation of a normal
@@ -92,8 +104,9 @@ def conditioned(frame, features: list[str]) -> np.ndarray:
     return scaled
 
 
-def principal_components(matrix: np.ndarray, features: list[str], *, seed: int = 0,
-                         n_components: int = 50):
+def principal_components(
+    matrix: np.ndarray, features: list[str], *, seed: int = 0, n_components: int = 50
+):
     """PCA of a conditioned matrix: ``(components, explained, loadings)``.
 
     ``explained`` is the share of the spread each component carries, and
@@ -128,8 +141,11 @@ def feature_summary(frame, features: list[str]) -> dict[str, dict[str, float]]:
         column = column[np.isfinite(column)]
         q25, median, q75 = np.percentile(column, [25, 50, 75])
         out[name] = {
-            "median": float(median), "q25": float(q25), "q75": float(q75),
-            "mean": float(column.mean()), "std": float(column.std()),
+            "median": float(median),
+            "q25": float(q25),
+            "q75": float(q75),
+            "mean": float(column.mean()),
+            "std": float(column.std()),
             "n": int(column.size),
         }
     return out

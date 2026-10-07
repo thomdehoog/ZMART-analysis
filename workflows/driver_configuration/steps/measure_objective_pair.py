@@ -63,8 +63,6 @@ METADATA = {
 AGREEMENT_MIN = 0.5
 
 
-
-
 def sharp_height_um(stack, z_um) -> dict:
     """Score every plane and refine the peak between planes with a parabola."""
     planes = [_plane(p) for p in stack]
@@ -85,8 +83,13 @@ def sharp_height_um(stack, z_um) -> dict:
             offset = 0.5 * (a - c) / denominator
             step = float(z[best + 1] - z[best - 1]) / 2.0
             peak_z = float(z[best] + offset * step)
-    return {"peak_z_um": peak_z, "peak_index": best, "bracketed": bool(bracketed),
-            "scores": scores.tolist(), "z_um": z.tolist()}
+    return {
+        "peak_z_um": peak_z,
+        "peak_index": best,
+        "bracketed": bool(bracketed),
+        "scores": scores.tolist(),
+        "z_um": z.tolist(),
+    }
 
 
 def _to_scale(image: np.ndarray, from_um: float, to_um: float) -> np.ndarray:
@@ -100,7 +103,7 @@ def _to_scale(image: np.ndarray, from_um: float, to_um: float) -> np.ndarray:
 def _centre_crop(image: np.ndarray, rows: int, cols: int) -> np.ndarray:
     r0 = (image.shape[0] - rows) // 2
     c0 = (image.shape[1] - cols) // 2
-    return image[r0:r0 + rows, c0:c0 + cols]
+    return image[r0 : r0 + rows, c0 : c0 + cols]
 
 
 def overlap_agreement(reference: np.ndarray, moved: np.ndarray, dcol: float, drow: float) -> float:
@@ -168,8 +171,11 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     # A focus difference is only reported when both stacks bracketed their
     # peak; a peak on the end of a stack says "refocus and take a wider
     # stack", not a height.
-    unbracketed = [name for name in ("reference", "target")
-                   if focus[name] is not None and not focus[name]["bracketed"]]
+    unbracketed = [
+        name
+        for name in ("reference", "target")
+        if focus[name] is not None and not focus[name]["bracketed"]
+    ]
     if unbracketed:
         dz_um = None
     return {
@@ -178,17 +184,24 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             "pixel_um": {"reference": ref_um, "target": tgt_um, "overlay": scale_um},
             "focus": focus,
             "registration": {
-                "dcol_px": dcol_px, "drow_px": drow_px,
-                "agreement": agreement, "error": float(error),
+                "dcol_px": dcol_px,
+                "drow_px": drow_px,
+                "agreement": agreement,
+                "error": float(error),
             },
             "accepted": bool(accepted) and not unbracketed,
             "why": (
-                None if accepted and not unbracketed
-                else (f"the focus peak sits at the end of the {' and '.join(unbracketed)} stack, so the "
-                      "sharpest plane was not reached; refocus under that lens and measure it again")
+                None
+                if accepted and not unbracketed
+                else (
+                    f"the focus peak sits at the end of the {' and '.join(unbracketed)} stack, so the "
+                    "sharpest plane was not reached; refocus under that lens and measure it again"
+                )
                 if unbracketed
-                else (f"the two pictures agree only {agreement:.2f} where they overlap (less than "
-                      f"{agreement_min}); check that both were taken at the same stage position and in focus")
+                else (
+                    f"the two pictures agree only {agreement:.2f} where they overlap (less than "
+                    f"{agreement_min}); check that both were taken at the same stage position and in focus"
+                )
             ),
             "settings": {"channel": channel, "upsample": upsample},
         }
@@ -218,7 +231,9 @@ def overlay_rgb(ref_norm: np.ndarray, tgt_norm: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0.0, 1.0)
 
 
-def write_focus_diagnostic(stack, focus: dict, path, *, title: str = "Software Autofocus", channel: int = 0):
+def write_focus_diagnostic(
+    stack, focus: dict, path, *, title: str = "Software Autofocus", channel: int = 0
+):
     """One lens's focus result, as the notebook shows it under its measure
     cell: the Brenner curve with its peak, and beside it the slice the
     microscope considered sharpest -- which should look like the sample in
@@ -234,22 +249,34 @@ def write_focus_diagnostic(stack, focus: dict, path, *, title: str = "Software A
     fig = Figure(figsize=(12, 5), facecolor="white")
     FigureCanvasAgg(fig)
     top, bottom = 0.86, 0.15
-    height = top - bottom                        # of the figure's 5 in
-    square = height * 5 / 12                     # the same height, as a share of 12 in
+    height = top - bottom  # of the figure's 5 in
+    square = height * 5 / 12  # the same height, as a share of 12 in
     ax = fig.add_axes([0.07, bottom, 0.94 - square - 0.07 - 0.04, height])
     ax_img = fig.add_axes([0.94 - square, bottom, square, height])
     ax.plot(focus["z_um"], focus["scores"], marker="o")
     bracketed = focus.get("bracketed", True)
-    ax.axvline(focus["peak_z_um"], color="red" if bracketed else "#b45309", linestyle="--",
-               label=f"peak z = {focus['peak_z_um']:.3f} um" if bracketed
-               else f"no peak: sharpest at the stack's end ({focus['peak_z_um']:.1f} um)")
+    ax.axvline(
+        focus["peak_z_um"],
+        color="red" if bracketed else "#b45309",
+        linestyle="--",
+        label=f"peak z = {focus['peak_z_um']:.3f} um"
+        if bracketed
+        else f"no peak: sharpest at the stack's end ({focus['peak_z_um']:.1f} um)",
+    )
     ax.set_xlabel("z (um, absolute)")
     ax.set_ylabel("Brenner Gradient Score")
-    ax.set_title(title if bracketed else f"{title} — refocus and measure again", color="#0f172a" if bracketed else "#b45309")
+    ax.set_title(
+        title if bracketed else f"{title} — refocus and measure again",
+        color="#0f172a" if bracketed else "#b45309",
+    )
     ax.legend(loc="best")
     stack = list(stack or [])
     if stack:
-        ax_img.imshow(_plane(stack[min(focus["peak_index"], len(stack) - 1)], channel), cmap="gray", origin="upper")
+        ax_img.imshow(
+            _plane(stack[min(focus["peak_index"], len(stack) - 1)], channel),
+            cmap="gray",
+            origin="upper",
+        )
     ax_img.set_title(f"Focus position (Z = {focus['peak_z_um']:.2f} µm)")
     ax_img.set_xticks([])
     ax_img.set_yticks([])
@@ -257,7 +284,9 @@ def write_focus_diagnostic(stack, focus: dict, path, *, title: str = "Software A
     return str(path)
 
 
-def write_overlay_diagnostic(reference: dict, target: dict, answer: dict, path, *, channel: int = 0):
+def write_overlay_diagnostic(
+    reference: dict, target: dict, answer: dict, path, *, channel: int = 0
+):
     """The X/Y result, as the notebook shows it: the two lenses' views laid
     over one another, reference in magenta and target in green, as acquired
     and after the shift the measurement found. ``None`` without matplotlib."""
@@ -288,7 +317,9 @@ def write_overlay_diagnostic(reference: dict, target: dict, answer: dict, path, 
     ax = fig.add_axes([0.5 - square - 0.02, bottom, square, height])
     ax2 = fig.add_axes([0.5 + 0.02, bottom, square, height])
     ax.imshow(overlay_rgb(_norm(ref_c), _norm(tgt_c)), origin="upper")
-    ax.set_title(f"Reference (magenta) vs target (green), as acquired\nshift ({t['x']:+.2f}, {t['y']:+.2f}) um")
+    ax.set_title(
+        f"Reference (magenta) vs target (green), as acquired\nshift ({t['x']:+.2f}, {t['y']:+.2f}) um"
+    )
     ax.set_axis_off()
     ax2.imshow(overlay_rgb(_norm(ref_c), _norm(tgt_back)), origin="upper")
     ax2.set_title("Target after the measured correction")

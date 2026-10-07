@@ -29,9 +29,14 @@ The analysis steps are 2D, so loading always returns a single YX plane.
 # Metric length units, for reconciling a stage position recorded in one
 # unit against a pixel size recorded in another.
 _LENGTH_IN_METERS = {
-    "meter": 1.0, "decimeter": 1e-1, "centimeter": 1e-2,
-    "millimeter": 1e-3, "micrometer": 1e-6, "nanometer": 1e-9,
-    "picometer": 1e-12, "angstrom": 1e-10,
+    "meter": 1.0,
+    "decimeter": 1e-1,
+    "centimeter": 1e-2,
+    "millimeter": 1e-3,
+    "micrometer": 1e-6,
+    "nanometer": 1e-9,
+    "picometer": 1e-12,
+    "angstrom": 1e-10,
 }
 
 
@@ -52,9 +57,7 @@ def is_ome_zarr(source) -> bool:
         return ".zarr" in text.lower()
 
     path = Path(text)
-    return path.is_dir() and (
-        (path / "zarr.json").exists() or (path / ".zattrs").exists()
-    )
+    return path.is_dir() and ((path / "zarr.json").exists() or (path / ".zattrs").exists())
 
 
 def _open_position(source):
@@ -101,9 +104,7 @@ def _resolve_level(container, level):
     if text in paths:
         return text
 
-    raise ValueError(
-        f"Resolution level {level!r} not found. Levels: {', '.join(paths)}"
-    )
+    raise ValueError(f"Resolution level {level!r} not found. Levels: {', '.join(paths)}")
 
 
 def _positions_below(source):
@@ -163,9 +164,7 @@ def _load_ome_zarr(source, level, t, c, z):
     axes_order = ("z", "y", "x") if projection else ("y", "x")
     channel = c if image.has_axis("c") else None
 
-    plane = image.get_as_dask(
-        channel_selection=channel, axes_order=axes_order, **slicing
-    )
+    plane = image.get_as_dask(channel_selection=channel, axes_order=axes_order, **slicing)
 
     if projection:
         # Reduce lazily, then cast back so downstream steps keep the
@@ -179,8 +178,7 @@ def _load_ome_zarr(source, level, t, c, z):
     plane = plane.compute()
 
     if image.has_axis("c"):
-        channel_index = (container.get_channel_idx(c) if isinstance(c, str)
-                         else int(c))
+        channel_index = container.get_channel_idx(c) if isinstance(c, str) else int(c)
     else:
         channel_index = None
     channel_labels = image.channel_labels
@@ -196,9 +194,9 @@ def _load_ome_zarr(source, level, t, c, z):
         "index": {k: int(v) for k, v in slicing.items()},
         "projection": projection,
         "channel": channel_index,
-        "channel_name": (channel_labels[channel_index]
-                         if channel_index is not None and channel_labels
-                         else None),
+        "channel_name": (
+            channel_labels[channel_index] if channel_index is not None and channel_labels else None
+        ),
         "pixel_size": dict(zip(image.axes, image.dataset.scale, strict=False)),
         "origin": dict(zip(image.axes, image.dataset.translation, strict=False)),
         "space_unit": image.space_unit,
@@ -237,8 +235,7 @@ def _pick_series(tif, series, source):
         return tif.series[_bounded(int(series), len(tif.series), "series")]
     except (TypeError, ValueError):
         raise ValueError(
-            f"Position {series!r} not found in {source}. "
-            f"Positions: {', '.join(names)}"
+            f"Position {series!r} not found in {source}. Positions: {', '.join(names)}"
         ) from None
 
 
@@ -324,8 +321,7 @@ def _tiff_origin(pixels, chosen, unit):
     def matches(plane):
         for key, attribute in (("t", "the_t"), ("c", "the_c"), ("z", "the_z")):
             wanted = chosen.get(key)
-            if wanted is not None and getattr(plane, attribute, None) not in (
-                    None, wanted):
+            if wanted is not None and getattr(plane, attribute, None) not in (None, wanted):
                 return False
         return True
 
@@ -370,15 +366,13 @@ def _load_tiff(source, level, t, c, z, series):
         axes = [letter.lower() for letter in dataset.axes]
 
         pixels = _ome_pixels(tif, series_index)
-        channel_names = ([channel.name for channel in pixels.channels
-                          if channel.name] if pixels else [])
-
-        plane, chosen, projection = _select_plane(
-            array, axes, t, c, z, channel_names
+        channel_names = (
+            [channel.name for channel in pixels.channels if channel.name] if pixels else []
         )
 
-        downsample = chosen_series.shape[axes.index("y")] / array.shape[
-            axes.index("y")]
+        plane, chosen, projection = _select_plane(array, axes, t, c, z, channel_names)
+
+        downsample = chosen_series.shape[axes.index("y")] / array.shape[axes.index("y")]
         pixel_size, unit = _tiff_pixel_size(pixels, downsample)
 
         channel_index = chosen.get("c")
@@ -395,9 +389,11 @@ def _load_tiff(source, level, t, c, z, series):
             "index": {k: v for k, v in chosen.items() if k != "c"},
             "projection": projection,
             "channel": channel_index,
-            "channel_name": (channel_names[channel_index]
-                             if channel_index is not None
-                             and channel_index < len(channel_names) else None),
+            "channel_name": (
+                channel_names[channel_index]
+                if channel_index is not None and channel_index < len(channel_names)
+                else None
+            ),
             "pixel_size": pixel_size,
             "origin": _tiff_origin(pixels, chosen, unit),
             "space_unit": unit,
@@ -410,9 +406,7 @@ def _bounded(index, size, axis):
     """Bounds check one axis index, allowing negative indexing."""
     index = int(index)
     if not -size <= index < size:
-        raise ValueError(
-            f"Index {index} is out of range for '{axis}' of size {size}."
-        )
+        raise ValueError(f"Index {index} is out of range for '{axis}' of size {size}.")
     return index % size
 
 
@@ -486,9 +480,7 @@ def _select_plane(array, axes, t, c, z, channel_names):
         plane = plane.astype(source_dtype)
 
     if plane.ndim != 2:
-        raise ValueError(
-            f"Expected a 2D plane, got shape {plane.shape} from axes {axes}."
-        )
+        raise ValueError(f"Expected a 2D plane, got shape {plane.shape} from axes {axes}.")
 
     return plane, chosen, projection
 
@@ -508,8 +500,7 @@ def _z_index(z, n_z):
         return int(z)
     except (TypeError, ValueError):
         raise ValueError(
-            f"Unknown z selection {z!r}. Use an index, \"mid\", or a "
-            f"projection: \"max\" or \"mean\"."
+            f'Unknown z selection {z!r}. Use an index, "mid", or a projection: "max" or "mean".'
         ) from None
 
 
@@ -642,8 +633,7 @@ def to_physical(centroid_y, centroid_x, metadata):
     }
 
 
-def load_channels(source, channels=None, *, level=0, t=0, z="mid", series=None,
-                  max_channels=3):
+def load_channels(source, channels=None, *, level=0, t=0, z="mid", series=None, max_channels=3):
     """
     Load up to `max_channels` channels of one plane, for a segmenter.
 
@@ -666,8 +656,7 @@ def load_channels(source, channels=None, *, level=0, t=0, z="mid", series=None,
     import numpy as np
 
     first_index = 0 if channels is None else list(channels)[0]
-    first, metadata = load_plane(source, level=level, t=t, c=first_index, z=z,
-                                 series=series)
+    first, metadata = load_plane(source, level=level, t=t, c=first_index, z=z, series=series)
 
     if channels is None:
         axes, shape = metadata.get("axes", []), metadata.get("shape", [])
@@ -678,16 +667,13 @@ def load_channels(source, channels=None, *, level=0, t=0, z="mid", series=None,
         if not wanted:
             raise ValueError("channels must name at least one channel.")
         if len(wanted) > max_channels:
-            raise ValueError(
-                f"at most {max_channels} channels, got {len(wanted)}: {wanted}"
-            )
+            raise ValueError(f"at most {max_channels} channels, got {len(wanted)}: {wanted}")
 
     if len(wanted) == 1:
         return first, metadata
 
     planes = [first] + [
-        load_plane(source, level=level, t=t, c=c, z=z, series=series)[0]
-        for c in wanted[1:]
+        load_plane(source, level=level, t=t, c=c, z=z, series=series)[0] for c in wanted[1:]
     ]
     return np.stack(planes, axis=-1), metadata
 
@@ -723,6 +709,4 @@ def as_plane(source, channel=0):
                 f"{array.shape[0]} channels (shape {array.shape})."
             )
         return array[channel].astype(np.float64)
-    raise ValueError(
-        f"expected a 2-D plane or a (C, Y, X) stack, got shape {array.shape}."
-    )
+    raise ValueError(f"expected a 2-D plane or a (C, Y, X) stack, got shape {array.shape}.")

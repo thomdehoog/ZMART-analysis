@@ -169,9 +169,12 @@ def _has_cellpose_runtime() -> tuple[bool, str]:
 
     prefix = _the_prefix_of(CELLPOSE_ENVIRONMENT)
     if prefix is None:
-        _CELLPOSE_RUNTIME_CACHE = False, (
-            f"the {CELLPOSE_ENVIRONMENT} environment is not set up; create it with "
-            "python workflows/object_analysis/environments/setup_env.py --step cellpose"
+        _CELLPOSE_RUNTIME_CACHE = (
+            False,
+            (
+                f"the {CELLPOSE_ENVIRONMENT} environment is not set up; create it with "
+                "python workflows/object_analysis/environments/setup_env.py --step cellpose"
+            ),
         )
         return _CELLPOSE_RUNTIME_CACHE
 
@@ -213,8 +216,6 @@ print("cuda" if torch.cuda.is_available() else "cpu")
     return _CELLPOSE_RUNTIME_CACHE
 
 
-
-
 @pytest.fixture
 def cellpose_device():
     """The device Cellpose's environment can use, ``"cuda"`` or ``"cpu"``."""
@@ -233,4 +234,3 @@ def pytest_collection_modifyitems(config, items):
             for item in items:
                 if "cellpose" in item.keywords:
                     item.add_marker(skip)
-
