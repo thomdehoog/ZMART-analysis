@@ -14,8 +14,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -62,8 +60,14 @@ venv.bak/
 *.swo
 *~
 
-# Jupyter Notebook
+# Jupyter Notebook, and what the tutorials make when stopped halfway
 .ipynb_checkpoints
+/demo/
+/stack.tiff
+/workflows/intensity/
+
+# Linting
+.ruff_cache/
 
 # macOS
 .DS_Store
@@ -84,9 +88,3 @@ output/
 *.tmp
 *.temp
 *.log
-
-# Dashboard
-node_modules/
-**/dashboard/dist/
-**/dashboard/src/data.json
-cell_selection_dashboard.html

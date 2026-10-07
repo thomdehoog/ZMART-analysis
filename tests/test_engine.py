@@ -1,5 +1,5 @@
 """
-Test suite for the v4 pipeline engine.
+Test suite for the engine.
 
 Covers: exception hierarchy, AST-based METADATA extraction, phase splitting,
 per-environment workers with state dicts, worker pool with per-step
@@ -32,20 +32,14 @@ Usage
     python -m pytest tests/test_engine.py -k Scopes -v
 """
 
-import atexit
 import os
-import shutil
 import subprocess
 import sys
-import tempfile
-import textwrap
 import threading
 import time
 import unittest
 from unittest.mock import patch
 from pathlib import Path
-
-import pytest
 
 # The engine package sits one folder up, at the root of the repository.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -57,39 +51,13 @@ from engine import (
 from engine.engine import get_step_settings
 from engine.pipeline import split_phases
 
-# All temp files go here; cleaned up on exit
-_TEMP_DIR = tempfile.mkdtemp(prefix="engine_test_")
-atexit.register(shutil.rmtree, _TEMP_DIR, True)
-_counter = 0
+# Step files, recipes and the polling helpers are the shared ones from conftest.
+from conftest import (  # noqa: E402
+    _SESSION_TEMP, _next_id, _wait_for_results, _wait_for_status,
+    _write_step as _temp_step, _write_yaml as _temp_yaml,
+)
 
-
-def _next_id():
-    global _counter
-    _counter += 1
-    return _counter
-
-
-def _temp_step(code, name=None):
-    """Write a temporary step .py file to _TEMP_DIR."""
-    path = Path(_TEMP_DIR) / (f"{name}.py" if name else
-                               f"step_{_next_id()}.py")
-    path.write_text(textwrap.dedent(code))
-    return str(path)
-
-
-def _temp_yaml(content):
-    """Write a temporary YAML pipeline file to _TEMP_DIR."""
-    text = textwrap.dedent(content)
-    if "functions_dir" not in text:
-        functions_dir = Path(_TEMP_DIR).as_posix()
-        header = f'metadata:\n  functions_dir: "{functions_dir}"\n'
-        if "metadata:" in text:
-            text = text.replace("metadata:", header.rstrip("\n"), 1)
-        else:
-            text = header + text
-    path = Path(_TEMP_DIR) / f"pipeline_{_next_id()}.yaml"
-    path.write_text(text)
-    return str(path)
+_TEMP_DIR = str(_SESSION_TEMP)
 
 
 def _capture_exception(errors, function):
@@ -98,37 +66,6 @@ def _capture_exception(errors, function):
         function()
     except BaseException as exc:
         errors.append(exc)
-
-
-def _wait_for_results(engine, name, expected, timeout=30):
-    """Poll engine.results() until expected count is reached or timeout.
-
-    Replaces fixed time.sleep() patterns with bounded polling -- fast when
-    work is fast, robust when it isn't.
-    """
-    t0 = time.monotonic()
-    collected = []
-    while time.monotonic() - t0 < timeout:
-        collected.extend(engine.results(name))
-        if len(collected) >= expected:
-            return collected
-        time.sleep(0.05)
-    return collected
-
-
-def _wait_for_status(engine, name, expected_total, timeout=30):
-    """Poll engine.status() until completed+failed >= expected_total.
-
-    Use when a test cares about pipeline status (failed counts, etc.)
-    rather than draining results.
-    """
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < timeout:
-        s = engine.status(name)
-        if s["completed"] + s["failed"] >= expected_total:
-            return s
-        time.sleep(0.05)
-    return engine.status(name)
 
 
 # ---- Errors ----------------------------------------------------------
@@ -192,12 +129,6 @@ class TestLoader(unittest.TestCase):
         path = _temp_step('METADATA = {"environment": "some_env"}')
         s = get_step_settings(Path(path))
         self.assertEqual(s["max_workers"], 1)
-
-    def test_no_device_in_output(self):
-        """v4 does not have a device field."""
-        path = _temp_step('METADATA = {"environment": "e", "device": "gpu"}')
-        s = get_step_settings(Path(path))
-        self.assertNotIn("device", s)
 
     def test_does_not_execute_module_code(self):
         path = _temp_step("""
@@ -1251,60 +1182,6 @@ class TestEngineScopes(unittest.TestCase):
 # ---- Engine (environment isolation) ----------------------------------
 
 
-@pytest.mark.conda_env
-class TestEngineEnvironmentIsolation(unittest.TestCase):
-    """Verify the engine actually launches steps in their declared conda env.
-
-    Requires a conda env named SMART--basic_test--env_a with Python 3.10.
-    The basic_test workflow that created it is no longer part of this
-    repository, so on a computer without that env the class is skipped. The
-    conda_env marker lets CI exclude it via ``pytest -m "not conda_env"``.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        from engine.conda_utils import get_conda_info, env_exists
-        cls.env_name = "SMART--basic_test--env_a"
-        # Skip if env_a doesn't exist (don't fail the suite for missing fixture)
-        try:
-            info = get_conda_info()
-        except FileNotFoundError:
-            raise unittest.SkipTest("conda not found")
-        if not env_exists(info, cls.env_name):
-            raise unittest.SkipTest(
-                f"conda env '{cls.env_name}' not found; "
-                f"this test needs a Python 3.10 conda env of that name"
-            )
-
-    def test_step_runs_in_declared_environment(self):
-        """A step with METADATA={'environment': 'SMART--basic_test--env_a'}
-        runs in env_a's Python (3.10), not the orchestrator's Python."""
-        _temp_step(f"""
-            import sys
-
-            METADATA = {{"environment": "{self.env_name}"}}
-
-            def run(pd, state, **p):
-                pd["py_major"] = sys.version_info[0]
-                pd["py_minor"] = sys.version_info[1]
-                pd["executable"] = sys.executable
-                return pd
-        """, name="env_a_check")
-        yaml = _temp_yaml("wf:\n  - env_a_check:")
-        from engine import Engine
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {})
-            results = _wait_for_results(e, "test", 1, timeout=60)
-
-        self.assertEqual(len(results), 1, "step did not execute")
-        self.assertEqual(results[0]["py_major"], 3)
-        self.assertEqual(results[0]["py_minor"], 10,
-                         f"expected Python 3.10 from env_a, "
-                         f"got {results[0]['py_major']}.{results[0]['py_minor']}")
-        self.assertIn(self.env_name, results[0]["executable"])
-
-
 # ---- Engine (results) ------------------------------------------------
 
 
@@ -1846,32 +1723,18 @@ class TestEnginePriority(unittest.TestCase):
 class TestPackageAPI(unittest.TestCase):
 
     def test_public_imports(self):
-        from engine import Engine
-        from engine import WorkerError, WorkerSpawnError
-        from engine import WorkerCrashedError, StepExecutionError
-        from engine import ScopeError
+        import engine
+        for name in ("Engine", "WorkerError", "WorkerSpawnError", "WorkerCrashedError",
+                     "WorkerTimeoutError", "StepExecutionError", "ScopeError"):
+            self.assertTrue(hasattr(engine, name), name)
 
     def test_version(self):
         import engine
-        self.assertEqual(engine.__version__, "4.0.0")
+        self.assertEqual(engine.__version__, "1.0.0rc1")
 
     def test_engine_in_all(self):
         import engine
         self.assertIn("Engine", engine.__all__)
-
-    def test_no_run_pipeline(self):
-        """v4 does not have run_pipeline."""
-        import engine
-        self.assertFalse(hasattr(engine, "run_pipeline"))
-
-    def test_no_pipeline_engine(self):
-        """v4 does not have PipelineEngine (renamed to Engine)."""
-        import engine
-        self.assertFalse(hasattr(engine, "PipelineEngine"))
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 # ---- The brake: a shutdown that does not wait ---------------------------

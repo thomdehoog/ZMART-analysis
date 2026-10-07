@@ -22,7 +22,6 @@ dependencies = [
 test = [
     "pytest>=8.0",
     "pytest-timeout>=2.3",
-    "psutil>=5.9",
     "numpy>=1.24",
     "scipy>=1.11",
     "scikit-image>=0.23",
@@ -49,10 +48,9 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "integration: end-to-end tests using real YAML pipelines through the engine",
-    "robustness: edge cases, error recovery, resource cleanup",
     "adversarial: stress / race-condition / corruption / protocol-attack tests",
     "slow: tests that take more than ~5s individually",
-    "cellpose: requires real cellpose + skimage in the active env",
+    "cellpose: requires the ZMART--object_analysis--cellpose conda environment",
     "pooch: uses public skimage sample data downloaded/cached by pooch",
     "conda_env: requires the conda environments a workflow's setup_env.py creates",
 ]

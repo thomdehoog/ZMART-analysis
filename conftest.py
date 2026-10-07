@@ -1,27 +1,11 @@
-"""Shared pytest fixtures and helpers for the smart-analysis test suite.
+"""Shared pytest helpers for the ZMART Analysis test suite.
 
-This conftest is loaded for every test file in the repo. It provides:
-
-- A session-scoped temp directory cleaned up at the end of the run.
-- Factories for creating step .py files and pipeline YAML files
-  (``temp_step``, ``temp_yaml``).
-- Polling helpers as fixtures (``wait_for_results``, ``wait_for_completion``)
-  that replace fixed ``time.sleep(N)`` patterns with bounded polling.
-- ``count_children`` helper backed by psutil (a hard test dependency,
-  declared in ``[project.optional-dependencies].test`` in pyproject.toml).
-
-Markers
--------
-See ``pyproject.toml`` ``[tool.pytest.ini_options]`` for the full marker list.
-The most-used:
-
-- ``integration`` -- real YAML pipelines through the v4 API
-- ``robustness`` -- edge cases, recovery
-- ``adversarial`` -- stress / race / corruption
-- ``slow`` -- > ~5s
-- ``cellpose`` -- requires cellpose + skimage in the active env
-- ``pooch`` -- uses public skimage sample data downloaded/cached by pooch
-- ``conda_env`` -- requires the conda environments a workflow's setup_env.py creates
+Loaded for every test file in the repository. Provides a session-wide temp
+directory, factories for step files and recipes (``_write_step``,
+``_write_yaml``), polling helpers that wait on engine state instead of
+sleeping, an ``engine_factory`` fixture that shuts its engines down, and the
+Cellpose probe the object_analysis tests skip on. The markers are declared
+in ``pyproject.toml``.
 """
 
 from __future__ import annotations
@@ -35,7 +19,6 @@ import textwrap
 import time
 from pathlib import Path
 
-import psutil
 import pytest
 
 
@@ -49,7 +32,7 @@ if str(ROOT) not in sys.path:
 # Session-wide temp dir
 # --------------------------------------------------------------------------
 
-_SESSION_TEMP = Path(tempfile.mkdtemp(prefix="smart_analysis_tests_"))
+_SESSION_TEMP = Path(tempfile.mkdtemp(prefix="zmart_analysis_tests_"))
 atexit.register(shutil.rmtree, _SESSION_TEMP, True)
 _counter = [0]
 
@@ -91,18 +74,6 @@ def _write_yaml(content):
     return str(path)
 
 
-@pytest.fixture
-def temp_step():
-    """Factory fixture: returns a callable ``temp_step(code, name=None)``."""
-    return _write_step
-
-
-@pytest.fixture
-def temp_yaml():
-    """Factory fixture: returns a callable ``temp_yaml(content)``."""
-    return _write_yaml
-
-
 # --------------------------------------------------------------------------
 # Polling helpers
 # --------------------------------------------------------------------------
@@ -119,23 +90,6 @@ def _wait_for_results(engine, name, expected, timeout=30):
     return collected
 
 
-def _wait_for_completion(engine, name, expected_total, timeout=30):
-    """Poll results AND status; return as soon as results+failed >= expected.
-
-    Avoids waiting the full timeout when a job has already failed (the
-    failure is recorded in status, not as a result).
-    """
-    t0 = time.monotonic()
-    collected = []
-    while time.monotonic() - t0 < timeout:
-        collected.extend(engine.results(name))
-        s = engine.status(name)
-        if len(collected) + s["failed"] >= expected_total:
-            return collected, s
-        time.sleep(0.05)
-    return collected, engine.status(name)
-
-
 def _wait_for_status(engine, name, expected_total, timeout=30):
     """Poll engine.status() until completed+failed >= expected_total."""
     t0 = time.monotonic()
@@ -145,38 +99,6 @@ def _wait_for_status(engine, name, expected_total, timeout=30):
             return s
         time.sleep(0.05)
     return engine.status(name)
-
-
-@pytest.fixture
-def wait_for_results():
-    return _wait_for_results
-
-
-@pytest.fixture
-def wait_for_completion():
-    return _wait_for_completion
-
-
-@pytest.fixture
-def wait_for_status():
-    return _wait_for_status
-
-
-# --------------------------------------------------------------------------
-# Process accounting (for resource-leak tests)
-# --------------------------------------------------------------------------
-
-
-def _count_children():
-    """Count subprocess children of the current process. Backed by psutil
-    because the v4 engine uses subprocess.Popen, which
-    multiprocessing.active_children() does not see (would yield 0)."""
-    return len(psutil.Process().children(recursive=True))
-
-
-@pytest.fixture
-def count_children():
-    return _count_children
 
 
 # --------------------------------------------------------------------------
@@ -292,30 +214,6 @@ print("cuda" if torch.cuda.is_available() else "cpu")
     return _CELLPOSE_RUNTIME_CACHE
 
 
-def pytest_configure(config):
-    """Register the markers.
-
-    Upstream declares these in its own ``pyproject.toml``; ZMART has no
-    repo-wide pytest configuration, so they are registered here instead --
-    beside the conftest that uses them, and without a global config that
-    would change how the rest of the repository's suites collect.
-    """
-    for marker, description in (
-        ("integration", "end-to-end tests using real YAML pipelines through the v4 API"),
-        ("robustness", "edge cases, error recovery, resource cleanup"),
-        ("adversarial", "stress / race-condition / corruption / protocol-attack tests"),
-        ("slow", "tests that take more than ~5s individually"),
-        ("cellpose", "requires the ZMART--object_analysis--cellpose environment"),
-        ("pooch", "uses public skimage sample data downloaded/cached by pooch"),
-        ("conda_env", "requires the conda environments a workflow's setup_env.py creates"),
-    ):
-        config.addinivalue_line("markers", f"{marker}: {description}")
-
-
-@pytest.fixture
-def cellpose_available():
-    """Return (available, reason). Tests can call pytest.skip() with reason."""
-    return _has_cellpose_runtime()
 
 
 @pytest.fixture

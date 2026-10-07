@@ -180,7 +180,7 @@ def main():
                         help="Engine PID to watch; defaults to os.getppid()")
     args = parser.parse_args()
 
-    log_level = os.environ.get("SMART_LOG_LEVEL", "WARNING")
+    log_level = os.environ.get("ZMART_LOG_LEVEL", "WARNING")
     logging.basicConfig(
         level=getattr(logging, log_level, logging.WARNING),
         format="[worker %(process)d] %(levelname)s %(message)s",
