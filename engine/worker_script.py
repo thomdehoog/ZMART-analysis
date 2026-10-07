@@ -45,6 +45,9 @@ Usage (called by Worker, not directly)
 """
 
 import argparse
+import hashlib
+import platform
+from importlib import metadata
 import logging
 import os
 import pickle
@@ -55,7 +58,12 @@ from multiprocessing.connection import Client
 
 
 def _load_module(step_path):
-    """Load a step module via exec. Mirrors how the engine reads a step (engine.py, get_step_settings)."""
+    """Run the step file in a fresh namespace and return it as a module.
+
+    The engine itself never runs the file; it only reads its METADATA
+    (engine.get_step_settings). The running happens here, in the step's
+    own environment.
+    """
     name = os.path.splitext(os.path.basename(step_path))[0]
     namespace = {"__name__": name, "__file__": step_path}
     with open(step_path) as f:
@@ -74,10 +82,6 @@ def _environment_record():
     identical environments; a changed fingerprint means something was
     installed, removed or upgraded in between.
     """
-    import hashlib
-    import platform
-    from importlib import metadata
-
     installed = sorted(
         f"{(dist.metadata['Name'] or '').lower()}=={dist.version}"
         for dist in metadata.distributions()
@@ -97,8 +101,6 @@ def _loaded_package_versions(module_to_dists):
     torch and numpy, not the two hundred packages that sit unused in the
     environment. The standard library is not a package and is not listed.
     """
-    from importlib import metadata
-
     versions = {}
     for top in {name.split(".")[0] for name in list(sys.modules)}:
         for dist in module_to_dists.get(top, ()):
@@ -202,8 +204,6 @@ def main():
     request_count = 0
     # Measured once per worker: the environment cannot change under a
     # running interpreter in any way that would matter to the record.
-    from importlib import metadata
-
     env_record = _environment_record()
     module_to_dists = metadata.packages_distributions()
 

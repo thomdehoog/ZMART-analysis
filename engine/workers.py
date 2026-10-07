@@ -2,87 +2,28 @@
 Workers -- the separate processes that run the steps.
 
 Every step runs in a worker: a Python process started inside the step's own
-conda environment. A worker starts once and stays running, so a model it
-loaded for the first tile is still there for the next one. This module holds
-one worker (Worker), the pool that keeps workers per environment
-(WorkerPool), and the errors a worker can raise.
+conda environment with ``conda run``, talking to the engine over a local
+socket. A worker starts once and stays running, so a model it loaded for
+the first image is still there for the next. This module holds one worker
+(Worker), the pool that keeps workers per environment (WorkerPool, with one
+_EnvPool per environment and a semaphore per step for ``max_workers``), and
+the errors a worker can raise:
 
-Errors a worker can raise
--------------------------
-WorkerError (base for all subprocess issues)
-    +-- WorkerSpawnError      subprocess failed to start or connect
-    +-- WorkerCrashedError    subprocess died during execution
-    +-- WorkerTimeoutError    step exceeded its execution timeout and the
-                              worker was killed by the engine
-    +-- StepExecutionError    step's run() raised an exception
-                              (includes .remote_traceback from subprocess)
+    WorkerError
+    +-- WorkerSpawnError      the process failed to start or connect
+    +-- WorkerCrashedError    the process died, or broke the protocol
+    +-- WorkerTimeoutError    the step ran past its timeout and was killed
+    +-- StepExecutionError    the step's run() raised
 
-ScopeError, for an invalid scope configuration, lives in pipeline.py.
-
-All step execution goes through worker subprocesses. StepExecutionError
-covers step failures raised by user code. WorkerSpawnError,
-WorkerCrashedError, and WorkerTimeoutError cover infrastructure issues
-with the subprocess itself.
-
-
-Worker -- Manages a subprocess for one conda environment.
----------------------------------------------------------
-Spawns worker_script.py in the target conda environment and communicates
-via multiprocessing.connection (TCP sockets with pickle serialization).
-
-Workers are per-environment, not per-step. A single worker can execute any
-step file sent to it, with modules and state dicts cached inside the
-subprocess for warm-start performance.
-
-Lifecycle
----------
-1. ensure_running(): Allocate random port, spawn subprocess, wait for
-   it to connect back. Uses authkey for secure handshake.
-2. execute(step_path, data, params): Send work, wait for response.
-3. shutdown(): Send None sentinel, wait 5s for a graceful exit, then kill
-   the process tree. shutdown(now=True) kills the tree at once: the
-   operator's Interrupt reaching a step in flight.
-
-Connection protocol
--------------------
-- Parent creates Listener on localhost:0 (random port)
-- Subprocess receives port + authkey via CLI args
-- Subprocess connects back as Client
-- Messages: (step_path, pipeline_data, params) via pickle
-- Shutdown sentinel: None (pickled)
-
-
-WorkerPool -- Per-environment worker pools with dynamic scaling.
-----------------------------------------------------------------
-Manages worker subprocesses organized by conda environment. Workers are
-created on demand and scale up to the per-step max_workers limit. Idle
-workers are reaped after a configurable timeout.
-
-Architecture
-------------
-Each environment gets an _EnvPool that tracks idle and busy workers.
-The WorkerPool routes execute() calls to the right _EnvPool and enforces
-per-step concurrency via semaphores.
-
-Per-step concurrency
---------------------
-max_workers is a per-step limit, not per-environment. A semaphore per
-step path ensures no more than max_workers instances of the same step
-run concurrently, even across different pipelines.
-
-Thread safety
--------------
-- _pool_lock protects _env_pools dict during creation.
-- _sem_lock protects _step_semaphores dict during creation.
-- Each _EnvPool has its own lock for idle/busy tracking.
-- Reaper thread runs every 30s to shut down idle workers.
+Thread safety: the pools guard their dictionaries with locks and each
+_EnvPool guards its idle and busy lists; a reaper thread stops idle workers.
 """
 
 import collections
 import logging
 import os
 import pickle
-import socket
+import signal
 import subprocess
 import sys
 import threading
@@ -90,7 +31,7 @@ import time
 from multiprocessing.connection import Listener
 from pathlib import Path
 
-from .conda_utils import CONDA_CMD
+from .conda_utils import CONDA_CMD, get_conda_info
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +45,7 @@ class WorkerSpawnError(WorkerError):
 
 
 class WorkerCrashedError(WorkerError):
-    """Worker process died unexpectedly during execution."""
+    """The worker is unusable: its process died, or it broke the protocol."""
 
 
 class WorkerTimeoutError(WorkerError):
@@ -126,17 +67,14 @@ WORKER_SCRIPT = ENGINE_DIR / "worker_script.py"
 _STDERR_BUFFER = 8192
 
 #: One spawn at a time, for the whole process. `conda run` on Windows writes
-#: its activation through a temp file whose name is NOT unique across
-#: concurrent invocations from one parent -- two spawns racing corrupt each
-#: other's activation ("The process cannot access the file because it is
-#: being used by another process"), the worker never connects, and conda's
-#: dying words name an environment that exists. Any submission fan-out that
-#: needs more than one worker spawns several at once and lost all but the
-#: first; one at a time costs a few serial seconds at warm-up, once, against
-#: a run that died at its fan-out. Reproduced directly: four concurrent
-#: ``conda run -n <env> python -c ...`` from one parent, three failed on the
-#: same ``__conda_tmp_<n>.txt``.
+#: its activation to a temp file whose name is not unique per invocation, so
+#: concurrent spawns from one parent corrupt each other and never connect.
 _spawn_turn = threading.Lock()
+
+
+def _label(environment):
+    """An environment's name in messages; the engine's own has none."""
+    return environment or "orchestrator"
 
 #: How long one accept() turn waits before checking for a shutdown, seconds.
 _ACCEPT_TURN_S = 0.25
@@ -146,8 +84,8 @@ def _the_python_of(environment):
     """How the interpreter of a step's conda environment is reached.
 
     `conda run` activates the environment and starts the interpreter as its
-    own child, so the worker is a grandchild of the engine. A test stands a
-    wrapper of its own here to prove the whole tree is put down.
+    own child, so the worker is a grandchild of the engine, and is killed
+    as a tree (see Worker._kill_tree).
 
     The interpreter is named by its path, not as `python`: on Windows,
     `conda run` leaves an interpreter that already stands first on PATH
@@ -169,7 +107,6 @@ def _the_prefix_of(environment):
     global _prefixes
     if _prefixes is None:
         try:
-            from .conda_utils import get_conda_info
             _prefixes = {Path(env).name: Path(env) for env in get_conda_info().get("envs", [])}
         except Exception as why:  # noqa: BLE001 -- conda unreachable: fall back to the name
             logger.warning("could not list conda environments (%s); naming the interpreter as 'python'", why)
@@ -248,9 +185,8 @@ class Worker:
         self._stderr_drainer = None
         self._last_active = time.monotonic()
         self._current_step = None
-        #: Set by :meth:`shutdown` with ``now``. A worker put down stays
-        #: down: a press that landed before the spawn was forgotten, and the
-        #: whole tree came up afterwards and stayed.
+        #: Set by :meth:`shutdown` with ``now``. A killed worker stays down,
+        #: even when the kill landed before its spawn.
         self._closed = False
 
     def ensure_running(self):
@@ -285,7 +221,7 @@ class Worker:
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
 
-        # The worker is put down as a tree (see _kill_tree): under `conda run`
+        # The worker is killed as a tree (see _kill_tree): under `conda run`
         # the process started here is a wrapper, and the interpreter doing
         # the work is its child. Windows kills by tree from the wrapper's
         # pid; POSIX needs the wrapper to lead a session of its own.
@@ -295,7 +231,7 @@ class Worker:
         else:
             kwargs["start_new_session"] = True
 
-        env_label = self.environment or "orchestrator"
+        env_label = _label(self.environment)
         logger.debug("Worker spawning: env=%s, port=%d", env_label, port)
 
         # Spawn-to-connect under the one turn: the conda activation is what
@@ -318,17 +254,13 @@ class Worker:
                          self._process.pid, env_label)
             self._refuse_if_put_down()
 
-            # Drain stderr in background so the pipe buffer never fills.
-            # Without this, a worker logging errors to stderr can block
-            # permanently after ~4KB of output (Windows pipe buffer size).
             self._stderr_drainer = _StderrDrainer(self._process.stderr)
 
             try:
                 self._conn = self._accept_in_turns()
             except Exception as e:
-                # A press that landed while the worker was on its way closes
-                # the door it was to come through; that is the press, not a
-                # worker that could not connect.
+                # A shutdown that landed during the spawn is reported as
+                # that, not as a worker that could not connect.
                 self._refuse_if_put_down()
                 stderr = self._stderr_drainer.get_output() if self._stderr_drainer else ""
                 logger.error("Worker connect failed: pid=%d, env=%s, stderr=%s",
@@ -355,7 +287,7 @@ class Worker:
         while True:
             try:
                 return self._listener.accept()
-            except socket.timeout:
+            except TimeoutError:
                 pass
             self._refuse_if_put_down()
             if self._process is not None and self._process.poll() is not None:
@@ -364,7 +296,7 @@ class Worker:
                     "before connecting"
                 )
             if time.monotonic() >= deadline:
-                raise socket.timeout(
+                raise TimeoutError(
                     f"no connection within {self.connect_timeout}s"
                 )
 
@@ -372,15 +304,13 @@ class Worker:
         """A shutdown that landed at any point of the spawn wins.
 
         Checked before the spawn, right after it, and once the worker is on
-        the line: whatever came up in between is put down again, and the
-        caller is told the worker is gone rather than handed a job on a
-        worker nobody wanted.
+        the line: whatever came up in between is killed again, and the
+        caller is told the worker is gone.
         """
         if not self._closed:
             return
         self._cleanup()
-        env_label = self.environment or "orchestrator"
-        raise WorkerCrashedError(f"Worker for '{env_label}' was put down")
+        raise WorkerCrashedError(f"Worker for '{_label(self.environment)}' was killed")
 
     def execute(self, step_path, pipeline_data, params, timeout=300.0):
         """
@@ -422,7 +352,7 @@ class Worker:
             logger.error("Worker send failed: pid=%d, step=%s: %s",
                          pid, step_name, e)
             self._cleanup()
-            env_label = self.environment or "orchestrator"
+            env_label = _label(self.environment)
             raise WorkerCrashedError(
                 f"Worker for '{env_label}' lost connection: {e}"
             ) from e
@@ -432,7 +362,7 @@ class Worker:
                 logger.error("Worker timed out: pid=%d, step=%s, "
                              "timeout=%.0fs", pid, step_name, timeout)
                 self._cleanup()
-                env_label = self.environment or "orchestrator"
+                env_label = _label(self.environment)
                 raise WorkerTimeoutError(
                     f"Worker for '{env_label}' timed out after {timeout}s"
                 )
@@ -443,7 +373,7 @@ class Worker:
             logger.error("Worker crashed: pid=%d, step=%s, stderr=%s",
                          pid, step_name, stderr[:500])
             self._cleanup()
-            env_label = self.environment or "orchestrator"
+            env_label = _label(self.environment)
             raise WorkerCrashedError(
                 f"Worker for '{env_label}' crashed. stderr: {stderr}"
             ) from e
@@ -454,7 +384,7 @@ class Worker:
         self._current_step = None
 
         if not isinstance(response, tuple) or len(response) != 2:
-            env_label = self.environment or "orchestrator"
+            env_label = _label(self.environment)
             raise WorkerCrashedError(
                 f"Worker for '{env_label}' sent invalid response"
             )
@@ -501,7 +431,7 @@ class Worker:
             state = "busy"
         else:
             state = "idle"
-        env_label = self.environment or "orchestrator"
+        env_label = _label(self.environment)
         return {
             "env": env_label,
             "state": state,
@@ -513,20 +443,18 @@ class Worker:
         """Shut the worker subprocess down.
 
         Politely by default: the sentinel is sent, and an idle worker exits
-        on it within a moment. With ``now`` the worker is put down at once,
-        tree and all, without the sentinel or the wait -- this is the
-        operator's Interrupt reaching a step in flight, and a step in flight
-        never reads the sentinel, so waiting for it only delayed the kill by
-        five seconds. A caller blocked in :meth:`execute` on that worker is
-        released with :class:`WorkerCrashedError`, because the pipe breaks
-        when the process does.
+        on it within a moment. With ``now`` the worker is killed at once,
+        tree and all, without the sentinel or the wait: a step in flight
+        never reads the sentinel. A caller blocked in :meth:`execute` on
+        that worker is released with :class:`WorkerCrashedError`, because
+        the pipe breaks when the process does.
         """
-        # Put down now means put down for good; a polite shutdown leaves the
-        # object able to spawn again, as the protocol tests hold it to.
+        # Killed now means killed for good; a polite shutdown leaves the
+        # object able to spawn again.
         self._closed = self._closed or now
         pid = self._process.pid if self._process else None
         if pid:
-            env_label = self.environment or "orchestrator"
+            env_label = _label(self.environment)
             logger.debug("Worker shutdown: pid=%d, env=%s, now=%s", pid, env_label, now)
 
         if self._conn is not None and not now:
@@ -539,7 +467,7 @@ class Worker:
             try:
                 self._process.wait(timeout=0.0 if now else 5.0)
             except subprocess.TimeoutExpired:
-                logger.warning("Worker put down: pid=%d", pid)
+                logger.warning("Worker killed: pid=%d", pid)
                 self._kill_tree()
 
         self._cleanup()
@@ -548,9 +476,8 @@ class Worker:
         """Kill the worker process and everything under it.
 
         Under `conda run` the process this object holds is the wrapper, and
-        the interpreter doing the work is its child: terminating the wrapper
-        alone left that child segmenting on, and the operator's Interrupt
-        stopped nothing (ten such orphans were found on one machine).
+        the interpreter doing the work is its child; killing the wrapper
+        alone would leave that child running.
         """
         process = self._process
         if process is None or process.poll() is not None:
@@ -561,7 +488,6 @@ class Worker:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         else:
-            import signal
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
@@ -602,7 +528,7 @@ class Worker:
             self._process = None
 
     def __repr__(self):
-        env_label = self.environment or "orchestrator"
+        env_label = _label(self.environment)
         return f"Worker(env={env_label!r}, alive={self.is_alive()})"
 
 
@@ -626,7 +552,7 @@ class _EnvPool:
         """Get an idle worker or create a new one. Marks it busy."""
         with self._lock:
             if self._closed:
-                raise RuntimeError("Worker pool has been shut down")
+                raise RuntimeError("WorkerPool has been shut down")
             # Try to reuse an idle worker
             while self._idle:
                 worker = self._idle.pop()
@@ -671,9 +597,9 @@ class _EnvPool:
             worker.shutdown()
 
         if to_shutdown:
-            env_label = self.environment or "orchestrator"
-            logger.info("EnvPool(%s): reaped %d idle worker(s)",
-                        env_label, len(to_shutdown))
+            env_label = _label(self.environment)
+            logger.info("Reaped %d idle worker(s) of %s",
+                        len(to_shutdown), env_label)
 
     def shutdown_all(self, now=False):
         """Shut down all workers in this pool; with ``now``, at once."""
@@ -766,8 +692,8 @@ class WorkerPool:
             if self._closed:
                 raise RuntimeError("WorkerPool has been shut down")
             if environment not in self._env_pools:
-                env_label = environment or "orchestrator"
-                logger.info("Pool: creating env pool for %s", env_label)
+                env_label = _label(environment)
+                logger.info("Creating env pool for %s", env_label)
                 self._env_pools[environment] = _EnvPool(
                     environment, self.idle_timeout, self.connect_timeout,
                 )
@@ -792,7 +718,7 @@ class WorkerPool:
     def _ensure_reaper(self):
         """Start the reaper thread on first pool creation."""
         if self._reaper is None:
-            logger.debug("Pool: starting reaper (idle_timeout=%s)",
+            logger.debug("Starting reaper (idle_timeout=%s)",
                          self.idle_timeout)
             self._reaper = threading.Thread(
                 target=self._reaper_loop, daemon=True,
@@ -821,8 +747,8 @@ class WorkerPool:
     def shutdown_all(self, now=False):
         """Shut down all workers and stop background threads.
 
-        With ``now`` every worker is put down at once, busy or not: the
-        operator's Interrupt, which must reach a step in flight.
+        With ``now`` every worker is killed at once, busy or not, so a step
+        in flight stops too.
         """
         self._shutdown_event.set()
 
@@ -832,11 +758,11 @@ class WorkerPool:
             n = len(pools)
 
         if n:
-            logger.info("Pool: shutting down %d env pool(s) (now=%s)", n, now)
+            logger.info("Shutting down %d env pool(s) (now=%s)", n, now)
         for pool in pools:
             pool.shutdown_all(now=now)
 
-        logger.debug("Pool: shutdown complete")
+        logger.debug("WorkerPool shutdown complete")
 
     def __repr__(self):
         with self._pool_lock:

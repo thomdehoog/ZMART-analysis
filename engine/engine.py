@@ -3,37 +3,12 @@ Engine -- what you call to run analyses.
 
 You register a recipe, submit images to it, and collect the results. The
 Engine never runs step code itself: it reads each step's METADATA without
-running the file, and hands the work to workers (see workers.py).
+running the file, and hands the work to workers (see workers.py). Scope
+handling, phases and per-recipe state live in pipeline.py.
 
-Engine -- Central orchestrator for the v4 pipeline engine.
-----------------------------------------------------------
-Four core methods plus shutdown:
-
-    engine = Engine()
-    engine.register("overview", "path/to/overview.yaml")
-    engine.submit("overview", data, scope={"group": "R3"}, complete="group")
-    engine.status("overview")
-    engine.results("overview")
-    engine.shutdown()
-
-The engine never executes step code. All step execution happens in worker
-subprocesses managed by the WorkerPool. Step files are only read via AST
-at register() time to extract METADATA.
-
-Thread safety
--------------
-- _lock protects _pipelines dict and _accepting flag.
-- Each PipelineState has its own lock for internal state.
-- submit() and results() can be called from different threads safely.
-
-
-Step METADATA extraction via AST parsing.
------------------------------------------
-Reads a step file's METADATA dict without executing any code. Used by the
-engine at register() time to determine execution requirements for each step.
-
-The engine never imports or executes step files. All step execution happens
-in worker subprocesses running in the correct conda environment.
+Thread safety: ``_lock`` guards the registered recipes and the accepting
+flag; each PipelineState has its own lock. ``submit`` and ``results`` may
+be called from different threads.
 """
 
 from __future__ import annotations
@@ -83,7 +58,7 @@ class _PriorityThreadPool:
         future = Future()
         with self._not_empty:
             if self._shutdown:
-                raise RuntimeError("pool is shut down")
+                raise RuntimeError("Priority pool has been shut down")
             self._counter += 1
             heapq.heappush(
                 self._heap,
@@ -124,7 +99,7 @@ class _PriorityThreadPool:
 
 class Engine:
     """
-    Central pipeline orchestrator.
+    Runs recipes: register, submit, results, status, shutdown.
 
     Parameters
     ----------
@@ -133,9 +108,10 @@ class Engine:
         keeps them for as long as the engine lives, for a caller that holds
         one engine for a session and wants the workers' imports paid once.
     max_concurrent : int
-        Maximum concurrent operations in the thread pool (default: 8).
+        How many jobs run at once (default: 8). Per-image work and scope
+        closes each get a thread pool of this size.
     execution_timeout : float or None
-        Default timeout for a single step in seconds (default: 300).
+        Seconds one step may run before it is killed (default: 300).
     """
 
     def __init__(self, idle_timeout=300.0, max_concurrent=8,
@@ -203,7 +179,7 @@ class Engine:
             levels = metadata.get("levels")
             if levels is not None and (
                     not isinstance(levels, list)
-                    or not all(isinstance(l, str) for l in levels)
+                    or not all(isinstance(level, str) for level in levels)
                     or len(set(levels)) != len(levels)):
                 raise ValueError(
                     "metadata 'levels' must be a list of distinct level "
@@ -217,6 +193,9 @@ class Engine:
                     if step.name not in step_settings:
                         step_path = functions_dir / f"{step.name}.py"
                         settings = get_step_settings(step_path)
+                        # A step naming the engine's own environment runs
+                        # on the engine's Python: None, like a step that
+                        # names none.
                         env = settings["environment"]
                         if env is not None and env == self._default_env:
                             env = None
@@ -240,8 +219,8 @@ class Engine:
                 step_settings=step_settings,
                 verbose=verbose,
                 levels=levels,
+                workflow_name=workflow_name,
             )
-            state.workflow_name = workflow_name
 
             with self._lock:
                 if not self._accepting:
@@ -257,22 +236,21 @@ class Engine:
 
     def submit(self, name, data, scope=None, priority=None, complete=None):
         """
-        Submit a job to a registered pipeline. Non-blocking.
+        Submit one image to a registered recipe. Returns at once.
 
         Parameters
         ----------
         name : str
-            Registered pipeline name.
+            The recipe's registered name.
         data : dict
-            Input data for the pipeline.
+            What the steps see as ``pipeline_data["input"]``.
         scope : dict, optional
-            Labels which scope group this job belongs to.
-            E.g., {"carrier": 1, "compartment": 3, "group": 2}.
+            The units this image belongs to,
+            e.g. {"carrier": 1, "compartment": 3, "group": 2}.
         priority : int, optional
-            Higher = more urgent. Default is FIFO (submission order).
+            Higher runs first. Equal priorities run in submission order.
         complete : str or list, optional
-            Signals that one or more scope levels are complete for this
-            job's scope group.
+            The level, or levels, this image closes for its unit.
 
         Raises
         ------
@@ -335,18 +313,19 @@ class Engine:
 
     def status(self, name=None):
         """
-        Query pipeline status.
+        Query a recipe's status.
 
         Parameters
         ----------
         name : str, optional
-            Pipeline name. If None, returns status for all pipelines.
+            The recipe's name. If None, the status of every recipe.
 
         Returns
         -------
         dict
-            Pipeline status with pending, running, completed, failed counts
-            and failure details.
+            ``pending``, ``running``, ``completed`` and ``failed`` counts,
+            the ``failures`` themselves, and ``held``: the results waiting
+            for a unit to close.
         """
         if name is not None:
             state = self._get_pipeline(name)
@@ -384,14 +363,11 @@ class Engine:
         Parameters
         ----------
         wait : bool, optional
-            If True, wait for queued engine tasks to finish before the
-            thread pool returns. If False, put the workers down first,
-            busy ones included, so that a step in flight dies now and the
-            engine thread waiting on it is released; nothing queued runs.
-            This is the operator's Interrupt: measured before it, a stop
-            pressed one second into a tile test waited 19 s for the field
-            and then handed its objects back, because the threads were
-            joined before the workers were touched.
+            If True, wait for queued jobs to finish, then stop the
+            workers. If False, kill the workers first, busy ones included,
+            so a step in flight dies now and the thread waiting on it is
+            released; nothing queued runs. The workers go before the
+            threads are joined, or a stop would wait out the step.
 
         Returns
         -------
@@ -428,7 +404,7 @@ class Engine:
         scopes like ["group", "all"] execute in the correct order. Every
         level's running mark is cleared when it finishes, whatever happens.
         """
-        for level, token in zip(levels, tokens):
+        for level, token in zip(levels, tokens, strict=True):
             try:
                 self._handle_scope_complete(state, level, scope, submission_idx)
             except Exception as e:
@@ -481,8 +457,8 @@ class Engine:
 
         except Exception as e:
             state.record_failure(scope, step_name, str(e), 0, submission_idx)
-            logger.error("Phase 0 failed for %s (idx=%d): %s",
-                         state.name, submission_idx, e)
+            logger.error("Phase 0 failed in '%s' (submission %d, step %s): %s",
+                         state.name, submission_idx, step_name, e)
             raise
 
     # -- Internal: scope completion ------------------------------------
@@ -500,6 +476,7 @@ class Engine:
         submissions, failed, provenance, seen = [], list(failures), {}, set()
 
         def add(step, record):
+            # Records are deduplicated on their JSON text.
             key = (step, json.dumps(record, sort_keys=True, default=str))
             if key not in seen:
                 seen.add(key)
@@ -535,11 +512,11 @@ class Engine:
             return
 
         # The unit being closed: this level's value and every wider level's,
-        # since compartment 3 exists on every carrier.
-        value = state.scope_key(level, scope)
+        # since compartment 3 exists on every carrier. None means everything.
+        unit = state.scope_key(level, scope)
 
         # Wait for all matching Phase 0 futures to complete
-        matching_futures = state.get_matching_futures(value, submission_idx)
+        matching_futures = state.get_matching_futures(unit, submission_idx)
         for f in matching_futures:
             try:
                 f.result()
@@ -549,16 +526,16 @@ class Engine:
         # Collect results from previous phase, and what a narrower level
         # never closed
         results, failures = state.collect_for_scope(
-            phase_idx, value, submission_idx)
-        failures += state.held_for(phase_idx, value, submission_idx)
+            phase_idx, unit, submission_idx)
+        failures += state.held_for(phase_idx, unit, submission_idx)
 
         if not results and not failures:
-            logger.warning("No results for scope '%s' (value=%s) in '%s'",
-                           level, value, state.name)
+            logger.warning("No results for scope '%s' (unit=%s) in '%s'",
+                           level, unit, state.name)
             return
 
         # Clean up consumed job entries
-        state.cleanup_consumed_entries(value, submission_idx)
+        state.cleanup_consumed_entries(unit, submission_idx)
 
         # Execute the scoped phase. The lineage is attached after the step
         # returns, so a step that builds a new dict cannot drop it; the
@@ -569,7 +546,7 @@ class Engine:
         try:
             result, metadata = self._execute_scoped_phase(
                 state, phase_idx, results, failures, scope, level,
-                value or {}, step_name)
+                unit or {}, step_name)
             result.setdefault("metadata", metadata)
             result["lineage"] = lineage
 
@@ -586,8 +563,8 @@ class Engine:
         except Exception as e:
             state.record_failure(
                 scope, step_name[0], str(e), phase_idx, submission_idx)
-            logger.error("Scoped phase %d failed for %s: %s",
-                         phase_idx, state.name, e)
+            logger.error("Phase %d failed in '%s' (submission %d, step %s): %s",
+                         phase_idx, state.name, submission_idx, step_name[0], e)
 
     def _execute_scoped_phase(self, state, phase_idx, accumulated_results,
                                failures, scope, scope_level, unit, step_name):
