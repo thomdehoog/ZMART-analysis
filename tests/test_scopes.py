@@ -92,9 +92,23 @@ def scoped(engine, expected, timeout=30):
     while time.monotonic() - t0 < timeout:
         collected += engine.results("p")
         if sum(r["_phase"] > 0 for r in collected) >= expected:
-            break
+            return collected
         time.sleep(0.05)
-    return collected
+    raise TimeoutError(
+        f"{expected} scoped results expected within {timeout}s, got "
+        f"{sum(r['_phase'] > 0 for r in collected)}; status {engine.status('p')}"
+    )
+
+
+def status_when(engine, condition, timeout=30):
+    """Poll ``engine.status`` until *condition* holds; return the status."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        status = engine.status("p")
+        if condition(status):
+            return status
+        time.sleep(0.05)
+    return engine.status("p")
 
 
 def by_unit(results, level):
@@ -301,7 +315,7 @@ def test_a_failed_tile_reaches_its_compartment_and_no_other(recipe):
         e.submit("p", {"fail": True}, scope={"compartment": 2})
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
-        status = e.status("p")
+        status = status_when(e, lambda s: len(s["failures"]) == 1)
 
     (compartment,) = [r for r in results if r["_phase"] == 1]
     assert compartment["n_inputs"] == 2
@@ -343,7 +357,7 @@ def test_a_carrier_of_failed_compartments_still_runs(recipe):
         e.register("p", recipe("compartment", "carrier"))
         submit_tiles(e, [666], {"carrier": 1, "compartment": 1},
                      complete=["compartment", "carrier"])
-        results = scoped(e, 2, timeout=5)
+        results = scoped(e, 2)
 
     assert len(by_unit(results, "carrier")) == 1
 
