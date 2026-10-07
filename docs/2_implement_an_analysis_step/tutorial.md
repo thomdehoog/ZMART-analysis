@@ -12,8 +12,8 @@ whole contract. Everything here runs on a laptop, no GPU.
 
 ## Before you start
 
-- ZMART Analysis installed as in [Install it](../../README.md#install-it),
-  with the `zmart-analysis` environment active.
+- ZMART Analysis installed as in [Install it](../../README.md#install-it).
+- `numpy`: `pip install numpy`.
 
 Make the new workflow folder, with the four folders every workflow has:
 

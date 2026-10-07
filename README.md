@@ -103,9 +103,8 @@ keep the contract honest together.
 
 ## Testing
 
-From the environment made in *Try it yourself*:
-
 ```bash
+pip install -e ".[test]"
 pytest -m "not cellpose and not conda_env and not pooch"
 ```
 
