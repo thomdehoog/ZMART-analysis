@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from engine import Engine
+from engine import Engine, ScopeError
 
 pytestmark = pytest.mark.integration
 
@@ -373,6 +373,34 @@ def test_closing_a_level_the_recipe_does_not_have_runs_nothing(recipe):
 
     (compartment,) = [r for r in results if r["_phase"] == 1]
     assert compartment["total"] == 6
+
+
+def test_a_close_whose_scope_leaves_out_the_level_is_refused(recipe):
+    """{"carrier": 1} with complete="compartment" would close every
+    compartment of every carrier. Refused, and the tile is not run."""
+    with Engine() as e:
+        e.register("p", recipe("compartment", "carrier"))
+        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
+        with pytest.raises(ScopeError, match="compartment"):
+            e.submit("p", {"value": 5}, scope={"carrier": 1}, complete="compartment")
+        with pytest.raises(ScopeError):
+            e.submit("p", {"value": 5}, scope={"carrier": 1}, complete=["compartment", "carrier"])
+        results = scoped(e, 1)
+        status = e.status("p")
+
+    assert [r["value"] for r in results if r["_phase"] == 0] == [1]
+    assert status["pending"] == 0 and status["failed"] == 0
+
+
+def test_all_and_a_level_the_recipe_lacks_are_still_accepted(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment", "all"))
+        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
+        e.submit("p", {"value": 2}, scope={"carrier": 1}, complete=["carrier", "all"])
+        results = scoped(e, 2)
+
+    (everything,) = [r for r in results if r.get("level") == "all"]
+    assert everything["n_inputs"] == 1
 
 
 def test_a_unit_closed_again_runs_again_on_its_new_tiles(recipe):
