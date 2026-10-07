@@ -3,6 +3,9 @@
 Branch: `claude/scope-functionality-tests`. The tests are in `tests/test_scopes.py`.
 Revised after two reviews, one of the engine and one of the workflows, tests and docs.
 
+**Status: implemented**, one commit per section below, all six decisions taken as
+recommended. Kept as the record of what was wrong and why it was fixed this way.
+
 ## Where we stand
 
 Analysis over scopes works for the common cases. `tests/test_scopes.py` checks 15 of them:

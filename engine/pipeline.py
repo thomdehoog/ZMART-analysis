@@ -5,11 +5,6 @@ Not part of the public API; the Engine uses it. It reads a recipe (YAML),
 splits its steps into phases at scope boundaries, and keeps track of which
 jobs are waiting for which scope to complete.
 
-Internal pipeline state and YAML parsing.
------------------------------------------
-Not part of the public API. Used by the Engine to manage registered
-pipelines, track jobs, handle scope completion, and accumulate results.
-
 Phases
 ------
 A pipeline's step list is split into phases at scope boundaries:
@@ -27,7 +22,9 @@ Scope matching
 --------------
 When complete="X" is signaled from a submit with scope={"X": val}:
   - If "X" is a key in the scope dicts: match by value (scope["X"] == val),
-    together with the value of every wider level (see scope_key)
+    together with the value of every wider level (see scope_key). The
+    wider levels are the recipe's ``levels`` when it declares them, else
+    the scopes of the later phases.
   - If "X" is not a key: collect everything from the previous phase
 
 This means "all" is not special -- it works because no job has "all" as a
@@ -36,13 +33,22 @@ scope key, so the engine collects everything.
 The same matching holds at every level, not only the first. A compartment
 result remembers the scope of the submit that completed it, for example
 {"carrier": 1, "compartment": 3}, so a carrier step collects only its own
-compartments even while another carrier is still being acquired. A carrier
-step also waits for any of its compartments still being analysed, because
-the signal that closes a carrier can arrive from another thread before that
-compartment's step has finished.
+compartments even while another carrier is still being acquired.
 
+Order
+-----
+Every submit has an index. A close signal acts on the tiles, unit results
+and failures of its unit submitted up to and including itself, and waits
+for the ones still running. It does not wait for a signal sent after it:
+the signal threads could otherwise all wait on each other.
 
-ScopeError
+Up the levels
+-------------
+A scoped step receives the previous phase's failures of its unit, and what
+a narrower level never closed, as failures too. Its result carries a
+``lineage``: the tiles under it, the failures under it, and where every
+step below it ran. ``ScopeError`` is raised by a close signal whose scope
+leaves out the level it closes.
 """
 
 from __future__ import annotations

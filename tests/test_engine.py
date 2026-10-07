@@ -4,7 +4,7 @@ Test suite for the v4 pipeline engine.
 Covers: exception hierarchy, AST-based METADATA extraction, phase splitting,
 per-environment workers with state dicts, worker pool with per-step
 concurrency (semaphores), Engine API (register/submit/status/results),
-scope tracking with single-axis completion, concurrent execution,
+scope completion (the multi-level cases are in test_scopes.py), concurrent execution,
 graceful failure handling, and lifecycle management.
 
 Structure
@@ -17,7 +17,7 @@ Structure
 - TestPool                    Per-env pools, semaphores, reaper
 - TestEngineRegister          Pipeline registration
 - TestEngineSubmit            Job submission, immediate execution
-- TestEngineScopes            Single-axis scope completion
+- TestEngineScopes            Scope completion; see test_scopes.py for more
 - TestEngineResults           Results queue, phase tagging
 - TestEngineConcurrency       Parallel jobs, max_workers
 - TestEngineErrors            Graceful failure handling

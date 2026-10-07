@@ -122,6 +122,68 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
     raise AssertionError(f"Timed out waiting for {name}")
 
 
+SCOPED_YAML = WORKFLOW / "pipelines" / "object_analysis_scoped.yaml"
+
+
+def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypatch):
+    """Two carriers, two compartments each, one failed tile. The fast
+    detector stands in for Cellpose so this runs in CI. Every step names
+    the classical environment; naming the engine's own after it makes the
+    steps run on this interpreter, which has their packages."""
+    import time
+    import yaml
+    from engine import Engine
+
+    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ZMART--object_analysis--classical")
+    fast = yaml.safe_load(FAST_YAML.read_text())["object_analysis"]
+    # The synthetic tile's two squares are small; the fast recipe's
+    # defaults are for nuclei at a real magnification.
+    fast[0]["detect_objects_fast"].update(threshold=50, diameter=8)
+    scoped = yaml.safe_load(SCOPED_YAML.read_text())
+    recipe = {
+        "metadata": dict(scoped["metadata"], functions_dir=STEPS_DIR.as_posix()),
+        "object_analysis": fast + scoped["object_analysis"][3:],
+    }
+    recipe_path = tmp_path / "scoped_fast.yaml"
+    recipe_path.write_text(yaml.safe_dump(recipe, sort_keys=False))
+    image_path = _write_synthetic_tile(tmp_path)
+
+    with Engine(max_concurrent=4) as engine:
+        engine.register("scoped", str(recipe_path))
+        for carrier in (1, 2):
+            for compartment in (1, 2):
+                scope = {"carrier": carrier, "compartment": compartment}
+                engine.submit("scoped", _payload(image_path, gpu=False), scope=scope)
+                if (carrier, compartment) == (2, 1):
+                    engine.submit("scoped", _payload(tmp_path / "missing.tif", gpu=False), scope=scope)
+                closes = ["compartment", "carrier"] if compartment == 2 else "compartment"
+                engine.submit("scoped", _payload(image_path, gpu=False), scope=scope, complete=closes)
+        results, deadline = [], time.monotonic() + 240
+        while time.monotonic() < deadline:
+            results += engine.results("scoped")
+            if sum(r["_phase"] == 2 for r in results) == 2:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(f"timed out; status {engine.status('scoped')}")
+
+    compartments = {tuple(r["population"]["scope"].values()): r for r in results if r["_phase"] == 1}
+    carriers = {r["comparison"]["scope"]["carrier"]: r for r in results if r["_phase"] == 2}
+    assert set(compartments) == {(1, 1), (1, 2), (2, 1), (2, 2)}
+    assert compartments[(2, 1)]["population"]["n_tiles"] == 2
+    assert compartments[(2, 1)]["population"]["n_failed_tiles"] == 1
+    assert compartments[(1, 1)]["population"]["n_objects"] == 2 * 2    # two objects per tile
+    for carrier in (1, 2):
+        comparison = carriers[carrier]["comparison"]
+        assert comparison["n_units"] == 2 and comparison["n_failed_units"] == 0
+        assert set(comparison["profiles"]) == {"1", "2"}
+        lineage = carriers[carrier]["lineage"]
+        assert set(lineage["provenance"]) >= {"detect_objects_fast", "summarise_population"}
+    assert len(carriers[2]["lineage"]["submissions"]) == 4
+    assert [f["step"] for f in carriers[2]["lineage"]["failed"]] == ["detect_objects_fast"]
+    assert carriers[1]["lineage"]["failed"] == []
+
+
 def test_classical_object_analysis_end_to_end_with_stub(tmp_path):
     result = _run_classical(tmp_path)
     tile = validate_tile_detection(result["object_analysis"])

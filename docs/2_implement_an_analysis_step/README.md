@@ -203,14 +203,18 @@ Such a step receives a different `pipeline_data`:
 | Key | What it is |
 |---|---|
 | `results` | One entry per image (or narrower unit) in this unit, in submission order: the `pipeline_data` the previous phase returned. |
-| `failures` | The unit's failed jobs, each with step name and error. |
-| `metadata["scope"]` | Which unit, e.g. `{"carrier": 1, "compartment": 3}`. |
+| `failures` | What failed under this unit: each with `scope`, `step`, `error`, `phase` and `submission_idx`. A failed step of the phase below, or, with `step: "engine"`, an image of a narrower unit that was not closed when this one was. |
+| `metadata["unit"]` | Which unit, widest level first, e.g. `{"carrier": 1, "compartment": 3}`; `{}` for a step over everything. |
+| `metadata["scope"]` | The scope of the image that closed the unit. It may name narrower levels too. |
 | `metadata["scope_level"]` | The level, e.g. `"compartment"`. |
 | `metadata["n_accumulated"]`, `metadata["n_failures"]` | How many of each. |
 
 There is no `input`. **Return a new dictionary** with your output; copying
 the per-image results forward only uses memory. The result reaches
-`engine.results()` with `_scope` and `_scope_level` added.
+`engine.results()` with `_scope`, `_scope_level` and `lineage` added: the
+images under this unit, the failures under it, and where every step below
+ran. The engine adds `lineage` after your step returns; you need not carry
+anything over.
 `workflows/object_analysis/steps/summarise_population.py` is the worked
 example.
 

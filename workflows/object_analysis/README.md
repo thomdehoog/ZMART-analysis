@@ -24,7 +24,11 @@ aggregation and normalisation of image-based profiling (pycytominer's
 `aggregate` and `mad_robustize`), computed with pandas, numpy and
 scikit-learn in the classical environment. The two steps read their level
 from the recipe, so `scope: group` and `scope: compartment` summarise per
-tile set instead.
+tile set instead; the recipe's `levels` keeps a group inside its
+compartment either way. A carrier comparison counts the compartments that
+failed (`n_failed_units`) and the tiles of compartments not closed when the
+carrier was (`n_not_closed`), and every summary and comparison carries its
+`lineage`: the tiles under it and where every step below it ran.
 
 The population plot is the one recipe here that does not run per tile. Once
 a whole overview has been detected and its object table written, the

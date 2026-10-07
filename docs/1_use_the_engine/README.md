@@ -126,8 +126,14 @@ with a `scope` waits for that.
 
 The levels are plain names the engine attaches no meaning to. The shipped
 workflows use, narrowest first, **image**, **group**, **compartment**,
-**carrier** and **experiment**. A compartment can be a well, a region of a
-slide or part of a cleared sample; a carrier is the plate or the slide.
+**carrier** and **all**. A compartment can be a well, a region of a slide
+or part of a cleared sample; a carrier is the plate or the slide. A recipe
+names its levels, widest first, in its metadata:
+
+```yaml
+metadata:
+  levels: [carrier, compartment, group]
+```
 
 Each image is submitted with the units it belongs to; the image that closes
 a unit says so:
@@ -154,23 +160,39 @@ object_analysis:
 ```
 
 A scoped step receives `results` (the collected results, in submission
-order), `failures` (the unit's failed jobs) and `metadata` with its
-`scope_level` and `scope`.
+order), `failures` (what failed under this unit) and `metadata` with its
+`scope_level`, the closing `scope` and the `unit` it is for, widest level
+first. See [what a scoped step receives](../2_implement_an_analysis_step/README.md#a-step-over-a-scope).
 
-Three rules keep this correct while the acquisition is still going:
+Four rules keep this correct while the acquisition is still going:
 
 - **A unit is matched with every wider level.** Compartment 3 of carrier 1
-  never mixes with compartment 3 of carrier 2.
+  never mixes with compartment 3 of carrier 2. With `levels` declared this
+  holds for levels the recipe has no step for too: a group stays inside
+  its compartment in a recipe that summarises groups and compares
+  carriers. Without `levels`, only the scopes of later steps count.
 - **A scoped step waits for its images.** On `complete`, it waits until
-  every image of the unit has finished its own steps.
+  every image of the unit submitted so far has finished its own steps.
 - **A wider unit waits for its narrower ones.** A carrier step waits for
-  any compartment still being summarised.
+  any compartment still being summarised, if that compartment was closed
+  before the carrier. Send a compartment's `complete` before its
+  carrier's: a carrier does not wait for a signal sent after it.
+- **Nothing is lost quietly.** A carrier step is told about a compartment
+  step that failed, and about the images of a compartment not closed when
+  the carrier was (as failures with `step: "engine"`). Those images are
+  kept, and `status()` lists them under `held`, until their compartment
+  is closed. An image that arrives after its unit was closed waits the
+  same way, until the unit is closed again.
 
 One image may close several levels: `complete=["compartment", "carrier"]`
 runs the compartment step, then the carrier step. A level no image names
-in its `scope`, such as `experiment`, collects everything from the previous
-phase: `scope: experiment` in the recipe, `complete="experiment"` on the
-last image.
+in its `scope`, such as `all`, collects everything from the previous phase:
+`scope: all` in the recipe, `complete="all"` on the last image.
+
+A `complete` whose scope leaves out the level it closes, such as
+`scope={"carrier": 1}, complete="compartment"`, would close every
+compartment at once. Once any image has named that level, `submit` raises
+`ScopeError` instead; the very first image of a recipe is not checked.
 
 The engine never decides on its own that a unit is complete. The
 acquisition knows, and says so. Until a unit is closed its results stay in
@@ -209,20 +231,26 @@ removes them from the queue. Each is a dictionary with:
 | `input` | What was submitted. |
 | `metadata` | Recipe name and file, the steps that ran, the `scope`, when it ran. |
 | `provenance` | Per step: the conda `environment` it ran in, its `python` version, a `fingerprint` of the installed packages, and the versions of the `packages` the step imported. The recipe says what was asked for; this says what actually ran. |
+| `lineage` | Scoped results only. `submissions`: the index of every image under this unit. `failed`: every failure under it. `provenance`: for every step below this one, its distinct records; two records for one step mean the environment changed during the run. |
 | `_phase` | `0` for a per-image result; `1`, `2`, ... for a scoped one. |
-| `_scope`, `_scope_level` | Which unit a scoped result is for, and at which level. `None` per image. |
+| `_scope`, `_scope_level` | The scope of the submit that closed a scoped result, and at which level. `None` per image. The unit itself is `metadata["unit"]`. |
 
 ```python
 engine.status("focus")
 ```
 ```
 {'pending': 0, 'running': 1, 'completed': 7, 'failed': 1,
- 'failures': [{'scope': {}, 'step': 'score_focus', 'error': '...'}]}
+ 'failures': [{'scope': {}, 'step': 'score_focus', 'error': '...',
+               'phase': 0, 'submission_idx': 4}],
+ 'held': {'results': 0, 'units': []}}
 ```
 
 `status(name)` counts jobs waiting, running, done and failed, and lists
-each failure with its step and message. `status()` gives this for every
-recipe.
+each failure with its step, message, phase and submission index. A failure
+leaves this list once a scoped step has been told about it; it is then in
+that step's `failures` and in its result's `lineage`. `held` is what waits
+for a unit to close: how many results, and which units. `status()` gives
+this for every recipe.
 
 ## shutdown
 
@@ -245,7 +273,7 @@ in `status`, and the other jobs carry on.
 | `WorkerTimeoutError` | The step ran longer than `execution_timeout`. |
 | `WorkerCrashedError` | The worker process died during the step. |
 | `WorkerSpawnError` | The worker could not start, usually because the conda environment does not exist. Run the workflow's `environments/setup_env.py`. |
-| `ScopeError` | A scope was configured or signalled in a way the engine cannot act on. |
+| `ScopeError` | Raised by `submit`: a `complete` whose scope leaves out the level it closes, after earlier images named that level. See [Scopes](#scopes). |
 
 The four worker errors share the base `WorkerError`. All are importable
 from `engine`.

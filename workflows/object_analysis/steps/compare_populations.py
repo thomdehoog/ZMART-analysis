@@ -31,7 +31,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared.population import MAD_TO_SD, robust_z  # noqa: E402
-from summarise_population import LEVELS, unit_name  # noqa: E402
+from summarise_population import unit_name  # noqa: E402
 
 METADATA = {
     "description": "Compare the populations of the units inside one completed unit",
@@ -46,10 +46,15 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     meta = pipeline_data.get("metadata", {})
     level = meta.get("scope_level")
-    scope = meta.get("scope", {}) or {}
+    own = meta.get("unit", meta.get("scope", {})) or {}
     units = [r["population"] for r in pipeline_data.get("results", [])
              if "population" in r]
     compared = units[0]["level"] if units else None
+    # A unit below this one that failed, and tiles whose unit was never
+    # closed when this one was; the engine reports both as failures.
+    failures = pipeline_data.get("failures", [])
+    n_failed_units = sum(f.get("step") != "engine" for f in failures)
+    n_not_closed = sum(f.get("step") == "engine" for f in failures)
 
     names = [_short_name(u["scope"], compared) for u in units]
     profiles = pd.DataFrame([u["profile"] for u in units], index=names).sort_index()
@@ -72,7 +77,6 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     }
     flagged = {unit: found for unit, found in flagged.items() if found}
 
-    own = _own_scope(scope, level)
     written = {}
     output_dir = params.get("output_dir")
     if output_dir and len(profiles):
@@ -93,6 +97,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             "scope": own,
             "compared": compared,
             "n_units": len(units),
+            "n_failed_units": n_failed_units,
+            "n_not_closed": n_not_closed,
             "n_objects": int(sum(u["n_objects"] for u in units)),
             "objects_per_unit": {n: u["n_objects"] for n, u in zip(names, units)},
             "features": features,
@@ -103,13 +109,6 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             "written": written,
         },
     }
-
-
-def _own_scope(scope: dict, level: str | None) -> dict:
-    """This unit's own identity: its level and every wider one."""
-    if level not in LEVELS:
-        return dict(scope)
-    return {k: scope[k] for k in LEVELS[: LEVELS.index(level) + 1] if k in scope}
 
 
 def _short_name(scope: dict, level: str | None) -> str:

@@ -17,9 +17,16 @@
 #   engine.submit("scoped", last_tile_of_carrier, scope={"carrier": 1, "compartment": 96},
 #                 complete=["compartment", "carrier"])
 #
-# A compartment is matched together with its carrier, so two carriers can be
-# acquired at once. To summarise per group instead, give summarise_population
-# `scope: group` and compare_populations `scope: compartment`.
+# `levels` names the sample's levels, widest first. A unit then keeps every
+# wider level, so a compartment is matched together with its carrier and two
+# carriers can be acquired at once. To summarise per group instead, give
+# summarise_population `scope: group` and compare_populations
+# `scope: compartment`; the groups still keep their compartment apart.
+#
+# A carrier step is told about a compartment that failed, and about the
+# tiles of a compartment that was not closed when the carrier was. Every
+# scoped result carries its `lineage`: the tiles it was built from and where
+# every step below it ran.
 #
 # Tiles are kept in memory until their compartment is complete, so this
 # recipe is for runs that close their compartments. For tile-by-tile
@@ -30,6 +37,7 @@ metadata:
   version: "1.0"
   verbose: 1
   functions_dir: "../steps"
+  levels: [carrier, compartment, group]
 
 object_analysis:
   - detect_objects:
