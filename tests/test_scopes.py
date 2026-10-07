@@ -290,6 +290,75 @@ def test_a_unit_closed_again_runs_again_on_its_new_tiles(recipe):
     assert totals == [(1, 0), (1, 3), (2, 5)]
 
 
+def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(recipe, steps_dir, tmp_path):
+    """Compartment 2's close is sent after the carrier's, while the carrier
+    is still waiting on a slow tile. The carrier must not wait for a signal
+    queued behind it, or one engine thread is enough to hang the engine."""
+    gate = tmp_path / "gate"
+    (steps_dir / "slow_tile.py").write_text(textwrap.dedent(f"""
+        import os, time
+        def run(pd, state, **p):
+            while not os.path.exists({str(gate)!r}):
+                time.sleep(0.02)
+            pd["value"] = pd["input"]["value"]
+            return pd
+    """))
+    yaml = steps_dir / "recipe_slow.yaml"
+    yaml.write_text(textwrap.dedent(f"""
+        metadata:
+          functions_dir: "{steps_dir.as_posix()}"
+        wf:
+          - slow_tile:
+          - unit:
+              scope: compartment
+          - unit:
+              scope: carrier
+    """))
+    with Engine(max_concurrent=1) as e:
+        e.register("p", str(yaml))
+        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
+        e.submit("p", {"value": 0}, scope={"carrier": 1}, complete="carrier")
+        submit_tiles(e, [10], {"carrier": 1, "compartment": 2}, complete="compartment")
+        gate.write_text("go")
+        results = scoped(e, 3, timeout=60)
+
+    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
+    assert carrier["n_inputs"] == 1 and carrier["total"] == 1
+    compartments = by_unit(results, "compartment")
+    assert compartments[(("carrier", 1), ("compartment", 2))]["total"] == 10
+
+
+def test_a_shutdown_now_releases_a_waiting_carrier(recipe, steps_dir, tmp_path):
+    """The carrier waits on a tile that never finishes; shutdown(wait=False)
+    cancels the queued compartment close and must still return."""
+    (steps_dir / "stuck_tile.py").write_text(textwrap.dedent("""
+        import time
+        def run(pd, state, **p):
+            time.sleep(60)
+            return pd
+    """))
+    yaml = steps_dir / "recipe_stuck.yaml"
+    yaml.write_text(textwrap.dedent(f"""
+        metadata:
+          functions_dir: "{steps_dir.as_posix()}"
+        wf:
+          - stuck_tile:
+          - unit:
+              scope: compartment
+          - unit:
+              scope: carrier
+    """))
+    e = Engine(max_concurrent=1)
+    e.register("p", str(yaml))
+    e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1}, complete="compartment")
+    e.submit("p", {"value": 2}, scope={"carrier": 1, "compartment": 2},
+             complete=["compartment", "carrier"])
+    time.sleep(0.5)
+    t0 = time.monotonic()
+    e.shutdown(wait=False)
+    assert time.monotonic() - t0 < 20
+
+
 def test_many_units_with_few_threads_do_not_deadlock(recipe):
     """More open carriers than engine threads, each waiting on its compartments."""
     with Engine(max_concurrent=2) as e:
@@ -335,8 +404,6 @@ def test_a_compartment_of_failed_tiles_still_runs(recipe):
     assert compartment["n_failures"] == 1
 
 
-@pytest.mark.xfail(strict=True, reason="known gap: a scoped phase's failure is not handed to "
-                                       "the next scope (collect_for_scope returns [] for phase > 1)")
 def test_a_failed_compartment_reaches_its_carrier(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
@@ -344,22 +411,64 @@ def test_a_failed_compartment_reaches_its_carrier(recipe):
         submit_tiles(e, [666], {"carrier": 1, "compartment": 2},
                      complete=["compartment", "carrier"])
         results = scoped(e, 2)
+        status = e.status("p")
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
     assert carrier["n_inputs"] == 1
     assert carrier["n_failures"] == 1
+    assert status["failures"] == []           # claimed by the carrier
 
 
-@pytest.mark.xfail(strict=True, reason="known gap: a carrier whose compartments all failed is "
-                                       "skipped with a log warning instead of running")
 def test_a_carrier_of_failed_compartments_still_runs(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
         submit_tiles(e, [666], {"carrier": 1, "compartment": 1},
                      complete=["compartment", "carrier"])
+        results = scoped(e, 1)
+
+    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
+    assert carrier["n_inputs"] == 0
+    assert carrier["n_failures"] == 1
+
+
+def test_a_failure_names_its_step_phase_and_tile(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment"))
+        e.submit("p", {"fail": True}, scope={"compartment": 1})        # idx 0
+        e.submit("p", {"value": 666}, scope={"compartment": 2}, complete="compartment")  # idx 1
+        status = status_when(e, lambda s: len(s["failures"]) == 2)
+
+    by_step = {f["step"]: f for f in status["failures"]}
+    assert by_step["tile"]["phase"] == 0 and by_step["tile"]["submission_idx"] == 0
+    assert by_step["unit"]["phase"] == 1 and by_step["unit"]["submission_idx"] == 1
+    assert by_step["unit"]["scope"] == {"compartment": 2}
+
+
+def test_a_failed_compartment_step_is_not_handed_to_the_next_close_as_a_tile(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment"))
+        submit_tiles(e, [666], {"compartment": 1}, complete="compartment")
+        status_when(e, lambda s: len(s["failures"]) == 1)
+        submit_tiles(e, [1], {"compartment": 1}, complete="compartment")
+        results = scoped(e, 1)
+        status = e.status("p")
+
+    (compartment,) = [r for r in results if r["_phase"] == 1]
+    assert compartment["n_failures"] == 0
+    assert [f["step"] for f in status["failures"]] == ["unit"]
+
+
+def test_all_gets_only_the_failures_of_the_phase_before_it(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment", "all"))
+        e.submit("p", {"fail": True}, scope={"compartment": 1})
+        submit_tiles(e, [1], {"compartment": 1}, complete="compartment")
+        submit_tiles(e, [666], {"compartment": 2}, complete=["compartment", "all"])
         results = scoped(e, 2)
 
-    assert len(by_unit(results, "carrier")) == 1
+    (everything,) = [r for r in results if r.get("level") == "all"]
+    assert everything["n_inputs"] == 1
+    assert everything["n_failures"] == 1     # compartment 2's step, not the tile
 
 
 # -- Provenance --------------------------------------------------------
