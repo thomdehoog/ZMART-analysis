@@ -6,7 +6,8 @@ import numpy as np
 
 METADATA = {
     "description": "Per-object features (shape / intensity / neighbourhood / texture)",
-    "version": "3.0",
+    "version": "1.0",
+    "max_workers": 1,
     "environment": "ZMART--object_analysis--classical",
 }
 

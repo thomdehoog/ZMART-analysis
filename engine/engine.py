@@ -542,11 +542,9 @@ class Engine:
         # same for the phase's metadata.
         lineage = self._lineage(results, failures)
         state.record_start(is_submission=False)
-        step_name = [None]
         try:
             result, metadata = self._execute_scoped_phase(
-                state, phase_idx, results, failures, scope, level,
-                unit or {}, step_name)
+                state, phase_idx, results, failures, scope, level, unit or {})
             result.setdefault("metadata", metadata)
             result["lineage"] = lineage
 
@@ -561,17 +559,18 @@ class Engine:
             state.record_completion()
 
         except Exception as e:
+            step_name = getattr(e, "step", None)
             state.record_failure(
-                scope, step_name[0], str(e), phase_idx, submission_idx)
+                scope, step_name, str(e), phase_idx, submission_idx)
             logger.error("Phase %d failed in '%s' (submission %d, step %s): %s",
-                         phase_idx, state.name, submission_idx, step_name[0], e)
+                         phase_idx, state.name, submission_idx, step_name, e)
 
     def _execute_scoped_phase(self, state, phase_idx, accumulated_results,
-                               failures, scope, scope_level, unit, step_name):
+                               failures, scope, scope_level, unit):
         """Execute a scoped phase with accumulated results. ``unit`` is the
-        unit being closed, widest level first, ``{}`` for everything. The
-        step being run is written to ``step_name[0]`` so a failure can
-        name it. Returns the last step's result and the phase's metadata."""
+        unit being closed, widest level first, ``{}`` for everything. An
+        exception from a step carries the step's name as ``.step``.
+        Returns the last step's result and the phase's metadata."""
         phase = state.phases[phase_idx]
 
         metadata = {
@@ -594,14 +593,16 @@ class Engine:
         }
 
         for step in phase.steps:
-            step_name[0] = step.name
-            pipeline_data = self._execute_step(state, step, pipeline_data)
-
-            if not isinstance(pipeline_data, dict):
-                raise TypeError(
-                    f"Step '{step.name}' returned "
-                    f"{type(pipeline_data).__name__}, expected dict"
-                )
+            try:
+                pipeline_data = self._execute_step(state, step, pipeline_data)
+                if not isinstance(pipeline_data, dict):
+                    raise TypeError(
+                        f"Step '{step.name}' returned "
+                        f"{type(pipeline_data).__name__}, expected dict"
+                    )
+            except Exception as e:
+                e.step = step.name
+                raise
             # A step that built a new dict still hands the next one the
             # phase's metadata.
             pipeline_data.setdefault("metadata", metadata)
