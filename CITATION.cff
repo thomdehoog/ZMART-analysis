@@ -7,6 +7,8 @@ authors:
     given-names: Thom
     affiliation: "Center for Microscopy and Image Analysis (ZMB), University of Zurich"
 repository-code: "https://github.com/thomdehoog/ZMART-analysis"
+version: 1.0.0rc1
+date-released: 2026-10-07
 license: MIT
 keywords:
   - microscopy
@@ -24,6 +26,6 @@ abstract: >-
   YAML recipes of small Python steps; each step runs in its own conda
   environment inside a worker that stays warm, so analysis keeps pace with
   a microscope that is still acquiring, and steps can be scoped to run once
-  per field, per well or per plate. Ships workflows for focus scoring,
+  per group of images, per compartment or per carrier. Ships workflows for focus scoring,
   object detection and measurement, population plots and driver
   configuration.

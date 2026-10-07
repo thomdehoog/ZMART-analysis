@@ -1,19 +1,20 @@
 """
-Pipeline Engine v4 -- Simplified orchestrator with scoped execution.
+ZMART Analysis -- the engine that runs analysis recipes.
 
-Runs YAML-defined workflows where every step executes in a worker subprocess.
-Supports scoped triggering, per-step concurrency (max_workers), priority
-scheduling, and system-wide observability.
+A recipe (YAML) lists steps; every step runs in a worker, a process in the
+conda environment the step names. Steps may be scoped to run once per unit
+of the sample (a compartment, a carrier) once the acquisition closes it.
 
 API
 ---
     from engine import Engine
 
     engine = Engine()
-    engine.register("overview", "overview_pipeline.yaml")
-    engine.submit("overview", data, scope={"group": "R3"})
-    engine.submit("overview", data, scope={"group": "R3"}, complete="group")
-    results = engine.results("overview")
+    engine.register("analysis", "workflows/object_analysis/pipelines/object_analysis_scoped.yaml")
+    engine.submit("analysis", image, scope={"carrier": 1, "compartment": 3})
+    engine.submit("analysis", last_image, scope={"carrier": 1, "compartment": 3},
+                  complete="compartment")
+    results = engine.results("analysis")
     engine.shutdown()
 
 Architecture
@@ -37,7 +38,7 @@ from .workers import (
     StepExecutionError,
 )
 
-__version__ = "4.0.0"
+__version__ = "1.0.0rc1"
 __all__ = [
     "Engine",
     "WorkerError",
