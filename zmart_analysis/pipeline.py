@@ -243,11 +243,9 @@ class PipelineState:
         # Job tracking: [(future, scope_dict, submission_idx)]
         self._job_entries = []
 
-        # Phase 0 results: [(submission_idx, scope_dict, result)]
-        self._phase0_results = []
-
-        # Phase N>0 results: phase_idx -> [(submission_idx, scope_dict, result)]
-        # where submission_idx is the submit that closed the unit.
+        # Results waiting for the next phase: phase_idx -> [(submission_idx,
+        # scope_dict, result)]. For phase 0 the index is the tile's own
+        # submit; for a scoped phase it is the submit that closed the unit.
         self._phase_results = defaultdict(list)
 
         # Scoped phases still running: phase_idx -> [(scope_dict, idx, Event)].
@@ -259,9 +257,10 @@ class PipelineState:
         # Completed results queue (drained by engine.results())
         self._results_queue = queue.Queue()
 
-        # Status counters. The failed count is always derived from
-        # _failures so the two cannot drift apart when scope collection
-        # drains consumed failures.
+        # Status counters. A submit adds one pending; record_start moves it
+        # to running; a completion, a failure or a cancellation takes it
+        # off again, so the three never drift. The failed count is always
+        # derived from _failures, which scope collection drains.
         self._n_pending = 0
         self._n_running = 0
         self._n_completed = 0
@@ -313,13 +312,12 @@ class PipelineState:
         never pending: only submits count there."""
         with self._lock:
             if is_submission:
-                self._n_pending = max(0, self._n_pending - 1)
+                self._n_pending -= 1
             self._n_running += 1
 
     def store_phase0_result(self, submission_idx, scope, result):
         """Store a Phase 0 result for later scope collection."""
-        with self._lock:
-            self._phase0_results.append((submission_idx, scope, result))
+        self.store_phase_result(0, result, scope, submission_idx)
 
     def publish_result(self, result, phase_idx, scope, scope_level):
         """Put a completed result in the results queue."""
@@ -331,14 +329,14 @@ class PipelineState:
     def record_completion(self):
         """Record that a job/phase completed successfully."""
         with self._lock:
-            self._n_running = max(0, self._n_running - 1)
+            self._n_running -= 1
             self._n_completed += 1
 
     def record_failure(self, scope, step_name, error_msg, phase, submission_idx):
         """Record a failed step. ``phase`` is the phase it failed in and
         ``submission_idx`` the tile, or the submit that closed the unit."""
         with self._lock:
-            self._n_running = max(0, self._n_running - 1)
+            self._n_running -= 1
             self._failures.append(
                 {
                     "scope": scope,
@@ -352,7 +350,7 @@ class PipelineState:
     def record_cancellation(self, scope, submission_idx):
         """Record a queued submission cancelled during engine shutdown."""
         with self._lock:
-            self._n_pending = max(0, self._n_pending - 1)
+            self._n_pending -= 1
             self._failures.append(
                 {
                     "scope": scope,
@@ -411,21 +409,14 @@ class PipelineState:
             self._wait_for_scoped(prev_idx, unit, before)
 
         with self._lock:
-            if prev_idx == 0:
-                entries = self._phase0_results
-            else:
-                entries = self._phase_results[prev_idx]
             matching, remaining = [], []
-            for entry in entries:
+            for entry in self._phase_results[prev_idx]:
                 idx, entry_scope, result = entry
                 if idx <= before and _matches(entry_scope, unit):
                     matching.append((idx, result))
                 else:
                     remaining.append(entry)
-            if prev_idx == 0:
-                self._phase0_results = remaining
-            else:
-                self._phase_results[prev_idx] = remaining
+            self._phase_results[prev_idx] = remaining
             matching.sort(key=lambda x: x[0])
             results = [r for _, r in matching]
             failures = self._take_failures(prev_idx, unit, before)
@@ -441,9 +432,8 @@ class PipelineState:
         with self._lock:
             for k in range(phase_idx - 1):
                 # Phase k's results wait for phase k+1's level to close.
-                entries = self._phase0_results if k == 0 else self._phase_results[k]
                 not_closed = self.phases[k + 1].scope
-                for idx, entry_scope, _ in entries:
+                for idx, entry_scope, _ in self._phase_results[k]:
                     if idx <= before and _matches(entry_scope, unit):
                         held.append(
                             {
@@ -553,8 +543,7 @@ class PipelineState:
         with self._lock:
             held_units, n_held = {}, 0
             for k in range(len(self.phases) - 1):
-                entries = self._phase0_results if k == 0 else self._phase_results[k]
-                for _, entry_scope, _ in entries:
+                for _, entry_scope, _ in self._phase_results[k]:
                     n_held += 1
                     unit = self.scope_key(self.phases[k + 1].scope, entry_scope) or {}
                     held_units[tuple(sorted(unit.items()))] = unit

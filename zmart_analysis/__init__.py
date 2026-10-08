@@ -21,6 +21,7 @@ Architecture
 ------------
     engine.py         the Engine: register, submit, status, results
     pipeline.py       reads a recipe, splits it into phases, tracks scopes
+    priority_pool.py  the thread pool that starts the most urgent job first
     workers.py        the worker processes that run the steps, and their errors
     worker_script.py  runs inside a step's conda environment; imports nothing
                       from the engine, so it works in any environment
