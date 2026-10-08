@@ -30,7 +30,8 @@ dependencies = [
 # workflows/<name>/environments/setup_env.py and carries the heavy tools
 # (cellpose, torch, umap) that stay out of here.
 test = [
-    "pytest>=8.0",
+    # 9.0 brings the subtests fixture the shared-reader tests use.
+    "pytest>=9.0",
     "pytest-timeout>=2.3",
     "numpy>=1.24",
     "scipy>=1.11",

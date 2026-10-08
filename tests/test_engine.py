@@ -4,7 +4,7 @@ Test suite for the engine.
 Covers: exception hierarchy, AST-based METADATA extraction, phase splitting,
 per-environment workers with state dicts, worker pool with per-step
 concurrency (semaphores), Engine API (register/submit/status/results),
-scope completion (the multi-level cases are in test_scopes.py), concurrent execution,
+concurrent execution,
 graceful failure handling, and lifecycle management.
 
 Structure
@@ -17,7 +17,6 @@ Structure
 - TestPool                    Per-env pools, semaphores, reaper
 - TestEngineRegister          Pipeline registration
 - TestEngineSubmit            Job submission, immediate execution
-- TestEngineScopes            Scope completion; see test_scopes.py for more
 - TestEngineResults           Results queue, phase tagging
 - TestEngineConcurrency       Parallel jobs, max_workers
 - TestEngineErrors            Graceful failure handling
@@ -29,7 +28,6 @@ Structure
 Usage
 -----
     python -m pytest tests/test_engine.py -v
-    python -m pytest tests/test_engine.py -k Scopes -v
 """
 
 import os
@@ -37,26 +35,25 @@ import subprocess
 import sys
 import threading
 import time
-import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-# The zmart_analysis package sits one folder up, at the root of the repository.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import pytest
 
-# Step files, recipes and the polling helpers are the shared ones from conftest.
-from conftest import (  # noqa: E402
+# Step files, recipes and the polling helpers are the shared ones from helpers.py.
+from helpers import (
     _SESSION_TEMP,
     _next_id,
     _wait_for_results,
     _wait_for_status,
 )
-from conftest import (
+from helpers import (
     _write_step as _temp_step,
 )
-from conftest import (
+from helpers import (
     _write_yaml as _temp_yaml,
 )
+
 from zmart_analysis import (
     ScopeError,
     StepExecutionError,
@@ -82,41 +79,41 @@ def _capture_exception(errors, function):
 # ---- Errors ----------------------------------------------------------
 
 
-class TestErrors(unittest.TestCase):
+class TestErrors:
     def test_worker_hierarchy(self):
-        self.assertTrue(issubclass(WorkerSpawnError, WorkerError))
-        self.assertTrue(issubclass(WorkerCrashedError, WorkerError))
-        self.assertTrue(issubclass(WorkerTimeoutError, WorkerError))
-        self.assertTrue(issubclass(StepExecutionError, WorkerError))
+        assert issubclass(WorkerSpawnError, WorkerError)
+        assert issubclass(WorkerCrashedError, WorkerError)
+        assert issubclass(WorkerTimeoutError, WorkerError)
+        assert issubclass(StepExecutionError, WorkerError)
 
     def test_timeout_error_is_not_step_execution_error(self):
         # A killed-on-timeout worker is an infrastructure failure, not a
         # user-code exception, so the two types must stay distinct.
-        self.assertFalse(issubclass(WorkerTimeoutError, StepExecutionError))
-        self.assertFalse(issubclass(StepExecutionError, WorkerTimeoutError))
+        assert not issubclass(WorkerTimeoutError, StepExecutionError)
+        assert not issubclass(StepExecutionError, WorkerTimeoutError)
 
     def test_step_execution_error_stores_traceback(self):
         err = StepExecutionError("boom", remote_traceback="tb")
-        self.assertEqual(str(err), "boom")
-        self.assertEqual(err.remote_traceback, "tb")
+        assert str(err) == "boom"
+        assert err.remote_traceback == "tb"
 
     def test_step_execution_error_traceback_default_none(self):
-        self.assertIsNone(StepExecutionError("x").remote_traceback)
+        assert StepExecutionError("x").remote_traceback is None
 
     def test_scope_error_independent(self):
-        self.assertFalse(issubclass(ScopeError, WorkerError))
-        self.assertTrue(issubclass(ScopeError, Exception))
+        assert not issubclass(ScopeError, WorkerError)
+        assert issubclass(ScopeError, Exception)
 
 
 # ---- Loader ----------------------------------------------------------
 
 
-class TestLoader(unittest.TestCase):
+class TestLoader:
     def test_defaults_no_metadata(self):
         path = _temp_step("def run(pd, state, **p): return pd")
         s = get_step_settings(Path(path))
-        self.assertIsNone(s["environment"])
-        self.assertEqual(s["max_workers"], 1)
+        assert s["environment"] is None
+        assert s["max_workers"] == 1
 
     def test_explicit_environment(self):
         path = _temp_step("""
@@ -124,7 +121,7 @@ class TestLoader(unittest.TestCase):
             def run(pd, state, **p): return pd
         """)
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "gpu_env")
+        assert s["environment"] == "gpu_env"
 
     def test_max_workers(self):
         path = _temp_step("""
@@ -132,12 +129,12 @@ class TestLoader(unittest.TestCase):
             def run(pd, state, **p): return pd
         """)
         s = get_step_settings(Path(path))
-        self.assertEqual(s["max_workers"], 5)
+        assert s["max_workers"] == 5
 
     def test_max_workers_default_1(self):
         path = _temp_step('METADATA = {"environment": "some_env"}')
         s = get_step_settings(Path(path))
-        self.assertEqual(s["max_workers"], 1)
+        assert s["max_workers"] == 1
 
     def test_does_not_execute_module_code(self):
         path = _temp_step("""
@@ -146,29 +143,29 @@ class TestLoader(unittest.TestCase):
             def run(pd, state, **p): return pd
         """)
         s = get_step_settings(Path(path))
-        self.assertEqual(s["environment"], "safe")
-        self.assertEqual(s["max_workers"], 3)
+        assert s["environment"] == "safe"
+        assert s["max_workers"] == 3
 
 
 # ---- Phases ----------------------------------------------------------
 
 
-class TestPhases(unittest.TestCase):
+class TestPhases:
     def test_no_scope_single_phase(self):
         steps = [{"a": None}, {"b": {"x": 1}}]
         phases = split_phases(steps)
-        self.assertEqual(len(phases), 1)
-        self.assertIsNone(phases[0].scope)
-        self.assertEqual(phases[0].steps[0].name, "a")
-        self.assertEqual(phases[0].steps[1].params, {"x": 1})
+        assert len(phases) == 1
+        assert phases[0].scope is None
+        assert phases[0].steps[0].name == "a"
+        assert phases[0].steps[1].params == {"x": 1}
 
     def test_a_pipeline_may_set_a_steps_concurrency(self):
         """``max_workers`` on a step in the YAML is the engine's key, not a param."""
         steps = [{"a": {"max_workers": 8, "x": 1}}, {"b": None}]
         phases = split_phases(steps)
-        self.assertEqual(phases[0].steps[0].max_workers, 8)
-        self.assertEqual(phases[0].steps[0].params, {"x": 1})
-        self.assertIsNone(phases[0].steps[1].max_workers)
+        assert phases[0].steps[0].max_workers == 8
+        assert phases[0].steps[0].params == {"x": 1}
+        assert phases[0].steps[1].max_workers is None
 
     def test_one_scope_two_phases(self):
         steps = [
@@ -178,11 +175,11 @@ class TestPhases(unittest.TestCase):
             {"analyze": None},
         ]
         phases = split_phases(steps)
-        self.assertEqual(len(phases), 2)
-        self.assertIsNone(phases[0].scope)
-        self.assertEqual([s.name for s in phases[0].steps], ["preprocess", "segment"])
-        self.assertEqual(phases[1].scope, "group")
-        self.assertEqual([s.name for s in phases[1].steps], ["stitch", "analyze"])
+        assert len(phases) == 2
+        assert phases[0].scope is None
+        assert [s.name for s in phases[0].steps] == ["preprocess", "segment"]
+        assert phases[1].scope == "group"
+        assert [s.name for s in phases[1].steps] == ["stitch", "analyze"]
 
     def test_two_scopes_three_phases(self):
         steps = [
@@ -192,39 +189,39 @@ class TestPhases(unittest.TestCase):
             {"d": {"scope": "all"}},
         ]
         phases = split_phases(steps)
-        self.assertEqual(len(phases), 3)
-        self.assertIsNone(phases[0].scope)
-        self.assertEqual(phases[1].scope, "group")
-        self.assertEqual(phases[2].scope, "all")
+        assert len(phases) == 3
+        assert phases[0].scope is None
+        assert phases[1].scope == "group"
+        assert phases[2].scope == "all"
 
     def test_scope_params_separated(self):
         steps = [{"step": {"scope": "region", "sigma": 1.0}}]
         phases = split_phases(steps)
-        self.assertEqual(phases[0].steps[0].params, {"sigma": 1.0})
-        self.assertNotIn("scope", phases[0].steps[0].params)
+        assert phases[0].steps[0].params == {"sigma": 1.0}
+        assert "scope" not in phases[0].steps[0].params
 
     def test_scope_on_first_step(self):
         steps = [{"a": {"scope": "region"}}, {"b": None}]
         phases = split_phases(steps)
-        self.assertEqual(len(phases), 1)
-        self.assertEqual(phases[0].scope, "region")
+        assert len(phases) == 1
+        assert phases[0].scope == "region"
 
     def test_a_pipeline_may_not_set_a_steps_environment(self):
         """The step file owns its environment; a recipe that tries to set
         one is refused with a message saying where it belongs."""
-        with self.assertRaisesRegex(ValueError, "step file owns its environment"):
+        with pytest.raises(ValueError, match="step file owns its environment"):
             split_phases([{"step": {"environment": "other-env", "sigma": 1.0}}])
 
     def test_a_steps_params_do_not_include_the_engine_keys(self):
         phases = split_phases([{"step": {"max_workers": 3, "sigma": 1.0}}])
-        self.assertEqual(phases[0].steps[0].params, {"sigma": 1.0})
-        self.assertEqual(phases[0].steps[0].max_workers, 3)
+        assert phases[0].steps[0].params == {"sigma": 1.0}
+        assert phases[0].steps[0].max_workers == 3
 
 
 # ---- Worker (protocol) -----------------------------------------------
 
 
-class TestWorkerProtocol(unittest.TestCase):
+class TestWorkerProtocol:
     def test_execute_returns_result(self):
         from zmart_analysis.workers import Worker
 
@@ -239,9 +236,9 @@ class TestWorkerProtocol(unittest.TestCase):
             result = w.execute(path, {"input": 1}, {"x": 42}, timeout=10)
         finally:
             w.shutdown()
-        self.assertTrue(result["ran"])
-        self.assertEqual(result["x"], 42)
-        self.assertEqual(result["input"], 1)
+        assert result["ran"]
+        assert result["x"] == 42
+        assert result["input"] == 1
 
     def test_different_steps_same_worker(self):
         from zmart_analysis.workers import Worker
@@ -256,8 +253,8 @@ class TestWorkerProtocol(unittest.TestCase):
         try:
             ra = w.execute(path_a, {}, {}, timeout=10)
             rb = w.execute(path_b, {}, {}, timeout=10)
-            self.assertEqual(ra["from"], "a")
-            self.assertEqual(rb["from"], "b")
+            assert ra["from"] == "a"
+            assert rb["from"] == "b"
         finally:
             w.shutdown()
 
@@ -276,8 +273,8 @@ class TestWorkerProtocol(unittest.TestCase):
         try:
             r1 = w.execute(path, {}, {}, timeout=10)
             r2 = w.execute(path, {}, {}, timeout=10)
-            self.assertEqual(r1["n"], 1)
-            self.assertEqual(r2["n"], 2)
+            assert r1["n"] == 1
+            assert r2["n"] == 2
         finally:
             w.shutdown()
 
@@ -297,9 +294,57 @@ class TestWorkerProtocol(unittest.TestCase):
             r1 = w.execute(path, {}, {}, timeout=10)
             r2 = w.execute(path, {}, {}, timeout=10)
             r3 = w.execute(path, {}, {}, timeout=10)
-            self.assertEqual(r1["count"], 1)
-            self.assertEqual(r2["count"], 2)
-            self.assertEqual(r3["count"], 3)
+            assert r1["count"] == 1
+            assert r2["count"] == 2
+            assert r3["count"] == 3
+        finally:
+            w.shutdown()
+
+    def test_a_step_is_a_real_module_in_the_worker(self):
+        """A step is registered under its name, like an imported module.
+
+        Two things that look a module up by name are tried: a dataclass with
+        postponed annotations (``from __future__ import annotations``), which
+        resolves them through ``sys.modules``, and a second step importing
+        the first as a sibling. Both failed when the worker ran step files
+        with ``exec`` into a bare namespace.
+        """
+        from zmart_analysis.workers import Worker
+
+        _temp_step(
+            """
+            from __future__ import annotations
+            from dataclasses import dataclass
+
+            @dataclass
+            class Measured:
+                value: int | None = None
+
+            def run(pd, state, **p):
+                pd["measured"] = Measured(pd["input"]["n"]).value
+                return pd
+        """,
+            name="loader_with_dataclass",
+        )
+        sibling = _temp_step(
+            """
+            import sys
+            from pathlib import Path
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from loader_with_dataclass import run as _inner
+
+            def run(pd, state, **p):
+                pd = _inner(pd, state, **p)
+                pd["via"] = __name__
+                return pd
+        """,
+            name="loader_sibling",
+        )
+        w = Worker(environment=None)
+        try:
+            out = w.execute(sibling, {"input": {"n": 7}}, {})
+            assert out["measured"] == 7
+            assert out["via"] == "loader_sibling"
         finally:
             w.shutdown()
 
@@ -323,8 +368,8 @@ class TestWorkerProtocol(unittest.TestCase):
         try:
             ra = w.execute(path_a, {}, {}, timeout=10)
             rb = w.execute(path_b, {}, {}, timeout=10)
-            self.assertEqual(ra["state_key"], "a")
-            self.assertEqual(rb["state_key"], "b")
+            assert ra["state_key"] == "a"
+            assert rb["state_key"] == "b"
         finally:
             w.shutdown()
 
@@ -339,7 +384,7 @@ class TestWorkerProtocol(unittest.TestCase):
         try:
             r1 = w.execute(path, {}, {}, timeout=10)
             r2 = w.execute(path, {}, {}, timeout=10)
-            self.assertEqual(r1["pid"], r2["pid"])
+            assert r1["pid"] == r2["pid"]
         finally:
             w.shutdown()
 
@@ -355,7 +400,7 @@ class TestWorkerProtocol(unittest.TestCase):
             r1 = w.execute(path, {}, {}, timeout=10)
             w.shutdown()
             r2 = w.execute(path, {}, {}, timeout=10)
-            self.assertNotEqual(r1["pid"], r2["pid"])
+            assert r1["pid"] != r2["pid"]
         finally:
             w.shutdown()
 
@@ -374,23 +419,23 @@ class TestWorkerProtocol(unittest.TestCase):
             r = w.execute(path, data, {}, timeout=10)
         finally:
             w.shutdown()
-        self.assertEqual(r["tuple"], (1, 2))
-        self.assertEqual(r["set"], {3, 4})
-        self.assertEqual(r["nested"]["a"][2]["b"], 2.5)
+        assert r["tuple"] == (1, 2)
+        assert r["set"] == {3, 4}
+        assert r["nested"]["a"][2]["b"] == 2.5
 
     def test_worker_status(self):
         from zmart_analysis.workers import Worker
 
         w = Worker(environment=None, connect_timeout=10)
         s = w.status
-        self.assertEqual(s["state"], "stopped")
+        assert s["state"] == "stopped"
         w.shutdown()
 
 
 # ---- Worker Error Paths ----------------------------------------------
 
 
-class TestWorkerErrorPaths(unittest.TestCase):
+class TestWorkerErrorPaths:
     def test_crash_raises_worker_crashed(self):
         from zmart_analysis.workers import Worker
 
@@ -399,7 +444,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
             def run(pd, state, **p): os._exit(1)
         """)
         w = Worker(environment=None, connect_timeout=10)
-        with self.assertRaises(WorkerCrashedError):
+        with pytest.raises(WorkerCrashedError):
             w.execute(path, {}, {}, timeout=10)
         w.shutdown()
 
@@ -411,11 +456,11 @@ class TestWorkerErrorPaths(unittest.TestCase):
             def run(pd, state, **p): time.sleep(30); return pd
         """)
         w = Worker(environment=None, connect_timeout=10)
-        with self.assertRaises(WorkerTimeoutError) as ctx:
+        with pytest.raises(WorkerTimeoutError) as ctx:
             w.execute(path, {}, {}, timeout=1)
-        self.assertIn("timed out", str(ctx.exception))
+        assert "timed out" in str(ctx.value)
         # A slow step is not a user-code exception; keep the types distinct.
-        self.assertNotIsInstance(ctx.exception, StepExecutionError)
+        assert not isinstance(ctx.value, StepExecutionError)
         w.shutdown()
 
     def test_step_error_has_traceback(self):
@@ -425,10 +470,10 @@ class TestWorkerErrorPaths(unittest.TestCase):
             def run(pd, state, **p): raise ValueError("test")
         """)
         w = Worker(environment=None, connect_timeout=10)
-        with self.assertRaises(StepExecutionError) as ctx:
+        with pytest.raises(StepExecutionError) as ctx:
             w.execute(path, {}, {}, timeout=10)
-        self.assertIn("test", str(ctx.exception))
-        self.assertIn("ValueError", ctx.exception.remote_traceback)
+        assert "test" in str(ctx.value)
+        assert "ValueError" in ctx.value.remote_traceback
         w.shutdown()
 
     def test_spawn_command_passes_engine_pid_as_parent_pid(self):
@@ -450,16 +495,16 @@ class TestWorkerErrorPaths(unittest.TestCase):
         w = workers.Worker(environment=None, connect_timeout=1)
         workers.subprocess.Popen = fake_popen
         try:
-            with self.assertRaises(WorkerSpawnError):
+            with pytest.raises(WorkerSpawnError):
                 w.ensure_running()
         finally:
             workers.subprocess.Popen = real_popen
             w.shutdown()
 
         cmd = captured["cmd"]
-        self.assertIn("--parent-pid", cmd)
+        assert "--parent-pid" in cmd
         pid_arg = cmd[cmd.index("--parent-pid") + 1]
-        self.assertEqual(pid_arg, str(os.getpid()))
+        assert pid_arg == str(os.getpid())
 
     def test_worker_exits_when_watched_parent_pid_dies(self):
         # End-to-end: the worker watches the --parent-pid it is given, not
@@ -495,17 +540,14 @@ class TestWorkerErrorPaths(unittest.TestCase):
 
         try:
             conn = listener.accept()  # worker connected -> it is running
-            self.assertIsNone(worker.poll(), "worker exited before parent died")
+            assert worker.poll() is None, "worker exited before parent died"
 
             fake_parent.terminate()
             fake_parent.wait(timeout=10)
 
             # Worker polls parent liveness on a <=5s cycle; allow margin.
             worker.wait(timeout=20)
-            self.assertIsNotNone(
-                worker.poll(),
-                "worker did not exit after its watched parent died",
-            )
+            assert worker.poll() is not None, "worker did not exit after its watched parent died"
             conn.close()
         finally:
             for proc in (worker, fake_parent):
@@ -514,7 +556,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
                     proc.wait(timeout=10)
             listener.close()
 
-    def test_windows_parent_check_distinguishes_running_and_terminated(self):
+    def test_windows_parent_check_distinguishes_running_and_terminated(self, subtests):
         from zmart_analysis.worker_script import _windows_process_alive
 
         class FakeKernel32:
@@ -540,22 +582,22 @@ class TestWorkerErrorPaths(unittest.TestCase):
             (0xFFFFFFFF, False),  # WAIT_FAILED: do not claim it is alive
         )
         for wait_result, expected in cases:
-            with self.subTest(wait_result=wait_result):
+            with subtests.test(wait_result=wait_result):
                 kernel32 = FakeKernel32(wait_result)
-                self.assertEqual(_windows_process_alive(4321, kernel32), expected)
-                self.assertEqual(kernel32.open_args, (0x00100000, False, 4321))
-                self.assertEqual(kernel32.wait_args, (123, 0))
-                self.assertEqual(kernel32.closed, [123])
+                assert _windows_process_alive(4321, kernel32) == expected
+                assert kernel32.open_args == (0x00100000, False, 4321)
+                assert kernel32.wait_args == (123, 0)
+                assert kernel32.closed == [123]
 
         unavailable = FakeKernel32(0x00000102, handle=0)
-        self.assertFalse(_windows_process_alive(4321, unavailable))
-        self.assertEqual(unavailable.closed, [])
+        assert not _windows_process_alive(4321, unavailable)
+        assert unavailable.closed == []
 
 
 # ---- Pool ------------------------------------------------------------
 
 
-class TestPool(unittest.TestCase):
+class TestPool:
     def test_a_steps_concurrency_is_its_own_at_each_width(self):
         """Two pipelines sharing a step file may run it at different widths.
 
@@ -569,9 +611,9 @@ class TestPool(unittest.TestCase):
         try:
             one = pool._get_semaphore("/steps/detect.py", 1)
             eight = pool._get_semaphore("/steps/detect.py", 8)
-            self.assertIsNot(one, eight)
-            self.assertIs(pool._get_semaphore("/steps/detect.py", 8), eight)
-            self.assertEqual(eight._value, 8)
+            assert one is not eight
+            assert pool._get_semaphore("/steps/detect.py", 8) is eight
+            assert eight._value == 8
         finally:
             pool.shutdown_all(now=True)
 
@@ -585,7 +627,7 @@ class TestPool(unittest.TestCase):
         pool = WorkerPool(idle_timeout=60)
         r1 = pool.execute(None, path, {}, {}, timeout=10)
         r2 = pool.execute(None, path, {}, {}, timeout=10)
-        self.assertEqual(r1["pid"], r2["pid"])
+        assert r1["pid"] == r2["pid"]
         pool.shutdown_all()
 
     def test_shutdown_before_use(self):
@@ -594,7 +636,7 @@ class TestPool(unittest.TestCase):
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool()
         pool.shutdown_all()
-        with self.assertRaisesRegex(RuntimeError, "shut down"):
+        with pytest.raises(RuntimeError, match="shut down"):
             pool.execute(None, path, {}, {}, timeout=10)
 
     def test_error_through_pool(self):
@@ -604,9 +646,9 @@ class TestPool(unittest.TestCase):
             def run(pd, state, **p): raise ValueError("pool err")
         """)
         pool = WorkerPool()
-        with self.assertRaises(StepExecutionError) as ctx:
+        with pytest.raises(StepExecutionError) as ctx:
             pool.execute(None, path, {}, {}, timeout=10)
-        self.assertIn("pool err", str(ctx.exception))
+        assert "pool err" in str(ctx.value)
         pool.shutdown_all()
 
     def test_reaper_removes_idle(self):
@@ -617,11 +659,11 @@ class TestPool(unittest.TestCase):
         pool.execute(None, path, {}, {}, timeout=10)
 
         env_pool = pool._env_pools[None]
-        self.assertTrue(len(env_pool._idle) > 0 or len(env_pool._busy) > 0)
+        assert len(env_pool._idle) > 0 or len(env_pool._busy) > 0
 
         time.sleep(0.4)
         env_pool.reap_idle()
-        self.assertEqual(len(env_pool._idle), 0)
+        assert len(env_pool._idle) == 0
         pool.shutdown_all()
 
     def test_no_idle_timeout_means_never_reaped(self):
@@ -640,11 +682,11 @@ class TestPool(unittest.TestCase):
         env_pool = pool._env_pools[None]
         time.sleep(0.3)
         env_pool.reap_idle()
-        self.assertEqual(len(env_pool._idle), 1)
-        self.assertFalse(env_pool._idle[0].is_idle(now=time.monotonic() + 1e9))
+        assert len(env_pool._idle) == 1
+        assert not env_pool._idle[0].is_idle(now=time.monotonic() + 1e9)
         pool.shutdown_all()
 
-        self.assertFalse(Worker(idle_timeout=None).is_idle())
+        assert not Worker(idle_timeout=None).is_idle()
 
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
@@ -673,8 +715,8 @@ class TestPool(unittest.TestCase):
         elapsed = time.monotonic() - t0
         pool.shutdown_all()
 
-        self.assertEqual(len(results), 2)
-        self.assertGreater(elapsed, 0.5, "max_workers=1 should serialize execution")
+        assert len(results) == 2
+        assert elapsed > 0.5, "max_workers=1 should serialize execution"
 
     def test_semaphore_allows_parallelism(self):
         """max_workers=4 allows parallel execution."""
@@ -702,20 +744,20 @@ class TestPool(unittest.TestCase):
             t.join(timeout=30)
         pool.shutdown_all()
 
-        self.assertEqual(len(results), 4)
+        assert len(results) == 4
         # All four were running at one moment: the last to start began
         # before the first to finish ended. Measured from inside the steps,
         # so the time it takes to start a worker process does not count;
         # a wall-clock limit failed on slow two-core machines.
         last_start = max(r["start"] for r in results)
         first_end = min(r["end"] for r in results)
-        self.assertLess(last_start, first_end, "max_workers=4 should allow parallel execution")
+        assert last_start < first_end, "max_workers=4 should allow parallel execution"
 
 
 # ---- Engine (register) -----------------------------------------------
 
 
-class TestEngineRegister(unittest.TestCase):
+class TestEngineRegister:
     def test_register_simple(self):
         _temp_step("def run(pd, state, **p): return pd", name="reg_a")
         yaml = _temp_yaml("wf:\n  - reg_a:")
@@ -731,7 +773,7 @@ class TestEngineRegister(unittest.TestCase):
 
         with Engine() as e:
             e.register("test", yaml)
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 e.register("test", yaml)
 
     def test_register_bad_yaml(self):
@@ -740,7 +782,7 @@ class TestEngineRegister(unittest.TestCase):
         from zmart_analysis import Engine
 
         with Engine() as e:
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 e.register("bad", str(path))
 
     def test_concurrent_register_same_name_raises_once(self):
@@ -771,8 +813,8 @@ class TestEngineRegister(unittest.TestCase):
                 t.join()
 
             # Exactly one registration wins; every other thread sees ValueError.
-            self.assertEqual(sum(errors), 7)
-            self.assertIn("dup", e._pipelines)
+            assert sum(errors) == 7
+            assert "dup" in e._pipelines
 
     def test_every_result_records_where_each_step_ran(self):
         """Provenance: each step's result names its environment, the Python
@@ -794,15 +836,15 @@ class TestEngineRegister(unittest.TestCase):
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=30)
         record = results[0]["provenance"]["reg_provenance"]
-        self.assertEqual(set(record), {"environment", "python", "fingerprint", "packages"})
-        self.assertEqual(len(record["fingerprint"]), 16)
-        self.assertIn("pyyaml", record["packages"])
+        assert set(record) == {"environment", "python", "fingerprint", "packages"}
+        assert len(record["fingerprint"]) == 16
+        assert "pyyaml" in record["packages"]
 
 
 # ---- Engine (submit) -------------------------------------------------
 
 
-class TestEngineSubmit(unittest.TestCase):
+class TestEngineSubmit:
     def test_simple_submit(self):
         _temp_step(
             """
@@ -819,8 +861,8 @@ class TestEngineSubmit(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertTrue(len(results) > 0)
-        self.assertTrue(results[0]["ok"])
+        assert len(results) > 0
+        assert results[0]["ok"]
 
     def test_multi_step(self):
         _temp_step(
@@ -846,8 +888,8 @@ class TestEngineSubmit(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(results[0]["s1"], 1)
-        self.assertEqual(results[0]["s2"], 2)
+        assert results[0]["s1"] == 1
+        assert results[0]["s2"] == 2
 
     def test_data_flows_between_steps(self):
         _temp_step(
@@ -873,7 +915,7 @@ class TestEngineSubmit(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(results[0]["saw"], "hello")
+        assert results[0]["saw"] == "hello"
 
     def test_input_data(self):
         _temp_step("def run(pd, state, **p): return pd", name="inp")
@@ -884,7 +926,7 @@ class TestEngineSubmit(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {"key": "val"})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(results[0]["input"]["key"], "val")
+        assert results[0]["input"]["key"] == "val"
 
     def test_params_from_yaml(self):
         _temp_step(
@@ -902,7 +944,7 @@ class TestEngineSubmit(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(results[0]["x"], 42)
+        assert results[0]["x"] == 42
 
     def test_concurrent_submits(self):
         _temp_step(
@@ -921,388 +963,14 @@ class TestEngineSubmit(unittest.TestCase):
             for i in range(5):
                 e.submit("test", {"job": i})
             results = _wait_for_results(e, "test", 5, timeout=15)
-        self.assertEqual(len(results), 5)
-        self.assertEqual(sorted(r["job"] for r in results), list(range(5)))
-
-
-# ---- Engine (scopes) -------------------------------------------------
-
-
-class TestEngineScopes(unittest.TestCase):
-    def test_two_carriers_at_once_keep_their_compartments_apart(self):
-        """Tiles of two carriers arrive interleaved, with the same
-        compartment numbers on both. Each compartment is summed, then each
-        carrier sums only its own compartments."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["value"] = pd["input"]["value"]
-                return pd
-        """,
-            name="carriers_tile",
-        )
-        _temp_step(
-            """
-            import time
-            def run(pd, state, **p):
-                time.sleep(0.2)   # a slow compartment, so a carrier signal could overtake it
-                return {"compartment_sum": sum(r["value"] for r in pd["results"]),
-                        "compartment": pd["metadata"]["scope"]["compartment"]}
-        """,
-            name="carriers_compartment",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                return {"carrier_sum": sum(r["compartment_sum"] for r in pd["results"]),
-                        "compartments": sorted(r["compartment"] for r in pd["results"]),
-                        "carrier": pd["metadata"]["scope"]["carrier"]}
-        """,
-            name="carriers_carrier",
-        )
-        yaml = _temp_yaml(
-            "wf:\n  - carriers_tile:\n"
-            "  - carriers_compartment:\n      scope: compartment\n"
-            "  - carriers_carrier:\n      scope: carrier"
-        )
-        from zmart_analysis import Engine
-
-        with Engine(max_concurrent=8) as e:
-            e.register("test", yaml)
-            layout = [(1, 1, 1), (2, 1, 100), (1, 2, 2), (2, 2, 200)]
-            for carrier, compartment, value in layout:
-                for _ in range(3):
-                    e.submit(
-                        "test",
-                        {"value": value},
-                        scope={"carrier": carrier, "compartment": compartment},
-                    )
-                e.submit(
-                    "test",
-                    {"value": 0},
-                    scope={"carrier": carrier, "compartment": compartment},
-                    complete="compartment",
-                )
-            e.submit(
-                "test", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier"
-            )
-            e.submit(
-                "test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier"
-            )
-            results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
-        carriers = {r["carrier"]: r for r in results if "carrier_sum" in r}
-        self.assertEqual(carriers[1]["carrier_sum"], 3 * 1 + 3 * 2)
-        self.assertEqual(carriers[2]["carrier_sum"], 3 * 100 + 3 * 200)
-        self.assertEqual(carriers[1]["compartments"], [1, 2])
-        self.assertEqual(carriers[2]["compartments"], [1, 2])
-
-    def test_scope_collects_results(self):
-        """Scoped step receives accumulated results from all jobs."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["tile"] = pd["input"]["tile"]
-                return pd
-        """,
-            name="sc_seg",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                tiles = [r["tile"] for r in pd["results"]]
-                pd["tiles"] = sorted(tiles)
-                return pd
-        """,
-            name="sc_stitch",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - sc_seg:
-              - sc_stitch:
-                  scope: group
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            for i in range(3):
-                complete = "group" if i == 2 else None
-                e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
-            results = _wait_for_results(e, "test", 4, timeout=15)
-
-        # Should have 3 Phase 0 results + 1 scoped result
-        phase0 = [r for r in results if r.get("_phase") == 0]
-        scoped = [r for r in results if r.get("_phase") == 1]
-        self.assertEqual(len(phase0), 3)
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["tiles"], [0, 1, 2])
-
-    def test_scope_preserves_submission_order(self):
-        _temp_step(
-            """
-            import time
-            def run(pd, state, **p):
-                time.sleep(0.05)
-                pd["val"] = pd["input"]["val"]
-                return pd
-        """,
-            name="ord_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["order"] = [r["val"] for r in pd["results"]]
-                return pd
-        """,
-            name="ord_collect",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - ord_step:
-              - ord_collect:
-                  scope: group
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            for i in range(5):
-                complete = "group" if i == 4 else None
-                e.submit("test", {"val": i}, scope={"group": "G1"}, complete=complete)
-            results = _wait_for_results(e, "test", 6, timeout=20)
-
-        scoped = [r for r in results if r.get("_phase") == 1]
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["order"], [0, 1, 2, 3, 4])
-
-    def test_multiple_scope_groups(self):
-        """Different scope groups are collected independently."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["val"] = pd["input"]["val"]
-                return pd
-        """,
-            name="mg_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["vals"] = sorted([r["val"] for r in pd["results"]])
-                return pd
-        """,
-            name="mg_collect",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - mg_step:
-              - mg_collect:
-                  scope: group
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            # Group A: values 10, 20
-            e.submit("test", {"val": 10}, scope={"group": "A"})
-            e.submit("test", {"val": 20}, scope={"group": "A"}, complete="group")
-            # Group B: values 30, 40, 50
-            e.submit("test", {"val": 30}, scope={"group": "B"})
-            e.submit("test", {"val": 40}, scope={"group": "B"})
-            e.submit("test", {"val": 50}, scope={"group": "B"}, complete="group")
-            results = _wait_for_results(e, "test", 7, timeout=20)
-
-        scoped = [r for r in results if r.get("_phase") == 1]
-        scoped_vals = sorted([tuple(r["vals"]) for r in scoped])
-        self.assertIn((10, 20), scoped_vals)
-        self.assertIn((30, 40, 50), scoped_vals)
-
-    def test_complete_list(self):
-        """complete parameter accepts a list of scope levels."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["v"] = pd["input"]["v"]
-                return pd
-        """,
-            name="cl_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["group_vals"] = [r["v"] for r in pd["results"]]
-                return pd
-        """,
-            name="cl_group",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["all_vals"] = [r.get("group_vals", [])
-                                   for r in pd["results"]]
-                return pd
-        """,
-            name="cl_all",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - cl_step:
-              - cl_group:
-                  scope: group
-              - cl_all:
-                  scope: all
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {"v": 1}, scope={"group": "G1"})
-            e.submit("test", {"v": 2}, scope={"group": "G1"}, complete=["group", "all"])
-            results = _wait_for_results(e, "test", 4, timeout=20)
-
-        phase2 = [r for r in results if r.get("_phase") == 2]
-        self.assertEqual(len(phase2), 1)
-
-    def test_all_scope_collects_everything(self):
-        """Scope 'all' (not a key in any scope dict) collects everything."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["v"] = pd["input"]["v"]
-                return pd
-        """,
-            name="al_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["total"] = sum(r["v"] for r in pd["results"])
-                return pd
-        """,
-            name="al_sum",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - al_step:
-              - al_sum:
-                  scope: all
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {"v": 10}, scope={"group": "A"})
-            e.submit("test", {"v": 20}, scope={"group": "B"})
-            e.submit("test", {"v": 30}, scope={"group": "C"}, complete="all")
-            results = _wait_for_results(e, "test", 4, timeout=15)
-
-        scoped = [r for r in results if r.get("_phase") == 1]
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["total"], 60)
-
-    def test_failures_reach_scoped_step(self):
-        """Phase 0 failures are aggregated into pipeline_data['failures']
-        for the scoped step to inspect."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                if pd["input"]["v"] == 99:
-                    raise ValueError("deliberate failure")
-                pd["v"] = pd["input"]["v"]
-                return pd
-        """,
-            name="fr_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["n_results"] = len(pd["results"])
-                pd["n_failures"] = len(pd["failures"])
-                pd["failure_steps"] = [f.get("step") for f in pd["failures"]]
-                pd["failure_errors"] = [f.get("error") for f in pd["failures"]]
-                return pd
-        """,
-            name="fr_collect",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - fr_step:
-              - fr_collect:
-                  scope: group
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {"v": 1}, scope={"group": "G"})
-            e.submit("test", {"v": 99}, scope={"group": "G"})
-            e.submit("test", {"v": 2}, scope={"group": "G"}, complete="group")
-            results = _wait_for_results(e, "test", 3, timeout=15)
-
-        scoped = [r for r in results if r.get("_phase") == 1]
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["n_results"], 2)
-        self.assertEqual(scoped[0]["n_failures"], 1)
-        self.assertEqual(scoped[0]["failure_steps"], ["fr_step"])
-        self.assertIn("deliberate failure", scoped[0]["failure_errors"][0])
-
-    def test_scope_collection_prunes_consumed_failures(self):
-        """Consumed scope failures leave status; unrelated failures remain."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                if pd["input"].get("fail"):
-                    raise ValueError(f"failed {pd['input']['group']}")
-                pd["group"] = pd["input"]["group"]
-                return pd
-        """,
-            name="pf_step",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["n_results"] = len(pd["results"])
-                pd["failure_errors"] = [f["error"] for f in pd["failures"]]
-                return pd
-        """,
-            name="pf_collect",
-        )
-        yaml = _temp_yaml("""
-            wf:
-              - pf_step:
-              - pf_collect:
-                  scope: group
-        """)
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {"group": "A", "fail": True}, scope={"group": "A"})
-            e.submit("test", {"group": "B", "fail": True}, scope={"group": "B"})
-            _wait_for_status(e, "test", expected_total=2, timeout=15)
-
-            e.submit("test", {"group": "A", "fail": False}, scope={"group": "A"}, complete="group")
-            results = _wait_for_results(e, "test", 2, timeout=15)
-            status = e.status("test")
-
-        scoped = [r for r in results if r.get("_phase") == 1]
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["n_results"], 1)
-        self.assertEqual(len(scoped[0]["failure_errors"]), 1)
-        self.assertIn("failed A", scoped[0]["failure_errors"][0])
-
-        remaining_errors = [f["error"] for f in status["failures"]]
-        self.assertEqual(len(remaining_errors), 1)
-        self.assertIn("failed B", remaining_errors[0])
-
-
-# ---- Engine (environment isolation) ----------------------------------
+        assert len(results) == 5
+        assert sorted(r["job"] for r in results) == list(range(5))
 
 
 # ---- Engine (results) ------------------------------------------------
 
 
-class TestEngineResults(unittest.TestCase):
+class TestEngineResults:
     def test_results_consumed_on_retrieval(self):
         _temp_step("def run(pd, state, **p): return pd", name="drain")
         yaml = _temp_yaml("wf:\n  - drain:")
@@ -1313,8 +981,8 @@ class TestEngineResults(unittest.TestCase):
             e.submit("test", {})
             r1 = _wait_for_results(e, "test", 1, timeout=10)
             r2 = e.results("test")
-        self.assertEqual(len(r1), 1)
-        self.assertEqual(len(r2), 0)
+        assert len(r1) == 1
+        assert len(r2) == 0
 
     def test_results_tagged_with_phase(self):
         _temp_step("def run(pd, state, **p): return pd", name="tag")
@@ -1325,28 +993,28 @@ class TestEngineResults(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(results[0]["_phase"], 0)
-        self.assertIsNone(results[0]["_scope_level"])
+        assert results[0]["_phase"] == 0
+        assert results[0]["_scope_level"] is None
 
     def test_unregistered_pipeline_raises(self):
         from zmart_analysis import Engine
 
         with Engine() as e:
-            with self.assertRaises(KeyError):
+            with pytest.raises(KeyError):
                 e.results("nonexistent")
 
 
 # ---- Engine (concurrency) -------------------------------------------
 
 
-class TestEngineConcurrency(unittest.TestCase):
+class TestEngineConcurrency:
     def test_a_yaml_max_workers_below_one_is_refused_at_register(self):
         _temp_step("def run(pd, state, **p): return pd", name="narrow")
         yaml = _temp_yaml("wf:\n  - narrow:\n      max_workers: 0")
         from zmart_analysis import Engine
 
         with Engine() as e:
-            with self.assertRaises(ValueError):
+            with pytest.raises(ValueError):
                 e.register("test", yaml)
 
     def test_a_yaml_max_workers_reaches_the_step_settings(self):
@@ -1356,7 +1024,7 @@ class TestEngineConcurrency(unittest.TestCase):
 
         with Engine() as e:
             e.register("test", yaml)
-            self.assertEqual(e._pipelines["test"].step_settings["wide"]["max_workers"], 3)
+            assert e._pipelines["test"].step_settings["wide"]["max_workers"] == 3
 
     def test_many_concurrent_jobs(self):
         _temp_step(
@@ -1375,14 +1043,14 @@ class TestEngineConcurrency(unittest.TestCase):
             for i in range(20):
                 e.submit("test", {"idx": i})
             results = _wait_for_results(e, "test", 20, timeout=30)
-        self.assertEqual(len(results), 20)
-        self.assertEqual(sorted(r["idx"] for r in results), list(range(20)))
+        assert len(results) == 20
+        assert sorted(r["idx"] for r in results) == list(range(20))
 
 
 # ---- Engine (errors) -------------------------------------------------
 
 
-class TestEngineErrors(unittest.TestCase):
+class TestEngineErrors:
     def test_failed_job_does_not_crash_pipeline(self):
         """Other jobs continue when one fails."""
         _temp_step(
@@ -1404,8 +1072,8 @@ class TestEngineErrors(unittest.TestCase):
             e.submit("test", {"fail": False})
             e.submit("test", {"fail": False})
             status = _wait_for_status(e, "test", 3, timeout=15)
-        self.assertGreaterEqual(status["completed"], 2)
-        self.assertGreaterEqual(status["failed"], 1)
+        assert status["completed"] >= 2
+        assert status["failed"] >= 1
 
     def test_failures_in_status(self):
         _temp_step(
@@ -1421,9 +1089,9 @@ class TestEngineErrors(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             status = _wait_for_status(e, "test", 1, timeout=10)
-        self.assertEqual(status["failed"], 1)
-        self.assertTrue(len(status["failures"]) > 0)
-        self.assertIn("boom", status["failures"][0]["error"])
+        assert status["failed"] == 1
+        assert len(status["failures"]) > 0
+        assert "boom" in status["failures"][0]["error"]
 
     def test_return_non_dict_raises(self):
         _temp_step(
@@ -1439,13 +1107,13 @@ class TestEngineErrors(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             status = _wait_for_status(e, "test", 1, timeout=10)
-        self.assertEqual(status["failed"], 1)
+        assert status["failed"] == 1
 
 
 # ---- Engine (lifecycle) ----------------------------------------------
 
 
-class TestEngineLifecycle(unittest.TestCase):
+class TestEngineLifecycle:
     def test_context_manager(self):
         _temp_step("def run(pd, state, **p): return pd", name="ctx")
         yaml = _temp_yaml("wf:\n  - ctx:")
@@ -1455,7 +1123,7 @@ class TestEngineLifecycle(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
-        self.assertEqual(len(results), 1)
+        assert len(results) == 1
 
     def test_shutdown_then_register_raises(self):
         """register() after shutdown raises RuntimeError."""
@@ -1465,7 +1133,7 @@ class TestEngineLifecycle(unittest.TestCase):
         yaml = _temp_yaml("wf:\n  - shut_reg:")
         e = Engine()
         e.shutdown()
-        with self.assertRaises(RuntimeError):
+        with pytest.raises(RuntimeError):
             e.register("test", yaml)
 
     def test_concurrent_registration_reserves_pipeline_name(self):
@@ -1492,15 +1160,15 @@ class TestEngineLifecycle(unittest.TestCase):
                 target=lambda: _capture_exception(errors, lambda: e.register("test", yaml))
             )
             thread.start()
-            self.assertTrue(parse_started.wait(timeout=5))
-            with self.assertRaisesRegex(ValueError, "already registered"):
+            assert parse_started.wait(timeout=5)
+            with pytest.raises(ValueError, match="already registered"):
                 e.register("test", yaml)
             release_parse.set()
             thread.join(timeout=5)
 
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(errors, [])
-        self.assertIn("test", e.status())
+        assert not thread.is_alive()
+        assert errors == []
+        assert "test" in e.status()
         e.shutdown()
 
     def test_registration_cannot_complete_after_shutdown_starts(self):
@@ -1527,15 +1195,15 @@ class TestEngineLifecycle(unittest.TestCase):
                 target=lambda: _capture_exception(errors, lambda: e.register("late", yaml))
             )
             thread.start()
-            self.assertTrue(parse_started.wait(timeout=5))
+            assert parse_started.wait(timeout=5)
             e.shutdown(wait=False)
             release_parse.set()
             thread.join(timeout=5)
 
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(len(errors), 1)
-        self.assertIsInstance(errors[0], RuntimeError)
-        self.assertNotIn("late", e.status())
+        assert not thread.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], RuntimeError)
+        assert "late" not in e.status()
 
     def test_failed_registration_releases_pipeline_name(self):
         """A parse failure must not leave the name permanently reserved."""
@@ -1545,10 +1213,10 @@ class TestEngineLifecycle(unittest.TestCase):
         invalid_yaml = _temp_yaml("wf: [")
         valid_yaml = _temp_yaml("wf:\n  - reg_retry:")
         e = Engine()
-        with self.assertRaises(Exception):
+        with pytest.raises(Exception):
             e.register("retry", invalid_yaml)
         e.register("retry", valid_yaml)
-        self.assertIn("retry", e.status())
+        assert "retry" in e.status()
         e.shutdown()
 
     def test_shutdown_then_submit_raises(self):
@@ -1560,7 +1228,7 @@ class TestEngineLifecycle(unittest.TestCase):
         e = Engine()
         e.register("test", yaml)
         e.shutdown()
-        with self.assertRaises(RuntimeError):
+        with pytest.raises(RuntimeError):
             e.submit("test", {})
 
     def test_double_shutdown(self):
@@ -1593,7 +1261,7 @@ class TestEngineLifecycle(unittest.TestCase):
             if e.status("test")["running"] == 1:
                 break
             time.sleep(0.01)
-        self.assertEqual(e.status("test")["running"], 1)
+        assert e.status("test")["running"] == 1
 
         e.shutdown(wait=False)
 
@@ -1605,16 +1273,16 @@ class TestEngineLifecycle(unittest.TestCase):
             time.sleep(0.01)
 
         status = e.status("test")
-        self.assertEqual(status["pending"], 0)
-        self.assertEqual(status["running"], 0)
-        self.assertEqual(status["completed"] + status["failed"], 12)
-        self.assertEqual(e._pool.status["workers"], [])
+        assert status["pending"] == 0
+        assert status["running"] == 0
+        assert status["completed"] + status["failed"] == 12
+        assert e._pool.status["workers"] == []
 
 
 # ---- Engine (status) -------------------------------------------------
 
 
-class TestEngineStatus(unittest.TestCase):
+class TestEngineStatus:
     def test_status_single_pipeline(self):
         _temp_step("def run(pd, state, **p): return pd", name="st")
         yaml = _temp_yaml("wf:\n  - st:")
@@ -1624,10 +1292,10 @@ class TestEngineStatus(unittest.TestCase):
             e.register("test", yaml)
             e.submit("test", {})
             status = _wait_for_status(e, "test", 1, timeout=10)
-        self.assertIn("completed", status)
-        self.assertIn("failed", status)
-        self.assertIn("pending", status)
-        self.assertEqual(status["completed"], 1)
+        assert "completed" in status
+        assert "failed" in status
+        assert "pending" in status
+        assert status["completed"] == 1
 
     def test_status_all_pipelines(self):
         _temp_step("def run(pd, state, **p): return pd", name="st2")
@@ -1638,14 +1306,14 @@ class TestEngineStatus(unittest.TestCase):
             e.register("a", yaml)
             e.register("b", yaml)
             status = e.status()
-        self.assertIn("a", status)
-        self.assertIn("b", status)
+        assert "a" in status
+        assert "b" in status
 
     def test_status_nonexistent_raises(self):
         from zmart_analysis import Engine
 
         with Engine() as e:
-            with self.assertRaises(KeyError):
+            with pytest.raises(KeyError):
                 e.status("ghost")
 
     def test_status_failed_count_matches_failures_after_scope_completion(self):
@@ -1697,9 +1365,9 @@ class TestEngineStatus(unittest.TestCase):
                 time.sleep(0.02)
                 status = e.status("test")
 
-        self.assertEqual(len(results), 3)
+        assert len(results) == 3
         # The invariant: failed count always equals the failure-record count.
-        self.assertEqual(status["failed"], len(status["failures"]))
+        assert status["failed"] == len(status["failures"])
         # The poll pattern used by run_pipeline.py must never IndexError.
         if status["failed"]:
             _ = status["failures"][0]
@@ -1729,22 +1397,22 @@ class TestEngineStatus(unittest.TestCase):
                     break
                 time.sleep(0.01)
 
-            self.assertEqual(status["pending"], 1)
-            self.assertEqual(status["running"], 1)
-            self.assertEqual(status["completed"], 0)
+            assert status["pending"] == 1
+            assert status["running"] == 1
+            assert status["completed"] == 0
             results = _wait_for_results(e, "test", 2, timeout=5)
             status = e.status("test")
 
-        self.assertEqual(len(results), 2)
-        self.assertEqual(status["pending"], 0)
-        self.assertEqual(status["running"], 0)
-        self.assertEqual(status["completed"], 2)
+        assert len(results) == 2
+        assert status["pending"] == 0
+        assert status["running"] == 0
+        assert status["completed"] == 2
 
 
 # ---- Engine (multi-pipeline) ----------------------------------------
 
 
-class TestEngineMultiPipeline(unittest.TestCase):
+class TestEngineMultiPipeline:
     def test_two_pipelines_shared_workers(self):
         _temp_step(
             """
@@ -1765,16 +1433,16 @@ class TestEngineMultiPipeline(unittest.TestCase):
             e.submit("b", {})
             ra = _wait_for_results(e, "a", 1, timeout=10)
             rb = _wait_for_results(e, "b", 1, timeout=10)
-        self.assertEqual(len(ra), 1)
-        self.assertEqual(len(rb), 1)
-        self.assertEqual(ra[0]["from"], "a")
-        self.assertEqual(rb[0]["from"], "b")
+        assert len(ra) == 1
+        assert len(rb) == 1
+        assert ra[0]["from"] == "a"
+        assert rb[0]["from"] == "b"
 
 
 # ---- Engine (priority) -----------------------------------------------
 
 
-class TestEnginePriority(unittest.TestCase):
+class TestEnginePriority:
     """Optional priority parameter orders pending jobs."""
 
     def test_higher_priority_runs_before_lower(self):
@@ -1805,17 +1473,17 @@ class TestEnginePriority(unittest.TestCase):
             results = _wait_for_results(e, "test", 5, timeout=10)
 
         marks = [r["mark"] for r in results]
-        self.assertEqual(len(marks), 5)
-        self.assertEqual(marks[0], "blocker")
+        assert len(marks) == 5
+        assert marks[0] == "blocker"
         # High-priority pending jobs come before low-priority pending ones.
         idx = {m: i for i, m in enumerate(marks)}
-        self.assertLess(idx["high_a"], idx["low_a"])
-        self.assertLess(idx["high_a"], idx["low_b"])
-        self.assertLess(idx["high_b"], idx["low_a"])
-        self.assertLess(idx["high_b"], idx["low_b"])
+        assert idx["high_a"] < idx["low_a"]
+        assert idx["high_a"] < idx["low_b"]
+        assert idx["high_b"] < idx["low_a"]
+        assert idx["high_b"] < idx["low_b"]
         # FIFO within same priority.
-        self.assertLess(idx["high_a"], idx["high_b"])
-        self.assertLess(idx["low_a"], idx["low_b"])
+        assert idx["high_a"] < idx["high_b"]
+        assert idx["low_a"] < idx["low_b"]
 
     def test_default_priority_preserves_fifo(self):
         """No priority specified -> submission order is preserved."""
@@ -1837,7 +1505,7 @@ class TestEnginePriority(unittest.TestCase):
             results = _wait_for_results(e, "test", 5, timeout=10)
 
         order = [r["i"] for r in results]
-        self.assertEqual(order, [0, 1, 2, 3, 4])
+        assert order == [0, 1, 2, 3, 4]
 
     def test_scope_completion_does_not_block_lower_priority_phase0(self):
         _temp_step(
@@ -1876,15 +1544,15 @@ class TestEnginePriority(unittest.TestCase):
             results = _wait_for_results(e, "test", 2, timeout=5)
 
         scoped = [result for result in results if result["_phase"] == 1]
-        self.assertEqual(len(results), 2)
-        self.assertEqual(len(scoped), 1)
-        self.assertEqual(scoped[0]["total"], 7)
+        assert len(results) == 2
+        assert len(scoped) == 1
+        assert scoped[0]["total"] == 7
 
 
 # ---- Package API -----------------------------------------------------
 
 
-class TestPackageAPI(unittest.TestCase):
+class TestPackageAPI:
     def test_public_imports(self):
         import zmart_analysis
 
@@ -1897,17 +1565,17 @@ class TestPackageAPI(unittest.TestCase):
             "StepExecutionError",
             "ScopeError",
         ):
-            self.assertTrue(hasattr(zmart_analysis, name), name)
+            assert hasattr(zmart_analysis, name), name
 
     def test_version(self):
         import zmart_analysis
 
-        self.assertEqual(zmart_analysis.__version__, "1.0.0rc1")
+        assert zmart_analysis.__version__ == "1.0.0rc1"
 
     def test_engine_in_all(self):
         import zmart_analysis
 
-        self.assertIn("Engine", zmart_analysis.__all__)
+        assert "Engine" in zmart_analysis.__all__
 
 
 # ---- The brake: a shutdown that does not wait ---------------------------
@@ -1958,7 +1626,7 @@ def _wait_for_file(path, timeout=20):
     raise AssertionError(f"{path} never appeared")
 
 
-class TestTheBrake(unittest.TestCase):
+class TestTheBrake:
     """The operator's Interrupt must stop a step now, not wait it out.
 
     Measured on the operator's PC before this: a stop pressed one second
@@ -1983,12 +1651,12 @@ class TestTheBrake(unittest.TestCase):
         pid = _wait_for_file(pid_file)
         t0 = time.monotonic()
         w.shutdown(now=True)
-        self.assertLess(time.monotonic() - t0, 3.0, "a shutdown asked for now must not wait")
+        assert time.monotonic() - t0 < 3.0, "a shutdown asked for now must not wait"
         t.join(timeout=5)
-        self.assertFalse(t.is_alive(), "the caller blocked in execute() must be released")
-        self.assertFalse(_alive(pid), "the worker process must be gone")
-        self.assertEqual(len(errors), 1)
-        self.assertIsInstance(errors[0], WorkerCrashedError)
+        assert not t.is_alive(), "the caller blocked in execute() must be released"
+        assert not _alive(pid), "the worker process must be gone"
+        assert len(errors) == 1
+        assert isinstance(errors[0], WorkerCrashedError)
 
     def test_a_shutdown_now_puts_the_whole_tree_down(self):
         """Under a wrapper, as `conda run` is, the grandchild dies too."""
@@ -2016,12 +1684,12 @@ class TestTheBrake(unittest.TestCase):
             t.start()
             grandchild = _wait_for_file(pid_file)
             wrapper_pid = w._process.pid
-            self.assertNotEqual(grandchild, wrapper_pid)
+            assert grandchild != wrapper_pid
             w.shutdown(now=True)
             t.join(timeout=5)
             time.sleep(0.5)
-            self.assertFalse(_alive(wrapper_pid), "the wrapper must be gone")
-            self.assertFalse(_alive(grandchild), "the worker behind the wrapper must be gone")
+            assert not _alive(wrapper_pid), "the wrapper must be gone"
+            assert not _alive(grandchild), "the worker behind the wrapper must be gone"
         finally:
             worker_module._the_python_of = real
 
@@ -2046,14 +1714,14 @@ class TestTheBrake(unittest.TestCase):
         pid = _wait_for_file(pid_file)
         t0 = time.monotonic()
         e.shutdown(wait=False)
-        self.assertLess(
-            time.monotonic() - t0, 3.0, "shutting down without waiting must not wait for the step"
+        assert time.monotonic() - t0 < 3.0, (
+            "shutting down without waiting must not wait for the step"
         )
         time.sleep(0.5)
-        self.assertFalse(_alive(pid), "the step's worker must be gone")
+        assert not _alive(pid), "the step's worker must be gone"
         s = e.status("brake")
-        self.assertEqual(s["completed"], 0, "a step put down by hand answers nothing")
-        self.assertEqual(list(e.results("brake")), [])
+        assert s["completed"] == 0, "a step put down by hand answers nothing"
+        assert list(e.results("brake")) == []
 
     def test_a_shutdown_now_during_the_spawn_leaves_nothing_behind(self):
         """A press that lands while the tree is still being built.
@@ -2092,16 +1760,15 @@ class TestTheBrake(unittest.TestCase):
             wrapper_pid = w._process.pid
             w.shutdown(now=True)
             t.join(timeout=10)
-            self.assertFalse(t.is_alive(), "the caller must be released")
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], (WorkerCrashedError, WorkerSpawnError))
+            assert not t.is_alive(), "the caller must be released"
+            assert len(errors) == 1
+            assert isinstance(errors[0], (WorkerCrashedError, WorkerSpawnError))
             time.sleep(3.0)
-            self.assertFalse(_alive(wrapper_pid), "the wrapper must be gone")
-            self.assertFalse(
-                os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
-                "an interpreter born after the press must be gone too",
+            assert not _alive(wrapper_pid), "the wrapper must be gone"
+            assert not (os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0))), (
+                "an interpreter born after the press must be gone too"
             )
-            self.assertFalse(w.is_alive())
+            assert not w.is_alive()
         finally:
             worker_module._the_python_of = real
 
@@ -2154,17 +1821,16 @@ class TestTheBrake(unittest.TestCase):
             # liveness checks below start processes of their own.
             worker_module.subprocess.Popen = real_popen
             worker_module.Listener = real_listener
-            self.assertFalse(t.is_alive(), "the caller must be released")
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], (WorkerCrashedError, WorkerSpawnError))
+            assert not t.is_alive(), "the caller must be released"
+            assert len(errors) == 1
+            assert isinstance(errors[0], (WorkerCrashedError, WorkerSpawnError))
             time.sleep(2.0)
             for pid in spawned:
-                self.assertFalse(_alive(pid), "a process spawned after the press must be put down")
-            self.assertFalse(
-                os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0)),
-                "the step must not be running anywhere",
+                assert not _alive(pid), "a process spawned after the press must be put down"
+            assert not (os.path.exists(pid_file) and _alive(int(open(pid_file).read() or 0))), (
+                "the step must not be running anywhere"
             )
-            self.assertFalse(w.is_alive())
+            assert not w.is_alive()
         finally:
             worker_module.subprocess.Popen = real_popen
             worker_module.Listener = real_listener
