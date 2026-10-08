@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-import detect_objects  # noqa: E402
-from detect_objects import analysis_dir, file_sha256, short_name  # noqa: E402
+from object_analysis.parts.checkpoint import (
+    analysis_dir,
+    file_sha256,
+    short_name,
+    write_detection_checkpoint,
+)
 
 PLANE = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000_C00_Z00000.ome.tiff"
 FRAME = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000"
@@ -136,7 +138,7 @@ def test_a_position_store_files_its_checkpoint_where_the_caller_says(tmp_path):
         "image_to_stage": [[1.0, 0.0], [0.0, 1.0]],
         "output_dir": str(tmp_path / "analysis"),
     }
-    artifacts = detect_objects._write_detection_checkpoint(_detection(masks), masks, inp, {})
+    artifacts = write_detection_checkpoint(_detection(masks), masks, inp, {})
 
     written = Path(artifacts["detection_checkpoint_json"])
     assert written.parent == tmp_path / "analysis" / "tiles" / STORE.split(".")[0]
@@ -169,7 +171,6 @@ def _detection(masks):
 
 def _written_to(tmp_path, image):
     """Run the checkpoint writer for *image*, with no output_dir named."""
-    import detect_objects
     import numpy as np
     import tifffile
 
@@ -186,7 +187,7 @@ def _written_to(tmp_path, image):
         "source_pixel_size_um": (1.0, 1.0),
         "image_to_stage": [[1.0, 0.0], [0.0, 1.0]],
     }
-    return detect_objects._write_detection_checkpoint(_detection(masks), masks, inp, {})
+    return write_detection_checkpoint(_detection(masks), masks, inp, {})
 
 
 def test_an_acquisition_image_files_itself_under_analysis(tmp_path):

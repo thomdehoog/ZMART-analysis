@@ -36,6 +36,21 @@ Submit one tile at a time:
 }
 ```
 
+The operator page sends a few more keys when it has them, all optional:
+
+| Key | What it is |
+|---|---|
+| `method` | `"robust"` (Cellpose, the default) or `"fast"` (the watershed). The recipe's detector decides which can run. |
+| `z_selection` | Which plane of a z-stack to detect on: an index, `"mid"` (the default), or `"max"` / `"mean"` for a projection. |
+| `extra_channel_paths` | The other channels of a frame stored one file per plane. They are stacked onto the detection image so the features are measured in every colour. |
+| `extra_channel_indices` | The same for a frame stored as one position: the channel indices to read from it. |
+| `synthetic_pixels` | For a mock microscope's images: how the pixels were made, copied into the checkpoint for the record. |
+| `output_dir` | Where to file the masks and checkpoint. Default: the `analysis` folder beside the `data` the image came from. |
+
+Any detection setting of the recipe (`diameter`, `cellprob_threshold`,
+`border_margin_px`, ...) may be given here too, and wins for this one
+image.
+
 To try the robust recipe on one tile from a shell, without writing the
 payload yourself: `python run_pipeline.py image.tif --pixel-size-um 0.65,0.65`
 runs `object_analysis.yaml` through the engine and prints the object count.
@@ -108,8 +123,9 @@ ngio, ome-types), never the features. Cellpose pins one torch, StarDist pins
 TensorFlow, the next model will pin another CUDA, and those pins fight each
 other and drag their own numpy along. Kept apart, a model upgrade breaks only
 its own worker, and a model that will not install on a rig disables one
-option rather than all detection. A new model is a branch in
-`detect_objects.py` that imports its model lazily, a profile in
+option rather than all detection. A new model is a module beside
+`parts/cellpose_model.py` that imports its model lazily, a branch in
+`segment_position` of `detect_objects.py`, a profile in
 `environments/setup_env.py`, and a pipeline YAML placing the step in that
 environment. The fast detector and the features stay together: both are scipy
 and scikit-image on numpy, released together, and splitting them would cost a

@@ -1,17 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
+import build_object_table
+import detect_objects
+import extract_classical_features
 import numpy as np
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from build_object_table import validate_tile_detection  # noqa: E402
-from detect_objects import (  # noqa: E402
+from object_analysis.parts.contract import to_builtin, validate_tile_detection
+from object_analysis.parts.settings import (
     area_filter_params,
-    segmentation_params,
     segmentation_params_hash,
 )
 
@@ -20,22 +18,6 @@ STEPS_DIR = WORKFLOW / "steps"
 CLASSICAL_YAML = WORKFLOW / "pipelines" / "object_analysis.yaml"
 DETECTION_YAML = WORKFLOW / "pipelines" / "object_detection.yaml"
 FAST_YAML = WORKFLOW / "pipelines" / "object_analysis_fast.yaml"
-
-
-def _load_step(name: str):
-    """Load a step file the way the worker does: as a module registered
-    under its name, so a dataclass in it can resolve its annotations."""
-    path = STEPS_DIR / f"{name}.py"
-    spec = importlib.util.spec_from_file_location(name, path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-detect_objects = _load_step("detect_objects")
-extract_classical_features = _load_step("extract_classical_features")
-build_object_table = _load_step("build_object_table")
 
 
 def _write_synthetic_tile(tmp_path):
@@ -200,16 +182,14 @@ def test_classical_object_analysis_end_to_end_with_stub(tmp_path):
     assert props["stage_y_um"] == pytest.approx([1962.5, 2013.5])
     assert "centroid-0" not in props
     assert "bbox-0" not in props
-    assert "preprocess" not in result
-    assert "segment" not in result
-    assert "extract_features" not in result
+    assert "extract_classical_features" not in result
     assert "masks" not in result["detect_objects"]
+    assert "image" not in result["detect_objects"]
 
 
 def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
     base = {
         "channels": None,
-        "channel_axis": None,
         "cellprob_threshold": 0.0,
         "flow_threshold": 0.4,
         "niter": None,
@@ -223,23 +203,9 @@ def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
     assert segmentation_params_hash(base | {"segmentation_binning": 4}) != (
         segmentation_params_hash(base | {"segmentation_binning": 2})
     )
-    assert segmentation_params_hash(base | {"channel_axis": 0}) != (
-        segmentation_params_hash(base | {"channel_axis": -1})
-    )
-    assert segmentation_params_hash(base | {"channel_axis": 2}) == (
-        segmentation_params_hash(base | {"channel_axis": -1})
-    )
     assert segmentation_params_hash(base | {"unused_legacy_key": 1.0}) == (
         segmentation_params_hash(base | {"unused_legacy_key": None})
     )
-
-
-def test_segmentation_params_normalizes_and_validates_channel_axis():
-    assert segmentation_params({"channel_axis": 2}, {})["channel_axis"] == -1
-    assert segmentation_params({"channel_axis": -1}, {})["channel_axis"] == -1
-    assert segmentation_params({}, {"channel_axis": 0})["channel_axis"] == 0
-    with pytest.raises(ValueError, match="channel_axis must be"):
-        segmentation_params({"channel_axis": 1}, {})
 
 
 def test_area_filter_rejects_ambiguous_pixel_and_diameter_thresholds():
@@ -252,7 +218,6 @@ def test_area_filter_rejects_ambiguous_pixel_and_diameter_thresholds():
 
 def test_the_pipelines_register(tmp_path):
     """Every shipped YAML parses and resolves its steps."""
-    sys.path.insert(0, str(WORKFLOW.parents[2]))
     from zmart_analysis import Engine
 
     engine = Engine()
@@ -288,8 +253,6 @@ def test_the_fast_detector_runs_the_watershed_and_answers_as_detect_objects(tmp_
     """The fast step fixes the method and leaves its detection where the
     feature step looks for it, so the rest of the pipeline is unchanged."""
     import tifffile
-
-    sys.path.insert(0, str(WORKFLOW / "steps"))
     from detect_objects_fast import run as fast_run
 
     yy, xx = np.mgrid[0:96, 0:96]
@@ -418,9 +381,9 @@ def test_a_single_object_field_survives_to_builtin_and_the_table():
     Dense test fields never showed it; the first field with exactly one
     cell killed a whole nine-field run.
     """
-    assert build_object_table.to_builtin(np.array([5])) == [5]
-    assert build_object_table.to_builtin(np.int32(5)) == 5
-    assert detect_objects.to_builtin(np.array([2.0])) == [2.0]
+    assert to_builtin(np.array([5])) == [5]
+    assert to_builtin(np.int32(5)) == 5
+    assert to_builtin(np.array([2.0])) == [2.0]
 
     props = {
         name: np.array([value])
@@ -447,7 +410,7 @@ def test_a_single_object_field_survives_to_builtin_and_the_table():
             "image_to_stage": [[1, 0], [0, 1]],
         },
         "detect_objects": {"image_size_px": [64, 64]},
-        "extract_features": {"properties": props},
+        "extract_classical_features": {"properties": props},
     }
     out = build_object_table.run(data, {})
     assert out["object_analysis"]["objects"]["n_objects"] == 1

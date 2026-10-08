@@ -10,16 +10,12 @@ Run from an environment with ngio installed:
 """
 
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
-
-# The shared helpers live in workflows/shared, one folder up and across.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflows"))
-from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical  # noqa: E402
+from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical
 
 PIXEL_SIZE = 0.325
 Z_SPACING = 1.0

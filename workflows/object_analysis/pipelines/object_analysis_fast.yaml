@@ -38,7 +38,6 @@ object_analysis:
       max_workers: 12
       threshold: 100     # a nucleus's mean above background, in counts
       channels: null
-      channel_axis: null
       diameter: null
       segmentation_binning: 1
       border_margin_px: null

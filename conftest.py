@@ -21,10 +21,13 @@ from pathlib import Path
 
 import pytest
 
-# Make the engine package importable regardless of where pytest is invoked
+# The package and the workflows' shared helpers are importable wherever
+# pytest is started from: the repository root for ``zmart_analysis``, and
+# ``workflows/`` for ``shared``.
 ROOT = Path(__file__).resolve().parent
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for folder in (ROOT, ROOT / "workflows"):
+    if str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +137,20 @@ def engine_factory():
             e.shutdown()
         except Exception:
             pass
+
+
+@pytest.fixture
+def wait_for_results():
+    """``wait_for_results(engine, name, expected, timeout=30)``: poll an
+    engine until *expected* results of *name* are in, and return them."""
+    return _wait_for_results
+
+
+@pytest.fixture
+def wait_for_status():
+    """``wait_for_status(engine, name, expected_total, timeout=30)``: poll
+    until that many jobs of *name* have completed or failed; return the status."""
+    return _wait_for_status
 
 
 # --------------------------------------------------------------------------

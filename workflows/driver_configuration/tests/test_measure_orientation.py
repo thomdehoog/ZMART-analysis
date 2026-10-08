@@ -10,21 +10,16 @@ say which orientation that was, from the pictures alone.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
-from scipy.ndimage import gaussian_filter
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from measure_orientation import (  # noqa: E402
+from measure_orientation import (
     STAGE_FROM_ORIENTATION,
     orientation_document,
     reorient,
     run,
     unorient,
 )
+from scipy.ndimage import gaussian_filter
 
 PIXEL_UM = 2.5
 MOVE_UM = 60.0

@@ -8,15 +8,10 @@ three numbers back.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
+from measure_objective_pair import run, sharp_height_um
 from scipy.ndimage import gaussian_filter, zoom
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from measure_objective_pair import run, sharp_height_um  # noqa: E402
 
 REF_UM, TGT_UM = 2.0, 0.5
 OFFSET_UM = (-18.0, 11.0)  # where the target lens looks, relative to the reference
