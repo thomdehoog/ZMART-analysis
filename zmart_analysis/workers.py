@@ -63,6 +63,12 @@ class StepExecutionError(WorkerError):
 ENGINE_DIR = Path(__file__).resolve().parent
 WORKER_SCRIPT = ENGINE_DIR / "worker_script.py"
 
+#: How messages to and from a worker are encoded; the worker script keeps
+#: the same number. Protocol 5 is read by every Python from 3.8 on, and it
+#: carries a large image in one piece rather than the slow, chunked form of
+#: the old protocol 2.
+PICKLE_PROTOCOL = 5
+
 # Maximum bytes of stderr to retain for crash diagnostics.
 _STDERR_BUFFER = 8192
 
@@ -346,7 +352,7 @@ class Worker:
 
         message = (str(step_path), pipeline_data, params)
         try:
-            data = pickle.dumps(message, protocol=2)
+            data = pickle.dumps(message, protocol=PICKLE_PROTOCOL)
             logger.debug(
                 "Worker execute: sending %d bytes to pid=%d (step=%s)", len(data), pid, step_name
             )
@@ -448,7 +454,7 @@ class Worker:
 
         if self._conn is not None and not now:
             try:
-                self._conn.send_bytes(pickle.dumps(None, protocol=2))
+                self._conn.send_bytes(pickle.dumps(None, protocol=PICKLE_PROTOCOL))
             except (BrokenPipeError, ConnectionResetError, OSError):
                 pass
 
