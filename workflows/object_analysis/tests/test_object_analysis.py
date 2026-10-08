@@ -23,9 +23,12 @@ FAST_YAML = WORKFLOW / "pipelines" / "object_analysis_fast.yaml"
 
 
 def _load_step(name: str):
+    """Load a step file the way the worker does: as a module registered
+    under its name, so a dataclass in it can resolve its annotations."""
     path = STEPS_DIR / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -89,7 +92,7 @@ def _run_classical(tmp_path, **payload_extra):
 def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180):
     import time
 
-    from engine import Engine
+    from zmart_analysis import Engine
 
     with Engine() as engine:
         engine.register(name, str(yaml_path))
@@ -119,7 +122,7 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
 
     import yaml
 
-    from engine import Engine
+    from zmart_analysis import Engine
 
     monkeypatch.setenv("CONDA_DEFAULT_ENV", "ZMART--object_analysis--classical")
     fast = yaml.safe_load(FAST_YAML.read_text())["object_analysis"]
@@ -250,7 +253,7 @@ def test_area_filter_rejects_ambiguous_pixel_and_diameter_thresholds():
 def test_the_pipelines_register(tmp_path):
     """Every shipped YAML parses and resolves its steps."""
     sys.path.insert(0, str(WORKFLOW.parents[2]))
-    from engine import Engine
+    from zmart_analysis import Engine
 
     engine = Engine()
     try:

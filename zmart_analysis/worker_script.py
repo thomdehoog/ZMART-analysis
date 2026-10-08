@@ -27,7 +27,10 @@ Module caching
 --------------
 Modules are loaded on first use and cached by path. A persistent worker
 executing the same step repeatedly pays the import cost only once. Different
-steps in the same environment load fresh but share the process.
+steps in the same environment load fresh but share the process. A step is
+loaded as a real module, registered under its file name in ``sys.modules``,
+so everything that looks a module up by name (dataclasses, pickling, a
+sibling step importing it) finds it.
 
 Orphan detection
 ----------------
@@ -46,30 +49,48 @@ Usage (called by Worker, not directly)
 
 import argparse
 import hashlib
+import importlib.util
 import logging
 import os
 import pickle
 import platform
 import sys
 import traceback
-import types
 from importlib import metadata
 from multiprocessing.connection import Client
 
+#: How the messages on the socket are encoded. Protocol 5 is what every
+#: Python from 3.8 on reads, and it carries a large image in one piece
+#: instead of the slow, chunked form of the old protocol 2. The engine
+#: uses the same number (see workers.py).
+PICKLE_PROTOCOL = 5
+
 
 def _load_module(step_path):
-    """Run the step file in a fresh namespace and return it as a module.
+    """Import the step file as a module named after it, and return it.
 
     The engine itself never runs the file; it only reads its METADATA
     (engine.get_step_settings). The running happens here, in the step's
-    own environment.
+    own environment. The module goes into ``sys.modules`` under the file's
+    name, as an ordinary import would put it, because several things look
+    a module up by its name: a dataclass resolving its annotations, pickle
+    sending a class defined in the step back to the engine, a sibling step
+    importing this one. When another file already holds that name, this
+    one gets the name with a short hash of its path on the end, so neither
+    shadows the other.
     """
     name = os.path.splitext(os.path.basename(step_path))[0]
-    namespace = {"__name__": name, "__file__": step_path}
-    with open(step_path) as f:
-        exec(compile(f.read(), step_path, "exec"), namespace)
-    module = types.ModuleType(name)
-    module.__dict__.update(namespace)
+    taken = sys.modules.get(name)
+    if taken is not None and getattr(taken, "__file__", None) != step_path:
+        name = f"{name}_{hashlib.sha256(step_path.encode()).hexdigest()[:8]}"
+    spec = importlib.util.spec_from_file_location(name, step_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(name, None)
+        raise
     return module
 
 
@@ -252,7 +273,7 @@ def main():
                     },
                 )
 
-            conn.send_bytes(pickle.dumps(response, protocol=2))
+            conn.send_bytes(pickle.dumps(response, protocol=PICKLE_PROTOCOL))
     finally:
         conn.close()
         logger.info("Worker exiting: pid=%d, requests=%d", os.getpid(), request_count)
