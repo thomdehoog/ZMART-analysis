@@ -108,7 +108,8 @@ pip install -e .
 python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
-The package installs as `engine`: `from zmart_analysis import Engine`. The
+The package installs as `zmart_analysis`: `from zmart_analysis import Engine`.
+Its old name, `engine`, still imports for the tools that use it. The
 tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status
