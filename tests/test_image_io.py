@@ -11,10 +11,10 @@ Run from an environment with ngio installed:
 
 import shutil
 import tempfile
-import unittest
 from pathlib import Path
 
 import numpy as np
+import pytest
 from shared.image_io import is_ome_zarr, is_tiff, load_plane, to_physical
 
 PIXEL_SIZE = 0.325
@@ -68,15 +68,15 @@ def _make_ome_tiff(path, array, tile=(32, 32), positions=True):
     tifffile.imwrite(path, array, photometric="minisblack", tile=tile, metadata=metadata)
 
 
-class OmeZarrTestCase(unittest.TestCase):
+class OmeZarrTestCase:
     """Shared fixtures: one position per NGFF version."""
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         try:
             import ngio  # noqa: F401
         except ImportError:
-            raise unittest.SkipTest("ngio is not installed")
+            pytest.skip("ngio is not installed")
 
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_test_"))
         rng = np.random.default_rng(0)
@@ -94,7 +94,7 @@ class OmeZarrTestCase(unittest.TestCase):
         _make_ome_tiff(cls.tiff, cls.array)
 
     @classmethod
-    def tearDownClass(cls):
+    def teardown_class(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
 
@@ -103,96 +103,94 @@ class TestDetection(OmeZarrTestCase):
 
     def test_detects_v04_store(self):
         # NGFF 0.4 keeps its metadata in .zattrs
-        self.assertTrue((self.stores["0.4"] / ".zattrs").exists())
-        self.assertTrue(is_ome_zarr(self.stores["0.4"]))
+        assert (self.stores["0.4"] / ".zattrs").exists()
+        assert is_ome_zarr(self.stores["0.4"])
 
     def test_detects_v05_store(self):
         # NGFF 0.5 keeps its metadata in zarr.json
-        self.assertTrue((self.stores["0.5"] / "zarr.json").exists())
-        self.assertTrue(is_ome_zarr(self.stores["0.5"]))
+        assert (self.stores["0.5"] / "zarr.json").exists()
+        assert is_ome_zarr(self.stores["0.5"])
 
     def test_rejects_plain_file(self):
         plain = self.tmpdir / "image.tif"
         plain.write_bytes(b"not a zarr")
-        self.assertFalse(is_ome_zarr(plain))
+        assert not is_ome_zarr(plain)
 
     def test_remote_url_by_suffix(self):
-        self.assertTrue(is_ome_zarr("s3://bucket/plate.zarr/B/03/0"))
-        self.assertFalse(is_ome_zarr("s3://bucket/image.tif"))
+        assert is_ome_zarr("s3://bucket/plate.zarr/B/03/0")
+        assert not is_ome_zarr("s3://bucket/image.tif")
 
 
 class TestPlaneSelection(OmeZarrTestCase):
     """Both NGFF versions must yield identical planes."""
 
-    def test_default_takes_middle_z(self):
+    def test_default_takes_middle_z(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane, meta = load_plane(store)
                 np.testing.assert_array_equal(plane, self.array[0, 0, 2])
-                self.assertEqual(meta["index"], {"t": 0, "z": 2})
+                assert meta["index"] == {"t": 0, "z": 2}
 
-    def test_explicit_indices(self):
+    def test_explicit_indices(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane, meta = load_plane(store, t=1, c=1, z=4)
                 np.testing.assert_array_equal(plane, self.array[1, 1, 4])
-                self.assertEqual(meta["index"], {"t": 1, "z": 4})
-                self.assertEqual(meta["channel"], 1)
+                assert meta["index"] == {"t": 1, "z": 4}
+                assert meta["channel"] == 1
 
-    def test_channel_by_name(self):
+    def test_channel_by_name(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane, meta = load_plane(store, c="GFP", z=0)
                 np.testing.assert_array_equal(plane, self.array[0, 1, 0])
-                self.assertEqual(meta["channel"], 1)
-                self.assertEqual(meta["channel_name"], "GFP")
+                assert meta["channel"] == 1
+                assert meta["channel_name"] == "GFP"
 
-    def test_max_projection(self):
+    def test_max_projection(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane, meta = load_plane(store, z="max")
                 np.testing.assert_array_equal(plane, self.array[0, 0].max(axis=0))
-                self.assertEqual(meta["projection"], "max")
-                self.assertNotIn("z", meta["index"])
+                assert meta["projection"] == "max"
+                assert "z" not in meta["index"]
 
-    def test_projection_keeps_dtype(self):
+    def test_projection_keeps_dtype(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 for mode in ("max", "mean"):
                     plane, _ = load_plane(store, z=mode)
-                    self.assertEqual(plane.dtype, self.array.dtype)
+                    assert plane.dtype == self.array.dtype
 
-    def test_plane_is_always_2d(self):
+    def test_plane_is_always_2d(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 for z in (0, "mid", "max"):
                     plane, _ = load_plane(store, z=z)
-                    self.assertEqual(plane.ndim, 2)
+                    assert plane.ndim == 2
 
-    def test_lower_resolution_level(self):
+    def test_lower_resolution_level(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane, meta = load_plane(store, level=1)
-                self.assertEqual(plane.shape, (32, 32))
-                self.assertEqual(meta["level"], "1")
-                self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
+                assert plane.shape == (32, 32)
+                assert meta["level"] == "1"
+                assert meta["pixel_size"]["x"] == pytest.approx(PIXEL_SIZE * 2, abs=5e-08)
 
-    def test_out_of_range_selection_raises(self):
+    def test_out_of_range_selection_raises(self, subtests):
         import ngio
 
         for version, store in self.stores.items():
             for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"}, {"level": 9}):
-                with self.subTest(ngff=version, **kwargs):
-                    with self.assertRaises(
-                        (ngio.NgioValueError, ngio.NgioValidationError, ValueError)
-                    ):
+                with subtests.test(ngff=version, **kwargs):
+                    with pytest.raises((ngio.NgioValueError, ngio.NgioValidationError, ValueError)):
                         load_plane(store, **kwargs)
 
     def test_unknown_z_selection_names_the_options(self):
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(self.stores["0.5"], z="sum")
-        self.assertIn("mid", str(caught.exception))
-        self.assertIn("max", str(caught.exception))
+        assert "mid" in str(caught.value)
+        assert "max" in str(caught.value)
 
     def test_mean_projection_values(self):
         plane, _ = load_plane(self.stores["0.5"], z="mean")
@@ -203,29 +201,29 @@ class TestPlaneSelection(OmeZarrTestCase):
 class TestMetadata(OmeZarrTestCase):
     """Metadata is normalized across NGFF versions."""
 
-    def test_reports_ngff_version(self):
+    def test_reports_ngff_version(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 _, meta = load_plane(store)
-                self.assertEqual(meta["ngff_version"], version)
-                self.assertEqual(meta["format"], "ome-zarr")
+                assert meta["ngff_version"] == version
+                assert meta["format"] == "ome-zarr"
 
-    def test_reports_axes_and_shape(self):
+    def test_reports_axes_and_shape(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 _, meta = load_plane(store)
-                self.assertEqual(meta["axes"], ["t", "c", "z", "y", "x"])
-                self.assertEqual(meta["shape"], list(SHAPE))
+                assert meta["axes"] == ["t", "c", "z", "y", "x"]
+                assert meta["shape"] == list(SHAPE)
 
-    def test_reports_pixel_size_and_origin(self):
+    def test_reports_pixel_size_and_origin(self, subtests):
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 _, meta = load_plane(store)
-                self.assertAlmostEqual(meta["pixel_size"]["y"], PIXEL_SIZE)
-                self.assertAlmostEqual(meta["pixel_size"]["z"], Z_SPACING)
-                self.assertAlmostEqual(meta["origin"]["y"], ORIGIN_YX[0])
-                self.assertAlmostEqual(meta["origin"]["x"], ORIGIN_YX[1])
-                self.assertEqual(meta["space_unit"], "micrometer")
+                assert meta["pixel_size"]["y"] == pytest.approx(PIXEL_SIZE, abs=5e-08)
+                assert meta["pixel_size"]["z"] == pytest.approx(Z_SPACING, abs=5e-08)
+                assert meta["origin"]["y"] == pytest.approx(ORIGIN_YX[0], abs=5e-08)
+                assert meta["origin"]["x"] == pytest.approx(ORIGIN_YX[1], abs=5e-08)
+                assert meta["space_unit"] == "micrometer"
 
 
 class TestPhysicalCoordinates(OmeZarrTestCase):
@@ -234,17 +232,17 @@ class TestPhysicalCoordinates(OmeZarrTestCase):
     def test_scale_and_offset_applied(self):
         _, meta = load_plane(self.stores["0.5"])
         physical = to_physical(10.0, 20.0, meta)
-        self.assertAlmostEqual(physical["y"], 10.0 * PIXEL_SIZE + ORIGIN_YX[0])
-        self.assertAlmostEqual(physical["x"], 20.0 * PIXEL_SIZE + ORIGIN_YX[1])
-        self.assertEqual(physical["unit"], "micrometer")
+        assert physical["y"] == pytest.approx(10.0 * PIXEL_SIZE + ORIGIN_YX[0], abs=5e-08)
+        assert physical["x"] == pytest.approx(20.0 * PIXEL_SIZE + ORIGIN_YX[1], abs=5e-08)
+        assert physical["unit"] == "micrometer"
 
     def test_uses_the_loaded_level(self):
         _, meta = load_plane(self.stores["0.5"], level=1)
         physical = to_physical(10.0, 20.0, meta)
-        self.assertAlmostEqual(physical["y"], 10.0 * PIXEL_SIZE * 2 + ORIGIN_YX[0])
+        assert physical["y"] == pytest.approx(10.0 * PIXEL_SIZE * 2 + ORIGIN_YX[0], abs=5e-08)
 
     def test_none_without_spatial_metadata(self):
-        self.assertIsNone(to_physical(1.0, 2.0, {"pixel_size": {}}))
+        assert to_physical(1.0, 2.0, {"pixel_size": {}}) is None
 
 
 class TestLazyReading(OmeZarrTestCase):
@@ -275,37 +273,31 @@ class TestLazyReading(OmeZarrTestCase):
 
         return len(reads)
 
-    def test_single_plane_reads_one_chunk_per_tile(self):
+    def test_single_plane_reads_one_chunk_per_tile(self, subtests):
         # Level 0 holds 2*2*5 z-planes of 2x2 chunks: 80 chunks in all.
         # One plane is 4 of them, or a single shard when sharded.
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z=2)
-                self.assertGreater(reads, 0, "the read counter matched nothing")
-                self.assertLessEqual(
-                    reads,
-                    4,
-                    f"read {reads} chunks for a single plane, expected <= 4",
-                )
+                assert reads > 0, "the read counter matched nothing"
+                assert reads <= 4, f"read {reads} chunks for a single plane, expected <= 4"
 
-    def test_projection_reads_only_its_own_stack(self):
+    def test_projection_reads_only_its_own_stack(self, subtests):
         # A z-projection needs the 5 z planes of one (t, c), not all 20.
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 reads = self._count_chunk_reads(source=store, t=0, c=0, z="max")
-                self.assertGreater(reads, 0, "the read counter matched nothing")
-                self.assertLessEqual(
-                    reads,
-                    20,
+                assert reads > 0, "the read counter matched nothing"
+                assert reads <= 20, (
                     f"read {reads} chunks for one z-stack of 5 planes, "
-                    f"expected <= 20 of the 80 in the array",
+                    f"expected <= 20 of the 80 in the array"
                 )
 
-    def test_reads_far_less_than_the_whole_array(self):
+    def test_reads_far_less_than_the_whole_array(self, subtests):
         import ngio
 
         for version, store in self.stores.items():
-            with self.subTest(ngff=version):
+            with subtests.test(ngff=version):
                 plane_reads = self._count_chunk_reads(source=store, z=2)
 
                 from unittest.mock import patch
@@ -324,11 +316,8 @@ class TestLazyReading(OmeZarrTestCase):
                     container = ngio.open_ome_zarr_container(str(store), mode="r")
                     container.get_image().get_as_numpy()
 
-                self.assertLess(
-                    plane_reads,
-                    len(everything),
-                    f"one plane read {plane_reads} objects, the whole array "
-                    f"reads {len(everything)}",
+                assert plane_reads < len(everything), (
+                    f"one plane read {plane_reads} objects, the whole array reads {len(everything)}"
                 )
 
 
@@ -355,7 +344,7 @@ class TestAxisVariants(OmeZarrTestCase):
         store, array = self._write("czyx.zarr", ("c", "z", "y", "x"), (2, 3, 32, 32))
         plane, meta = load_plane(store, c=1)
         np.testing.assert_array_equal(plane, array[1, 1])
-        self.assertEqual(meta["index"], {"z": 1})
+        assert meta["index"] == {"z": 1}
 
     def test_zyx(self):
         store, array = self._write("zyx.zarr", ("z", "y", "x"), (3, 32, 32))
@@ -367,37 +356,37 @@ class TestAxisVariants(OmeZarrTestCase):
         store, array = self._write("zyx_nochan.zarr", ("z", "y", "x"), (3, 32, 32))
         plane, meta = load_plane(store, c="DAPI", z=0)
         np.testing.assert_array_equal(plane, array[0])
-        self.assertIsNone(meta["channel"])
-        self.assertIsNone(meta["channel_name"])
+        assert meta["channel"] is None
+        assert meta["channel_name"] is None
 
     def test_projection_not_claimed_without_a_z_axis(self):
         store, array = self._write("tyx_noz.zarr", ("t", "y", "x"), (2, 32, 32))
         plane, meta = load_plane(store, z="max")
         np.testing.assert_array_equal(plane, array[0])
-        self.assertIsNone(meta["projection"])
+        assert meta["projection"] is None
 
     def test_yx(self):
         store, array = self._write("yx.zarr", ("y", "x"), (32, 32))
         plane, meta = load_plane(store)
         np.testing.assert_array_equal(plane, array)
-        self.assertEqual(meta["index"], {})
+        assert meta["index"] == {}
 
     def test_tyx_without_z(self):
         store, array = self._write("tyx.zarr", ("t", "y", "x"), (4, 32, 32))
         plane, meta = load_plane(store, t=3)
         np.testing.assert_array_equal(plane, array[3])
-        self.assertEqual(meta["index"], {"t": 3})
+        assert meta["index"] == {"t": 3}
 
 
-class TestOtherInputs(unittest.TestCase):
+class TestOtherInputs:
     """Image files and skimage samples still work."""
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_files_"))
 
     @classmethod
-    def tearDownClass(cls):
+    def teardown_class(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def test_reads_a_tiff(self):
@@ -409,7 +398,7 @@ class TestOtherInputs(unittest.TestCase):
 
         plane, meta = load_plane(path)
         np.testing.assert_array_equal(plane, image)
-        self.assertEqual(meta["format"], "tiff")
+        assert meta["format"] == "tiff"
 
     def test_image_file_has_no_physical_coordinates(self):
         from skimage.io import imsave
@@ -418,8 +407,8 @@ class TestOtherInputs(unittest.TestCase):
         imsave(path, np.zeros((8, 8), dtype=np.uint8), check_contrast=False)
 
         _, meta = load_plane(path)
-        self.assertEqual(meta["pixel_size"], {})
-        self.assertIsNone(to_physical(1.0, 2.0, meta))
+        assert meta["pixel_size"] == {}
+        assert to_physical(1.0, 2.0, meta) is None
 
     def test_reads_a_plane_from_a_plain_stack(self):
         import tifffile
@@ -430,7 +419,7 @@ class TestOtherInputs(unittest.TestCase):
 
         plane, meta = load_plane(path, z=2)
         np.testing.assert_array_equal(plane, stack[2])
-        self.assertEqual(meta["index"], {"z": 2})
+        assert meta["index"] == {"z": 2}
 
     def test_rejects_a_multi_dimensional_png(self):
         from skimage.io import imsave
@@ -438,15 +427,15 @@ class TestOtherInputs(unittest.TestCase):
         path = self.tmpdir / "rgb.png"
         imsave(path, np.zeros((8, 8, 3), dtype=np.uint8), check_contrast=False)
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_plane(path)
 
     def test_unknown_skimage_sample(self):
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_plane("skimage.not_a_dataset")
 
     def test_skimage_attribute_that_is_not_a_loader(self):
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_plane("skimage.__file__")
 
     def test_rejects_an_rgb_file(self):
@@ -455,9 +444,9 @@ class TestOtherInputs(unittest.TestCase):
         path = self.tmpdir / "rgb.tif"
         imsave(path, np.zeros((8, 8, 3), dtype=np.uint8), check_contrast=False)
 
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(path)
-        self.assertIn("RGB", str(caught.exception))
+        assert "RGB" in str(caught.value)
 
 
 class TestPlateInput(OmeZarrTestCase):
@@ -474,12 +463,12 @@ class TestPlateInput(OmeZarrTestCase):
             ngff_version="0.5",
         )
 
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(store)
 
-        message = str(caught.exception)
-        self.assertIn("not a position", message)
-        self.assertIn("B/03/0", message)
+        message = str(caught.value)
+        assert "not a position" in message
+        assert "B/03/0" in message
 
 
 class TestWellInput(OmeZarrTestCase):
@@ -493,12 +482,12 @@ class TestWellInput(OmeZarrTestCase):
         for path in ("0", "1"):
             well.add_image(path)
 
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(store)
 
-        message = str(caught.exception)
-        self.assertIn("not a position", message)
-        self.assertIn("Positions: 0, 1", message)
+        message = str(caught.value)
+        assert "not a position" in message
+        assert "Positions: 0, 1" in message
 
     def test_unrelated_zarr_group_keeps_its_own_error(self):
         import zarr
@@ -506,26 +495,26 @@ class TestWellInput(OmeZarrTestCase):
         store = self.tmpdir / "plain.zarr"
         zarr.create_group(store=str(store))
 
-        with self.assertRaises(Exception) as caught:
+        with pytest.raises(Exception) as caught:
             load_plane(store)
-        self.assertNotIn("not a position", str(caught.exception))
+        assert "not a position" not in str(caught.value)
 
 
 class TestOmeTiff(OmeZarrTestCase):
     """The OME-TIFF path honours the same contract as OME-Zarr."""
 
     def test_detects_tiff(self):
-        self.assertTrue(is_tiff(self.tiff))
-        self.assertTrue(is_tiff("/data/position.OME.TIFF"))
-        self.assertFalse(is_tiff("/data/position.zarr"))
-        self.assertFalse(is_ome_zarr(self.tiff))
+        assert is_tiff(self.tiff)
+        assert is_tiff("/data/position.OME.TIFF")
+        assert not is_tiff("/data/position.zarr")
+        assert not is_ome_zarr(self.tiff)
 
     def test_default_takes_middle_z(self):
         plane, meta = load_plane(self.tiff)
         np.testing.assert_array_equal(plane, self.array[0, 0, 2])
-        self.assertEqual(meta["format"], "ome-tiff")
-        self.assertEqual(meta["index"], {"t": 0, "z": 2})
-        self.assertEqual(meta["channel"], 0)
+        assert meta["format"] == "ome-tiff"
+        assert meta["index"] == {"t": 0, "z": 2}
+        assert meta["channel"] == 0
 
     def test_explicit_indices(self):
         plane, _ = load_plane(self.tiff, t=1, c=1, z=4)
@@ -534,12 +523,12 @@ class TestOmeTiff(OmeZarrTestCase):
     def test_channel_by_name(self):
         plane, meta = load_plane(self.tiff, c="GFP", z=0)
         np.testing.assert_array_equal(plane, self.array[0, 1, 0])
-        self.assertEqual(meta["channel_name"], "GFP")
+        assert meta["channel_name"] == "GFP"
 
     def test_projections(self):
         plane, meta = load_plane(self.tiff, z="max")
         np.testing.assert_array_equal(plane, self.array[0, 0].max(axis=0))
-        self.assertEqual(meta["projection"], "max")
+        assert meta["projection"] == "max"
 
         plane, _ = load_plane(self.tiff, z="mean")
         expected = np.rint(self.array[0, 0].mean(axis=0)).astype(self.array.dtype)
@@ -547,22 +536,22 @@ class TestOmeTiff(OmeZarrTestCase):
 
     def test_reports_pixel_size_and_origin(self):
         _, meta = load_plane(self.tiff)
-        self.assertAlmostEqual(meta["pixel_size"]["y"], PIXEL_SIZE)
-        self.assertAlmostEqual(meta["pixel_size"]["z"], Z_SPACING)
-        self.assertAlmostEqual(meta["origin"]["y"], ORIGIN_YX[0])
-        self.assertAlmostEqual(meta["origin"]["x"], ORIGIN_YX[1])
-        self.assertEqual(meta["space_unit"], "micrometer")
+        assert meta["pixel_size"]["y"] == pytest.approx(PIXEL_SIZE, abs=5e-08)
+        assert meta["pixel_size"]["z"] == pytest.approx(Z_SPACING, abs=5e-08)
+        assert meta["origin"]["y"] == pytest.approx(ORIGIN_YX[0], abs=5e-08)
+        assert meta["origin"]["x"] == pytest.approx(ORIGIN_YX[1], abs=5e-08)
+        assert meta["space_unit"] == "micrometer"
 
     def test_physical_coordinates(self):
         _, meta = load_plane(self.tiff)
         physical = to_physical(10.0, 20.0, meta)
-        self.assertAlmostEqual(physical["y"], 10.0 * PIXEL_SIZE + ORIGIN_YX[0])
-        self.assertAlmostEqual(physical["x"], 20.0 * PIXEL_SIZE + ORIGIN_YX[1])
+        assert physical["y"] == pytest.approx(10.0 * PIXEL_SIZE + ORIGIN_YX[0], abs=5e-08)
+        assert physical["x"] == pytest.approx(20.0 * PIXEL_SIZE + ORIGIN_YX[1], abs=5e-08)
 
-    def test_out_of_range_selection_raises(self):
+    def test_out_of_range_selection_raises(self, subtests):
         for kwargs in ({"t": 99}, {"z": 99}, {"c": 99}, {"c": "NOPE"}, {"level": 9}):
-            with self.subTest(**kwargs):
-                with self.assertRaises(ValueError):
+            with subtests.test(**kwargs):
+                with pytest.raises(ValueError):
                     load_plane(self.tiff, **kwargs)
 
     def test_pyramid_levels(self):
@@ -575,9 +564,9 @@ class TestOmeTiff(OmeZarrTestCase):
             writer.write(full[::2, ::2], subfiletype=1, tile=(32, 32))
 
         plane, meta = load_plane(path, level=1)
-        self.assertEqual(plane.shape, (32, 32))
+        assert plane.shape == (32, 32)
         np.testing.assert_array_equal(plane, full[::2, ::2])
-        self.assertEqual(meta["level"], "1")
+        assert meta["level"] == "1"
 
     def test_pyramid_pixel_size_follows_the_level(self):
         import tifffile
@@ -601,7 +590,7 @@ class TestOmeTiff(OmeZarrTestCase):
             writer.write(full[::2, ::2], subfiletype=1, tile=(32, 32))
 
         _, meta = load_plane(path, level=1)
-        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
+        assert meta["pixel_size"]["x"] == pytest.approx(PIXEL_SIZE * 2, abs=5e-08)
 
     def test_plain_tiff_without_ome_metadata(self):
         import tifffile
@@ -611,9 +600,9 @@ class TestOmeTiff(OmeZarrTestCase):
 
         plane, meta = load_plane(path)
         np.testing.assert_array_equal(plane, self.array[0, 0, 0])
-        self.assertEqual(meta["format"], "tiff")
-        self.assertEqual(meta["pixel_size"], {})
-        self.assertIsNone(to_physical(1.0, 2.0, meta))
+        assert meta["format"] == "tiff"
+        assert meta["pixel_size"] == {}
+        assert to_physical(1.0, 2.0, meta) is None
 
     def test_rgb_tiff_is_refused(self):
         import tifffile
@@ -621,17 +610,17 @@ class TestOmeTiff(OmeZarrTestCase):
         path = self.tmpdir / "rgb.tif"
         tifffile.imwrite(path, np.zeros((16, 16, 3), dtype=np.uint8), photometric="rgb")
 
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(path)
-        self.assertIn("RGB", str(caught.exception))
+        assert "RGB" in str(caught.value)
 
 
 class TestMultiPositionTiff(OmeZarrTestCase):
     """One TIFF can hold several positions; the caller says which."""
 
     @classmethod
-    def setUpClass(cls):
-        super().setUpClass()
+    def setup_class(cls):
+        super().setup_class()
 
         import tifffile
 
@@ -643,12 +632,12 @@ class TestMultiPositionTiff(OmeZarrTestCase):
             writer.write(cls.second, metadata={"axes": "ZYX", "Name": "pos1"})
 
     def test_ambiguous_file_names_the_positions(self):
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(self.multi)
 
-        message = str(caught.exception)
-        self.assertIn("2 positions", message)
-        self.assertIn("pos1", message)
+        message = str(caught.value)
+        assert "2 positions" in message
+        assert "pos1" in message
 
     def test_select_by_index(self):
         plane, _ = load_plane(self.multi, series=1, z=0)
@@ -659,7 +648,7 @@ class TestMultiPositionTiff(OmeZarrTestCase):
         np.testing.assert_array_equal(plane, self.first[0])
 
     def test_unknown_position(self):
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             load_plane(self.multi, series="pos9")
 
 
@@ -678,7 +667,7 @@ class TestFormatParity(OmeZarrTestCase):
             "ome-tiff": self.tiff,
         }
 
-    def test_every_selection_agrees(self):
+    def test_every_selection_agrees(self, subtests):
         selections = (
             {},
             {"z": 0},
@@ -699,14 +688,14 @@ class TestFormatParity(OmeZarrTestCase):
             reference_name, reference = next(iter(planes.items()))
 
             for name, plane in planes.items():
-                with self.subTest(selection=selection, format=name):
+                with subtests.test(selection=selection, format=name):
                     np.testing.assert_array_equal(
                         plane,
                         reference,
                         f"{name} disagrees with {reference_name} for {selection}",
                     )
 
-    def test_metadata_agrees(self):
+    def test_metadata_agrees(self, subtests):
         shared = (
             "axes",
             "shape",
@@ -725,20 +714,22 @@ class TestFormatParity(OmeZarrTestCase):
         reference = results["ngff 0.5"]
 
         for name, meta in results.items():
-            with self.subTest(format=name):
+            with subtests.test(format=name):
                 for key in shared:
-                    self.assertEqual(meta[key], reference[key], f"{key} differs")
-                self.assertAlmostEqual(meta["pixel_size"]["x"], reference["pixel_size"]["x"])
-                self.assertAlmostEqual(meta["origin"]["y"], reference["origin"]["y"])
+                    assert meta[key] == reference[key], f"{key} differs"
+                assert meta["pixel_size"]["x"] == pytest.approx(
+                    reference["pixel_size"]["x"], abs=5e-08
+                )
+                assert meta["origin"]["y"] == pytest.approx(reference["origin"]["y"], abs=5e-08)
 
-    def test_physical_coordinates_agree(self):
+    def test_physical_coordinates_agree(self, subtests):
         for name, source in self._sources().items():
-            with self.subTest(format=name):
+            with subtests.test(format=name):
                 _, meta = load_plane(source)
                 physical = to_physical(12.0, 34.0, meta)
-                self.assertAlmostEqual(physical["y"], 12.0 * PIXEL_SIZE + ORIGIN_YX[0])
-                self.assertAlmostEqual(physical["x"], 34.0 * PIXEL_SIZE + ORIGIN_YX[1])
-                self.assertEqual(physical["unit"], "micrometer")
+                assert physical["y"] == pytest.approx(12.0 * PIXEL_SIZE + ORIGIN_YX[0], abs=5e-08)
+                assert physical["x"] == pytest.approx(34.0 * PIXEL_SIZE + ORIGIN_YX[1], abs=5e-08)
+                assert physical["unit"] == "micrometer"
 
 
 class TestTiffLazyReading(OmeZarrTestCase):
@@ -766,25 +757,25 @@ class TestTiffLazyReading(OmeZarrTestCase):
             stack_reads = len(reads)
 
         # 64x64 in 32x32 tiles is 4 per plane, and the array holds 20 planes.
-        self.assertGreater(plane_reads, 0, "the read counter matched nothing")
-        self.assertLessEqual(plane_reads, 4)
-        self.assertLessEqual(stack_reads, 20)
-        self.assertGreater(stack_reads, plane_reads)
+        assert plane_reads > 0, "the read counter matched nothing"
+        assert plane_reads <= 4
+        assert stack_reads <= 20
+        assert stack_reads > plane_reads
 
 
-class TestUnitReconciliation(unittest.TestCase):
+class TestUnitReconciliation:
     """
     Writers do not agree on units. A pixel size in one unit and a stage
     position in another has to come out as one coherent coordinate.
     """
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_units_"))
         cls.array = np.random.default_rng(5).integers(0, 255, (4, 4), dtype=np.uint8)
 
     @classmethod
-    def tearDownClass(cls):
+    def teardown_class(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     def _write(self, name, pixel_unit, pixel_size, position_unit, position):
@@ -829,40 +820,40 @@ class TestUnitReconciliation(unittest.TestCase):
         )
 
         _, meta = load_plane(path)
-        self.assertEqual(meta["origin"], {})
+        assert meta["origin"] == {}
         physical = to_physical(10.0, 10.0, meta)
-        self.assertAlmostEqual(physical["x"], 5.0)
+        assert physical["x"] == pytest.approx(5.0, abs=5e-08)
 
     def test_position_in_millimeters_with_pixels_in_micrometers(self):
         path = self._write("mixed.ome.tif", "\u00b5m", 0.5, "mm", 2.0)
 
         _, meta = load_plane(path)
-        self.assertEqual(meta["space_unit"], "micrometer")
+        assert meta["space_unit"] == "micrometer"
         # 2 mm is 2000 um, and the coordinate has to be in one unit
-        self.assertAlmostEqual(meta["origin"]["x"], 2000.0)
+        assert meta["origin"]["x"] == pytest.approx(2000.0, abs=5e-08)
 
         physical = to_physical(10.0, 10.0, meta)
-        self.assertAlmostEqual(physical["x"], 10.0 * 0.5 + 2000.0)
+        assert physical["x"] == pytest.approx(10.0 * 0.5 + 2000.0, abs=5e-08)
 
     def test_pixel_size_in_nanometers(self):
         path = self._write("nano.ome.tif", "nm", 325.0, "nm", 1000.0)
 
         _, meta = load_plane(path)
-        self.assertEqual(meta["space_unit"], "nanometer")
-        self.assertAlmostEqual(meta["pixel_size"]["x"], 325.0)
-        self.assertAlmostEqual(meta["origin"]["x"], 1000.0)
+        assert meta["space_unit"] == "nanometer"
+        assert meta["pixel_size"]["x"] == pytest.approx(325.0, abs=5e-08)
+        assert meta["origin"]["x"] == pytest.approx(1000.0, abs=5e-08)
 
     def test_unconvertible_position_unit_is_dropped(self):
         # Better no coordinate than a wrong one sent to a microscope.
         path = self._write("reference.ome.tif", "\u00b5m", 0.5, "reference frame", 5.0)
 
         _, meta = load_plane(path)
-        self.assertEqual(meta["pixel_size"]["x"], 0.5)
-        self.assertIsNone(meta["origin"])
-        self.assertIsNone(to_physical(1.0, 2.0, meta))
+        assert meta["pixel_size"]["x"] == 0.5
+        assert meta["origin"] is None
+        assert to_physical(1.0, 2.0, meta) is None
 
 
-class TestForeignWriters(unittest.TestCase):
+class TestForeignWriters:
     """
     Stores written by hand rather than by ngio.
 
@@ -880,17 +871,17 @@ class TestForeignWriters(unittest.TestCase):
     ]
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         try:
             import zarr  # noqa: F401
         except ImportError:
-            raise unittest.SkipTest("zarr is not installed")
+            pytest.skip("zarr is not installed")
 
         cls.tmpdir = Path(tempfile.mkdtemp(prefix="image_io_foreign_"))
         cls.array = np.random.default_rng(4).integers(0, 4096, (1, 2, 3, 32, 32), dtype=np.uint16)
 
     @classmethod
-    def tearDownClass(cls):
+    def teardown_class(cls):
         shutil.rmtree(cls.tmpdir, ignore_errors=True)
 
     @classmethod
@@ -962,15 +953,15 @@ class TestForeignWriters(unittest.TestCase):
         store = self._write_v04("foreign_v04.zarr")
         plane, meta = load_plane(store, c=1, z=0)
         np.testing.assert_array_equal(plane, self.array[0, 1, 0])
-        self.assertEqual(meta["ngff_version"], "0.4")
-        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE)
-        self.assertAlmostEqual(meta["origin"]["x"], ORIGIN_YX[1])
+        assert meta["ngff_version"] == "0.4"
+        assert meta["pixel_size"]["x"] == pytest.approx(PIXEL_SIZE, abs=5e-08)
+        assert meta["origin"]["x"] == pytest.approx(ORIGIN_YX[1], abs=5e-08)
 
     def test_reads_a_hand_written_v05(self):
         store = self._write_v05("foreign_v05.zarr")
         plane, meta = load_plane(store, c=1, z=2)
         np.testing.assert_array_equal(plane, self.array[0, 1, 2])
-        self.assertEqual(meta["ngff_version"], "0.5")
+        assert meta["ngff_version"] == "0.5"
 
     def test_level_is_an_index_whatever_the_datasets_are_called(self):
         # "0", "1", ... is only a convention. An integer level has to mean
@@ -978,31 +969,31 @@ class TestForeignWriters(unittest.TestCase):
         store = self._write_v04("foreign_levels.zarr", ("s0", "s1"))
 
         plane, meta = load_plane(store)
-        self.assertEqual(plane.shape, (32, 32))
-        self.assertEqual(meta["level"], "s0")
+        assert plane.shape == (32, 32)
+        assert meta["level"] == "s0"
 
         plane, meta = load_plane(store, level=1)
-        self.assertEqual(plane.shape, (16, 16))
-        self.assertEqual(meta["level"], "s1")
-        self.assertAlmostEqual(meta["pixel_size"]["x"], PIXEL_SIZE * 2)
+        assert plane.shape == (16, 16)
+        assert meta["level"] == "s1"
+        assert meta["pixel_size"]["x"] == pytest.approx(PIXEL_SIZE * 2, abs=5e-08)
 
     def test_level_can_still_be_named(self):
         store = self._write_v04("foreign_named.zarr", ("full", "half"))
         plane, meta = load_plane(store, level="half")
-        self.assertEqual(plane.shape, (16, 16))
-        self.assertEqual(meta["level"], "half")
+        assert plane.shape == (16, 16)
+        assert meta["level"] == "half"
 
     def test_unknown_level_lists_what_there_is(self):
         store = self._write_v04("foreign_bad_level.zarr", ("full", "half"))
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(store, level="quarter")
-        self.assertIn("full, half", str(caught.exception))
+        assert "full, half" in str(caught.value)
 
     def test_channel_by_name_without_an_omero_block(self):
         store = self._write_v04("foreign_nochannels.zarr")
-        with self.assertRaises(Exception) as caught:
+        with pytest.raises(Exception) as caught:
             load_plane(store, c="DAPI")
-        self.assertIn("DAPI", str(caught.exception))
+        assert "DAPI" in str(caught.value)
 
     def test_bioformats2raw_container_names_its_positions(self):
         import zarr
@@ -1027,18 +1018,14 @@ class TestForeignWriters(unittest.TestCase):
                 }
             ]
 
-        with self.assertRaises(ValueError) as caught:
+        with pytest.raises(ValueError) as caught:
             load_plane(store)
 
-        message = str(caught.exception)
-        self.assertIn("not a position", message)
-        self.assertIn("Positions: 0, 1", message)
-        self.assertNotIn("OME", message.split("Positions:")[1])
+        message = str(caught.value)
+        assert "not a position" in message
+        assert "Positions: 0, 1" in message
+        assert "OME" not in message.split("Positions:")[1]
 
         # and the position it points at does load
         plane, _ = load_plane(store / "1", z=0)
         np.testing.assert_array_equal(plane, self.array[0, 0, 0])
-
-
-if __name__ == "__main__":
-    unittest.main()

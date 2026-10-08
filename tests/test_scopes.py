@@ -9,6 +9,9 @@ The steps are deliberately small. ``tile`` passes a number on; ``unit``
 adds up whatever the level below it handed in. So every expected value
 can be worked out by hand.
 
+The class at the end holds the engine's older scope tests, one case each,
+written against the small step and recipe helpers of ``helpers.py``.
+
 Usage
 -----
     python -m pytest tests/test_scopes.py -v
@@ -18,6 +21,9 @@ import textwrap
 import time
 
 import pytest
+from helpers import _wait_for_results, _wait_for_status
+from helpers import _write_step as _temp_step
+from helpers import _write_yaml as _temp_yaml
 
 from zmart_analysis import Engine, ScopeError
 
@@ -744,3 +750,377 @@ def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     )
     assert failed == [("tile", 0, 0), ("unit", 1, 2)]
     assert carrier["lineage"]["submissions"] == [1]
+
+
+# ---- The engine's own scope cases, one each ---------------------------
+
+
+class TestEngineScopes:
+    def test_two_carriers_at_once_keep_their_compartments_apart(self):
+        """Tiles of two carriers arrive interleaved, with the same
+        compartment numbers on both. Each compartment is summed, then each
+        carrier sums only its own compartments."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["value"] = pd["input"]["value"]
+                return pd
+        """,
+            name="carriers_tile",
+        )
+        _temp_step(
+            """
+            import time
+            def run(pd, state, **p):
+                time.sleep(0.2)   # a slow compartment, so a carrier signal could overtake it
+                return {"compartment_sum": sum(r["value"] for r in pd["results"]),
+                        "compartment": pd["metadata"]["scope"]["compartment"]}
+        """,
+            name="carriers_compartment",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                return {"carrier_sum": sum(r["compartment_sum"] for r in pd["results"]),
+                        "compartments": sorted(r["compartment"] for r in pd["results"]),
+                        "carrier": pd["metadata"]["scope"]["carrier"]}
+        """,
+            name="carriers_carrier",
+        )
+        yaml = _temp_yaml(
+            "wf:\n  - carriers_tile:\n"
+            "  - carriers_compartment:\n      scope: compartment\n"
+            "  - carriers_carrier:\n      scope: carrier"
+        )
+        from zmart_analysis import Engine
+
+        with Engine(max_concurrent=8) as e:
+            e.register("test", yaml)
+            layout = [(1, 1, 1), (2, 1, 100), (1, 2, 2), (2, 2, 200)]
+            for carrier, compartment, value in layout:
+                for _ in range(3):
+                    e.submit(
+                        "test",
+                        {"value": value},
+                        scope={"carrier": carrier, "compartment": compartment},
+                    )
+                e.submit(
+                    "test",
+                    {"value": 0},
+                    scope={"carrier": carrier, "compartment": compartment},
+                    complete="compartment",
+                )
+            e.submit(
+                "test", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier"
+            )
+            e.submit(
+                "test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier"
+            )
+            results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
+        carriers = {r["carrier"]: r for r in results if "carrier_sum" in r}
+        assert carriers[1]["carrier_sum"] == 3 * 1 + 3 * 2
+        assert carriers[2]["carrier_sum"] == 3 * 100 + 3 * 200
+        assert carriers[1]["compartments"] == [1, 2]
+        assert carriers[2]["compartments"] == [1, 2]
+
+    def test_scope_collects_results(self):
+        """Scoped step receives accumulated results from all jobs."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["tile"] = pd["input"]["tile"]
+                return pd
+        """,
+            name="sc_seg",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                tiles = [r["tile"] for r in pd["results"]]
+                pd["tiles"] = sorted(tiles)
+                return pd
+        """,
+            name="sc_stitch",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - sc_seg:
+              - sc_stitch:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            for i in range(3):
+                complete = "group" if i == 2 else None
+                e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
+            results = _wait_for_results(e, "test", 4, timeout=15)
+
+        # Should have 3 Phase 0 results + 1 scoped result
+        phase0 = [r for r in results if r.get("_phase") == 0]
+        scoped = [r for r in results if r.get("_phase") == 1]
+        assert len(phase0) == 3
+        assert len(scoped) == 1
+        assert scoped[0]["tiles"] == [0, 1, 2]
+
+    def test_scope_preserves_submission_order(self):
+        _temp_step(
+            """
+            import time
+            def run(pd, state, **p):
+                time.sleep(0.05)
+                pd["val"] = pd["input"]["val"]
+                return pd
+        """,
+            name="ord_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["order"] = [r["val"] for r in pd["results"]]
+                return pd
+        """,
+            name="ord_collect",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - ord_step:
+              - ord_collect:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            for i in range(5):
+                complete = "group" if i == 4 else None
+                e.submit("test", {"val": i}, scope={"group": "G1"}, complete=complete)
+            results = _wait_for_results(e, "test", 6, timeout=20)
+
+        scoped = [r for r in results if r.get("_phase") == 1]
+        assert len(scoped) == 1
+        assert scoped[0]["order"] == [0, 1, 2, 3, 4]
+
+    def test_multiple_scope_groups(self):
+        """Different scope groups are collected independently."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["val"] = pd["input"]["val"]
+                return pd
+        """,
+            name="mg_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["vals"] = sorted([r["val"] for r in pd["results"]])
+                return pd
+        """,
+            name="mg_collect",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - mg_step:
+              - mg_collect:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            # Group A: values 10, 20
+            e.submit("test", {"val": 10}, scope={"group": "A"})
+            e.submit("test", {"val": 20}, scope={"group": "A"}, complete="group")
+            # Group B: values 30, 40, 50
+            e.submit("test", {"val": 30}, scope={"group": "B"})
+            e.submit("test", {"val": 40}, scope={"group": "B"})
+            e.submit("test", {"val": 50}, scope={"group": "B"}, complete="group")
+            results = _wait_for_results(e, "test", 7, timeout=20)
+
+        scoped = [r for r in results if r.get("_phase") == 1]
+        scoped_vals = sorted([tuple(r["vals"]) for r in scoped])
+        assert (10, 20) in scoped_vals
+        assert (30, 40, 50) in scoped_vals
+
+    def test_complete_list(self):
+        """complete parameter accepts a list of scope levels."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """,
+            name="cl_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["group_vals"] = [r["v"] for r in pd["results"]]
+                return pd
+        """,
+            name="cl_group",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["all_vals"] = [r.get("group_vals", [])
+                                   for r in pd["results"]]
+                return pd
+        """,
+            name="cl_all",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - cl_step:
+              - cl_group:
+                  scope: group
+              - cl_all:
+                  scope: all
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            e.submit("test", {"v": 1}, scope={"group": "G1"})
+            e.submit("test", {"v": 2}, scope={"group": "G1"}, complete=["group", "all"])
+            results = _wait_for_results(e, "test", 4, timeout=20)
+
+        phase2 = [r for r in results if r.get("_phase") == 2]
+        assert len(phase2) == 1
+
+    def test_all_scope_collects_everything(self):
+        """Scope 'all' (not a key in any scope dict) collects everything."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """,
+            name="al_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["total"] = sum(r["v"] for r in pd["results"])
+                return pd
+        """,
+            name="al_sum",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - al_step:
+              - al_sum:
+                  scope: all
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            e.submit("test", {"v": 10}, scope={"group": "A"})
+            e.submit("test", {"v": 20}, scope={"group": "B"})
+            e.submit("test", {"v": 30}, scope={"group": "C"}, complete="all")
+            results = _wait_for_results(e, "test", 4, timeout=15)
+
+        scoped = [r for r in results if r.get("_phase") == 1]
+        assert len(scoped) == 1
+        assert scoped[0]["total"] == 60
+
+    def test_failures_reach_scoped_step(self):
+        """Phase 0 failures are aggregated into pipeline_data['failures']
+        for the scoped step to inspect."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                if pd["input"]["v"] == 99:
+                    raise ValueError("deliberate failure")
+                pd["v"] = pd["input"]["v"]
+                return pd
+        """,
+            name="fr_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["n_results"] = len(pd["results"])
+                pd["n_failures"] = len(pd["failures"])
+                pd["failure_steps"] = [f.get("step") for f in pd["failures"]]
+                pd["failure_errors"] = [f.get("error") for f in pd["failures"]]
+                return pd
+        """,
+            name="fr_collect",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - fr_step:
+              - fr_collect:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            e.submit("test", {"v": 1}, scope={"group": "G"})
+            e.submit("test", {"v": 99}, scope={"group": "G"})
+            e.submit("test", {"v": 2}, scope={"group": "G"}, complete="group")
+            results = _wait_for_results(e, "test", 3, timeout=15)
+
+        scoped = [r for r in results if r.get("_phase") == 1]
+        assert len(scoped) == 1
+        assert scoped[0]["n_results"] == 2
+        assert scoped[0]["n_failures"] == 1
+        assert scoped[0]["failure_steps"] == ["fr_step"]
+        assert "deliberate failure" in scoped[0]["failure_errors"][0]
+
+    def test_scope_collection_prunes_consumed_failures(self):
+        """Consumed scope failures leave status; unrelated failures remain."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                if pd["input"].get("fail"):
+                    raise ValueError(f"failed {pd['input']['group']}")
+                pd["group"] = pd["input"]["group"]
+                return pd
+        """,
+            name="pf_step",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["n_results"] = len(pd["results"])
+                pd["failure_errors"] = [f["error"] for f in pd["failures"]]
+                return pd
+        """,
+            name="pf_collect",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - pf_step:
+              - pf_collect:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml)
+            e.submit("test", {"group": "A", "fail": True}, scope={"group": "A"})
+            e.submit("test", {"group": "B", "fail": True}, scope={"group": "B"})
+            _wait_for_status(e, "test", expected_total=2, timeout=15)
+
+            e.submit("test", {"group": "A", "fail": False}, scope={"group": "A"}, complete="group")
+            results = _wait_for_results(e, "test", 2, timeout=15)
+            status = e.status("test")
+
+        scoped = [r for r in results if r.get("_phase") == 1]
+        assert len(scoped) == 1
+        assert scoped[0]["n_results"] == 1
+        assert len(scoped[0]["failure_errors"]) == 1
+        assert "failed A" in scoped[0]["failure_errors"][0]
+
+        remaining_errors = [f["error"] for f in status["failures"]]
+        assert len(remaining_errors) == 1
+        assert "failed B" in remaining_errors[0]
+
+
+# ---- Engine (environment isolation) ----------------------------------
