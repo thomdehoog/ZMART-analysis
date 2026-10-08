@@ -41,7 +41,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-# The engine package sits one folder up, at the root of the repository.
+# The zmart_analysis package sits one folder up, at the root of the repository.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Step files, recipes and the polling helpers are the shared ones from conftest.
@@ -57,7 +57,7 @@ from conftest import (
 from conftest import (
     _write_yaml as _temp_yaml,
 )
-from engine import (
+from zmart_analysis import (
     ScopeError,
     StepExecutionError,
     WorkerCrashedError,
@@ -65,8 +65,8 @@ from engine import (
     WorkerSpawnError,
     WorkerTimeoutError,
 )
-from engine.engine import get_step_settings
-from engine.pipeline import split_phases
+from zmart_analysis.engine import get_step_settings
+from zmart_analysis.pipeline import split_phases
 
 _TEMP_DIR = str(_SESSION_TEMP)
 
@@ -226,7 +226,7 @@ class TestPhases(unittest.TestCase):
 
 class TestWorkerProtocol(unittest.TestCase):
     def test_execute_returns_result(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             def run(pd, state, **p):
@@ -244,7 +244,7 @@ class TestWorkerProtocol(unittest.TestCase):
         self.assertEqual(result["input"], 1)
 
     def test_different_steps_same_worker(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path_a = _temp_step("""
             def run(pd, state, **p): pd["from"] = "a"; return pd
@@ -262,7 +262,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_module_caching(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             _n = 0
@@ -283,7 +283,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_state_dict_persists(self):
         """State dict persists across calls for the same step."""
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             def run(pd, state, **p):
@@ -305,7 +305,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
     def test_state_dict_isolated_per_step(self):
         """Different steps get separate state dicts."""
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path_a = _temp_step("""
             def run(pd, state, **p):
@@ -329,7 +329,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_persistent_reuses_process(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             import os
@@ -344,7 +344,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_shutdown_and_respawn(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             import os
@@ -360,7 +360,7 @@ class TestWorkerProtocol(unittest.TestCase):
             w.shutdown()
 
     def test_complex_types(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("def run(pd, state, **p): return pd")
         data = {
@@ -379,7 +379,7 @@ class TestWorkerProtocol(unittest.TestCase):
         self.assertEqual(r["nested"]["a"][2]["b"], 2.5)
 
     def test_worker_status(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         w = Worker(environment=None, connect_timeout=10)
         s = w.status
@@ -392,7 +392,7 @@ class TestWorkerProtocol(unittest.TestCase):
 
 class TestWorkerErrorPaths(unittest.TestCase):
     def test_crash_raises_worker_crashed(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             import os
@@ -404,7 +404,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         w.shutdown()
 
     def test_timeout_raises_worker_timeout_error(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             import time
@@ -419,7 +419,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         w.shutdown()
 
     def test_step_error_has_traceback(self):
-        from engine.workers import Worker
+        from zmart_analysis.workers import Worker
 
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("test")
@@ -436,7 +436,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         # conda-env worker's real parent is the `conda run` wrapper.
         import subprocess as _sp
 
-        from engine import workers
+        from zmart_analysis import workers
 
         captured = {}
         real_popen = _sp.Popen
@@ -470,7 +470,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
         import subprocess as _sp
         from multiprocessing.connection import Listener
 
-        from engine.workers import WORKER_SCRIPT
+        from zmart_analysis.workers import WORKER_SCRIPT
 
         authkey = os.urandom(16)
         listener = Listener(("localhost", 0), authkey=authkey)
@@ -515,7 +515,7 @@ class TestWorkerErrorPaths(unittest.TestCase):
             listener.close()
 
     def test_windows_parent_check_distinguishes_running_and_terminated(self):
-        from engine.worker_script import _windows_process_alive
+        from zmart_analysis.worker_script import _windows_process_alive
 
         class FakeKernel32:
             def __init__(self, wait_result, handle=123):
@@ -563,7 +563,7 @@ class TestPool(unittest.TestCase):
         width was seen first, so a pipeline that asked for eight got one, or
         the other way round, depending on registration order.
         """
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         pool = WorkerPool()
         try:
@@ -576,7 +576,7 @@ class TestPool(unittest.TestCase):
             pool.shutdown_all(now=True)
 
     def test_per_env_worker_reuse(self):
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("""
             import os
@@ -589,7 +589,7 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
     def test_shutdown_before_use(self):
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool()
@@ -598,7 +598,7 @@ class TestPool(unittest.TestCase):
             pool.execute(None, path, {}, {}, timeout=10)
 
     def test_error_through_pool(self):
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("pool err")
@@ -610,7 +610,7 @@ class TestPool(unittest.TestCase):
         pool.shutdown_all()
 
     def test_reaper_removes_idle(self):
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=0.2)
@@ -631,7 +631,7 @@ class TestPool(unittest.TestCase):
         imports are the cost it exists to avoid paying twice; a press five
         minutes after the last one found them reaped and paid it again.
         """
-        from engine.workers import Worker, WorkerPool
+        from zmart_analysis.workers import Worker, WorkerPool
 
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool(idle_timeout=None)
@@ -648,7 +648,7 @@ class TestPool(unittest.TestCase):
 
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("""
             import time
@@ -678,7 +678,7 @@ class TestPool(unittest.TestCase):
 
     def test_semaphore_allows_parallelism(self):
         """max_workers=4 allows parallel execution."""
-        from engine.workers import WorkerPool
+        from zmart_analysis.workers import WorkerPool
 
         path = _temp_step("""
             import time
@@ -719,7 +719,7 @@ class TestEngineRegister(unittest.TestCase):
     def test_register_simple(self):
         _temp_step("def run(pd, state, **p): return pd", name="reg_a")
         yaml = _temp_yaml("wf:\n  - reg_a:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -727,7 +727,7 @@ class TestEngineRegister(unittest.TestCase):
     def test_register_duplicate_raises(self):
         _temp_step("def run(pd, state, **p): return pd", name="reg_b")
         yaml = _temp_yaml("wf:\n  - reg_b:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -737,7 +737,7 @@ class TestEngineRegister(unittest.TestCase):
     def test_register_bad_yaml(self):
         path = Path(_TEMP_DIR) / f"bad_{_next_id()}.yaml"
         path.write_text("metadata:\n  functions_dir: .")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             with self.assertRaises(ValueError):
@@ -749,7 +749,7 @@ class TestEngineRegister(unittest.TestCase):
         # same name both passed and the second silently clobbered the first.
         _temp_step("def run(pd, state, **p): return pd", name="reg_race")
         yaml = _temp_yaml("wf:\n  - reg_race:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             start = threading.Barrier(8)
@@ -787,7 +787,7 @@ class TestEngineRegister(unittest.TestCase):
         """,
             name="reg_provenance",
         )
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", _temp_yaml("wf:\n  - reg_provenance:"))
@@ -813,7 +813,7 @@ class TestEngineSubmit(unittest.TestCase):
             name="sub_a",
         )
         yaml = _temp_yaml("wf:\n  - sub_a:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -840,7 +840,7 @@ class TestEngineSubmit(unittest.TestCase):
             name="ms_b",
         )
         yaml = _temp_yaml("wf:\n  - ms_a:\n  - ms_b:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -867,7 +867,7 @@ class TestEngineSubmit(unittest.TestCase):
             name="df_b",
         )
         yaml = _temp_yaml("wf:\n  - df_a:\n  - df_b:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -878,7 +878,7 @@ class TestEngineSubmit(unittest.TestCase):
     def test_input_data(self):
         _temp_step("def run(pd, state, **p): return pd", name="inp")
         yaml = _temp_yaml("wf:\n  - inp:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -896,7 +896,7 @@ class TestEngineSubmit(unittest.TestCase):
             name="par",
         )
         yaml = _temp_yaml("wf:\n  - par:\n      x: 42")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -914,7 +914,7 @@ class TestEngineSubmit(unittest.TestCase):
             name="conc",
         )
         yaml = _temp_yaml("wf:\n  - conc:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -965,7 +965,7 @@ class TestEngineScopes(unittest.TestCase):
             "  - carriers_compartment:\n      scope: compartment\n"
             "  - carriers_carrier:\n      scope: carrier"
         )
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=8) as e:
             e.register("test", yaml)
@@ -1021,7 +1021,7 @@ class TestEngineScopes(unittest.TestCase):
               - sc_stitch:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1062,7 +1062,7 @@ class TestEngineScopes(unittest.TestCase):
               - ord_collect:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1099,7 +1099,7 @@ class TestEngineScopes(unittest.TestCase):
               - mg_collect:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1152,7 +1152,7 @@ class TestEngineScopes(unittest.TestCase):
               - cl_all:
                   scope: all
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1187,7 +1187,7 @@ class TestEngineScopes(unittest.TestCase):
               - al_sum:
                   scope: all
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1230,7 +1230,7 @@ class TestEngineScopes(unittest.TestCase):
               - fr_collect:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1273,7 +1273,7 @@ class TestEngineScopes(unittest.TestCase):
               - pf_collect:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1306,7 +1306,7 @@ class TestEngineResults(unittest.TestCase):
     def test_results_consumed_on_retrieval(self):
         _temp_step("def run(pd, state, **p): return pd", name="drain")
         yaml = _temp_yaml("wf:\n  - drain:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1319,7 +1319,7 @@ class TestEngineResults(unittest.TestCase):
     def test_results_tagged_with_phase(self):
         _temp_step("def run(pd, state, **p): return pd", name="tag")
         yaml = _temp_yaml("wf:\n  - tag:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1329,7 +1329,7 @@ class TestEngineResults(unittest.TestCase):
         self.assertIsNone(results[0]["_scope_level"])
 
     def test_unregistered_pipeline_raises(self):
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             with self.assertRaises(KeyError):
@@ -1343,7 +1343,7 @@ class TestEngineConcurrency(unittest.TestCase):
     def test_a_yaml_max_workers_below_one_is_refused_at_register(self):
         _temp_step("def run(pd, state, **p): return pd", name="narrow")
         yaml = _temp_yaml("wf:\n  - narrow:\n      max_workers: 0")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             with self.assertRaises(ValueError):
@@ -1352,7 +1352,7 @@ class TestEngineConcurrency(unittest.TestCase):
     def test_a_yaml_max_workers_reaches_the_step_settings(self):
         _temp_step("def run(pd, state, **p): return pd", name="wide")
         yaml = _temp_yaml("wf:\n  - wide:\n      max_workers: 3")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1368,7 +1368,7 @@ class TestEngineConcurrency(unittest.TestCase):
             name="many",
         )
         yaml = _temp_yaml("wf:\n  - many:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=8) as e:
             e.register("test", yaml)
@@ -1396,7 +1396,7 @@ class TestEngineErrors(unittest.TestCase):
             name="graceful",
         )
         yaml = _temp_yaml("wf:\n  - graceful:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1415,7 +1415,7 @@ class TestEngineErrors(unittest.TestCase):
             name="fail_status",
         )
         yaml = _temp_yaml("wf:\n  - fail_status:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1433,7 +1433,7 @@ class TestEngineErrors(unittest.TestCase):
             name="bad_ret",
         )
         yaml = _temp_yaml("wf:\n  - bad_ret:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1449,7 +1449,7 @@ class TestEngineLifecycle(unittest.TestCase):
     def test_context_manager(self):
         _temp_step("def run(pd, state, **p): return pd", name="ctx")
         yaml = _temp_yaml("wf:\n  - ctx:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1459,7 +1459,7 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_shutdown_then_register_raises(self):
         """register() after shutdown raises RuntimeError."""
-        from engine import Engine
+        from zmart_analysis import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="shut_reg")
         yaml = _temp_yaml("wf:\n  - shut_reg:")
@@ -1470,8 +1470,8 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_concurrent_registration_reserves_pipeline_name(self):
         """Only one parser may build a given pipeline name at a time."""
-        import engine.engine as engine_module
-        from engine import Engine
+        import zmart_analysis.engine as engine_module
+        from zmart_analysis import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="reg_race")
         yaml = _temp_yaml("wf:\n  - reg_race:")
@@ -1487,7 +1487,7 @@ class TestEngineLifecycle(unittest.TestCase):
             return real_parse_yaml(path)
 
         e = Engine()
-        with patch("engine.engine.parse_yaml", blocked_parse_yaml):
+        with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
                 target=lambda: _capture_exception(errors, lambda: e.register("test", yaml))
             )
@@ -1505,8 +1505,8 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_registration_cannot_complete_after_shutdown_starts(self):
         """A registration parsing during shutdown must not become visible."""
-        import engine.engine as engine_module
-        from engine import Engine
+        import zmart_analysis.engine as engine_module
+        from zmart_analysis import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="reg_shutdown")
         yaml = _temp_yaml("wf:\n  - reg_shutdown:")
@@ -1522,7 +1522,7 @@ class TestEngineLifecycle(unittest.TestCase):
             return real_parse_yaml(path)
 
         e = Engine()
-        with patch("engine.engine.parse_yaml", blocked_parse_yaml):
+        with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
                 target=lambda: _capture_exception(errors, lambda: e.register("late", yaml))
             )
@@ -1539,7 +1539,7 @@ class TestEngineLifecycle(unittest.TestCase):
 
     def test_failed_registration_releases_pipeline_name(self):
         """A parse failure must not leave the name permanently reserved."""
-        from engine import Engine
+        from zmart_analysis import Engine
 
         _temp_step("def run(pd, state, **p): return pd", name="reg_retry")
         invalid_yaml = _temp_yaml("wf: [")
@@ -1555,7 +1555,7 @@ class TestEngineLifecycle(unittest.TestCase):
         """submit() after shutdown raises RuntimeError."""
         _temp_step("def run(pd, state, **p): return pd", name="shut_sub")
         yaml = _temp_yaml("wf:\n  - shut_sub:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         e = Engine()
         e.register("test", yaml)
@@ -1564,7 +1564,7 @@ class TestEngineLifecycle(unittest.TestCase):
             e.submit("test", {})
 
     def test_double_shutdown(self):
-        from engine import Engine
+        from zmart_analysis import Engine
 
         e = Engine()
         e.shutdown()
@@ -1581,7 +1581,7 @@ class TestEngineLifecycle(unittest.TestCase):
             name="shutdown_slow",
         )
         yaml = _temp_yaml("wf:\n  - shutdown_slow:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         e = Engine(max_concurrent=1)
         e.register("test", yaml)
@@ -1618,7 +1618,7 @@ class TestEngineStatus(unittest.TestCase):
     def test_status_single_pipeline(self):
         _temp_step("def run(pd, state, **p): return pd", name="st")
         yaml = _temp_yaml("wf:\n  - st:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1632,7 +1632,7 @@ class TestEngineStatus(unittest.TestCase):
     def test_status_all_pipelines(self):
         _temp_step("def run(pd, state, **p): return pd", name="st2")
         yaml = _temp_yaml("wf:\n  - st2:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("a", yaml)
@@ -1642,7 +1642,7 @@ class TestEngineStatus(unittest.TestCase):
         self.assertIn("b", status)
 
     def test_status_nonexistent_raises(self):
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             with self.assertRaises(KeyError):
@@ -1678,7 +1678,7 @@ class TestEngineStatus(unittest.TestCase):
               - drift_stitch:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml)
@@ -1715,7 +1715,7 @@ class TestEngineStatus(unittest.TestCase):
             name="status_slow",
         )
         yaml = _temp_yaml("wf:\n  - status_slow:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
@@ -1756,7 +1756,7 @@ class TestEngineMultiPipeline(unittest.TestCase):
         )
         yaml_a = _temp_yaml("wf_a:\n  - shared:\n      from: a")
         yaml_b = _temp_yaml("wf_b:\n  - shared:\n      from: b")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("a", yaml_a)
@@ -1790,7 +1790,7 @@ class TestEnginePriority(unittest.TestCase):
             name="prio_step",
         )
         yaml = _temp_yaml("wf:\n  - prio_step:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
@@ -1828,7 +1828,7 @@ class TestEnginePriority(unittest.TestCase):
             name="fifo_step",
         )
         yaml = _temp_yaml("wf:\n  - fifo_step:")
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
@@ -1862,7 +1862,7 @@ class TestEnginePriority(unittest.TestCase):
               - priority_scoped_collect:
                   scope: group
         """)
-        from engine import Engine
+        from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml)
@@ -1886,7 +1886,7 @@ class TestEnginePriority(unittest.TestCase):
 
 class TestPackageAPI(unittest.TestCase):
     def test_public_imports(self):
-        import engine
+        import zmart_analysis
 
         for name in (
             "Engine",
@@ -1897,17 +1897,17 @@ class TestPackageAPI(unittest.TestCase):
             "StepExecutionError",
             "ScopeError",
         ):
-            self.assertTrue(hasattr(engine, name), name)
+            self.assertTrue(hasattr(zmart_analysis, name), name)
 
     def test_version(self):
-        import engine
+        import zmart_analysis
 
-        self.assertEqual(engine.__version__, "1.0.0rc1")
+        self.assertEqual(zmart_analysis.__version__, "1.0.0rc1")
 
     def test_engine_in_all(self):
-        import engine
+        import zmart_analysis
 
-        self.assertIn("Engine", engine.__all__)
+        self.assertIn("Engine", zmart_analysis.__all__)
 
 
 # ---- The brake: a shutdown that does not wait ---------------------------
@@ -1969,8 +1969,8 @@ class TestTheBrake(unittest.TestCase):
     """
 
     def test_a_shutdown_now_puts_a_busy_worker_down_at_once(self):
-        from engine import WorkerCrashedError
-        from engine.workers import Worker
+        from zmart_analysis import WorkerCrashedError
+        from zmart_analysis.workers import Worker
 
         pid_file = os.path.join(_TEMP_DIR, f"busy_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
@@ -1992,8 +1992,8 @@ class TestTheBrake(unittest.TestCase):
 
     def test_a_shutdown_now_puts_the_whole_tree_down(self):
         """Under a wrapper, as `conda run` is, the grandchild dies too."""
-        import engine.workers as worker_module
-        from engine.workers import Worker
+        import zmart_analysis.workers as worker_module
+        from zmart_analysis.workers import Worker
 
         wrapper = _temp_step(
             """
@@ -2026,7 +2026,7 @@ class TestTheBrake(unittest.TestCase):
             worker_module._the_python_of = real
 
     def test_an_engine_shut_down_without_waiting_stops_its_running_step(self):
-        from engine import Engine
+        from zmart_analysis import Engine
 
         pid_file = os.path.join(_TEMP_DIR, f"engine_{_next_id()}.pid")
         _temp_step(
@@ -2063,9 +2063,9 @@ class TestTheBrake(unittest.TestCase):
         interpreter it started a moment later running -- two orphans after
         every early press.
         """
-        import engine.workers as worker_module
-        from engine import WorkerCrashedError, WorkerSpawnError
-        from engine.workers import Worker
+        import zmart_analysis.workers as worker_module
+        from zmart_analysis import WorkerCrashedError, WorkerSpawnError
+        from zmart_analysis.workers import Worker
 
         wrapper = _temp_step(
             """
@@ -2113,9 +2113,9 @@ class TestTheBrake(unittest.TestCase):
         conda, its interpreter, the activation shell and the worker -- came
         up afterwards and stayed, segmenting a field nobody wanted.
         """
-        import engine.workers as worker_module
-        from engine import WorkerCrashedError, WorkerSpawnError
-        from engine.workers import Worker
+        import zmart_analysis.workers as worker_module
+        from zmart_analysis import WorkerCrashedError, WorkerSpawnError
+        from zmart_analysis.workers import Worker
 
         pid_file = os.path.join(_TEMP_DIR, f"late_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)

@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-import engine.engine as engine_module
-from engine import Engine
+import zmart_analysis.engine as engine_module
+from zmart_analysis import Engine
 
 pytestmark = pytest.mark.adversarial
 
@@ -55,7 +55,7 @@ def test_many_concurrent_duplicate_registrations_have_one_winner(tmp_path):
             outcomes.append(outcome)
 
     engine = Engine(max_concurrent=1)
-    with patch("engine.engine.parse_yaml", blocked_parse_yaml):
+    with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
         threads = [threading.Thread(target=register) for _ in range(32)]
         for thread in threads:
             thread.start()
@@ -105,7 +105,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
                 errors.append(exc)
 
     engine = Engine(max_concurrent=1)
-    with patch("engine.engine.parse_yaml", blocked_parse_yaml):
+    with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
         threads = [
             threading.Thread(target=register, args=(index,)) for index in range(registration_count)
         ]

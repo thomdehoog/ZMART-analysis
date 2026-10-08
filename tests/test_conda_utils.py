@@ -1,4 +1,4 @@
-"""Unit tests for ``engine.conda_utils``.
+"""Unit tests for ``zmart_analysis.conda_utils``.
 
 Run from a conda-enabled terminal::
 
@@ -8,7 +8,7 @@ Run from a conda-enabled terminal::
 import unittest
 from pathlib import Path
 
-from engine.conda_utils import (
+from zmart_analysis.conda_utils import (
     detect_gpu,
     env_exists,
     get_conda_exe,
@@ -186,7 +186,7 @@ class TestDiagnostics(unittest.TestCase):
     def _run(self, answer):
         from unittest import mock
 
-        from engine import conda_utils
+        from zmart_analysis import conda_utils
 
         with mock.patch.object(conda_utils.subprocess, "run", return_value=answer):
             conda_utils._run_diagnostics("conda", "ZMART--x--main", [("check", "print('x')")])
@@ -209,7 +209,7 @@ class TestCheckAnExistingEnvironment(unittest.TestCase):
     def _setup(self, argv, envs):
         from unittest import mock
 
-        from engine import conda_utils
+        from zmart_analysis import conda_utils
 
         info = {"conda_version": "26.1.0", "envs": envs, "envs_dirs": ["/envs"], "root_prefix": "/"}
         ran = []
@@ -253,7 +253,7 @@ class TestFindingConda(unittest.TestCase):
         import tempfile
         from unittest import mock
 
-        from engine import conda_utils
+        from zmart_analysis import conda_utils
 
         with tempfile.TemporaryDirectory() as root:
             env = Path(root) / "envs" / "ZMART--demo--main"

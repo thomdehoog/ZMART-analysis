@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from engine import Engine, ScopeError
+from zmart_analysis import Engine, ScopeError
 
 pytestmark = pytest.mark.integration
 
