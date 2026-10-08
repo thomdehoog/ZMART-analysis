@@ -43,8 +43,7 @@ def _require_focus_environment() -> None:
     environments/setup_env.py creates. Without it the test is skipped, not
     failed.
     """
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "engine"))
-    from conda_utils import env_exists, get_conda_info
+    from zmart_analysis.conda import env_exists, get_conda_info
 
     try:
         info = get_conda_info()

@@ -9,11 +9,11 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# conda_utils lives in the shared engine, three directories up — on the path
-# before it is imported, so this runs as a plain script from anywhere.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "engine"))
+# The repository root goes on the path first, so this runs as a plain script
+# from anywhere, whether or not the package has been installed.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from conda_utils import clean_workflow_envs  # noqa: E402
+from zmart_analysis.environments import clean_workflow_envs  # noqa: E402
 
 if __name__ == "__main__":
     clean_workflow_envs(workflow="object_analysis")
