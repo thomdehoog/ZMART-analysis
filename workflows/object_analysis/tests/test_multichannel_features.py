@@ -2,21 +2,15 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
+import extract_classical_features as features
 import numpy as np
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-import extract_classical_features as features  # noqa: E402
 
 
 def _pd(masks, image):
     return {
         "metadata": {"verbose": 0},
-        "segment": {"masks": masks},
-        "preprocess": {"image": image},
+        "detect_objects": {"masks": masks, "image": image},
     }
 
 
@@ -35,7 +29,7 @@ def test_three_channel_intensity_columns_are_row_aligned():
         image[masks == 3, channel] = scale * 3 + channel
 
     pd = features.run(_pd(masks, image), {})
-    props = pd["extract_features"]["properties"]
+    props = pd["extract_classical_features"]["properties"]
 
     assert list(props["label"]) == [1, 3]
     assert props["intensity_mean"].tolist() == pytest.approx([10.0, 30.0])
@@ -57,7 +51,7 @@ def test_two_channel_intensity_processes_available_channels_only():
     image[masks == 3, 1] = 70.0
 
     pd = features.run(_pd(masks, image), {})
-    props = pd["extract_features"]["properties"]
+    props = pd["extract_classical_features"]["properties"]
 
     assert props["intensity_mean"].tolist() == pytest.approx([5.0, 7.0])
     assert props["intensity_mean_c0"].tolist() == pytest.approx([5.0, 7.0])
@@ -74,7 +68,7 @@ def test_multichannel_intensity_extras_are_channel_specific():
         image[masks == 1, channel] = bg * 10.0
 
     pd = features.run(_pd(masks, image), {}, extras=["intensity"], bg_radius=1)
-    props = pd["extract_features"]["properties"]
+    props = pd["extract_classical_features"]["properties"]
 
     assert props["bg_global_mean"].tolist() == pytest.approx([1.0])
     assert props["bg_global_mean_c0"].tolist() == pytest.approx([1.0])
@@ -95,7 +89,7 @@ def test_multichannel_texture_columns_are_channel_specific():
     image[..., 2] = yy + xx
 
     pd = features.run(_pd(masks, image), {}, extras=["texture"])
-    props = pd["extract_features"]["properties"]
+    props = pd["extract_classical_features"]["properties"]
 
     for key in (
         "prewitt_magnitude_mean",
@@ -128,9 +122,9 @@ def test_immunohistochemistry_multichannel_features_smoke():
     masks[260:340, 300:390] = 2
 
     pd = features.run(_pd(masks, image), {}, extras=["gradients"])
-    props = pd["extract_features"]["properties"]
+    props = pd["extract_classical_features"]["properties"]
 
-    assert pd["extract_features"]["n_cells"] == 2
+    assert pd["extract_classical_features"]["n_objects"] == 2
     for channel in range(3):
         assert f"intensity_mean_c{channel}" in props
         assert f"prewitt_magnitude_mean_c{channel}" in props

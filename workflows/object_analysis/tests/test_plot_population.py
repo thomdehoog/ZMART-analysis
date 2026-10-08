@@ -7,14 +7,11 @@ run for real on a population small enough to be quick.
 from __future__ import annotations
 
 import csv
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from plot_population import run  # noqa: E402
+from plot_population import run
 
 
 def _a_population(where: Path, n: int = 60) -> Path:

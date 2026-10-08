@@ -1,4 +1,10 @@
-"""CLI runner for the object_analysis workflow."""
+"""Run the object_analysis recipe on one image from the command line.
+
+    python run_pipeline.py image.tif --pixel-size-um 0.65,0.65
+
+The flags are the keys of the payload the README describes under "Input",
+one each. The object count is printed when the tile is done.
+"""
 
 from __future__ import annotations
 
@@ -18,14 +24,9 @@ WORKFLOW_DIR = Path(__file__).resolve().parent
 CLASSICAL_YAML = WORKFLOW_DIR / "pipelines" / "object_analysis.yaml"
 
 
-def _image_size_px(path: Path, channel_axis=None) -> list[int]:
-    """The (nx, ny) of a position, from its own metadata.
-
-    ``channel_axis`` is accepted and ignored: an image says what its axes
-    are, and this used to have to guess from the shape.
-    """
-    sys.path.insert(0, str(WORKFLOW_DIR / "steps"))
-    from detect_objects import load_plane
+def _image_size_px(path: Path) -> list[int]:
+    """The (nx, ny) of a position, from its own metadata."""
+    from shared.image_io import load_plane
 
     _, metadata = load_plane(path)
     axes, shape = metadata["axes"], metadata["shape"]
@@ -94,14 +95,6 @@ def main():
         help="Comma-separated channel indices for 2D+channels input; "
         "default auto keeps up to three channels.",
     )
-    parser.add_argument(
-        "--channel-axis",
-        type=int,
-        choices=(-1, 0, 2),
-        default=None,
-        help="Channel axis for 3D TIFF input: 0 for (C,H,W), -1 or 2 for "
-        "(H,W,C). Required when orientation is ambiguous.",
-    )
     parser.add_argument("--gpu", action="store_true", default=False)
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args()
@@ -113,10 +106,9 @@ def main():
         "tile_stage_xy_um": args.stage_xy_um,
         "tile_z_um": args.z_um,
         "source_pixel_size_um": args.pixel_size_um,
-        "source_image_size_px": _image_size_px(image_path, args.channel_axis),
+        "source_image_size_px": _image_size_px(image_path),
         "image_to_stage": args.image_to_stage,
         "channels": args.channels,
-        "channel_axis": args.channel_axis,
         "gpu": args.gpu,
     }
     if args.output_dir:

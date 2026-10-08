@@ -8,7 +8,6 @@ out. The units are plain numbers, as in the capture label.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -17,9 +16,8 @@ import pytest
 pytest.importorskip("pandas")
 pytest.importorskip("sklearn")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from compare_populations import run as compare_run  # noqa: E402
-from summarise_population import run as summarise_run  # noqa: E402
+from compare_populations import run as compare_run
+from summarise_population import run as summarise_run
 
 
 def _tile(rng, n, area_mean, tile):
@@ -163,7 +161,6 @@ def test_both_steps_write_their_tables_when_asked(tmp_path):
 
 def test_the_scoped_recipe_registers_with_its_two_scopes():
     recipe = Path(__file__).resolve().parents[1] / "pipelines" / "object_analysis_scoped.yaml"
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
     from zmart_analysis.pipeline import parse_yaml, split_phases
 
     _, steps, metadata = parse_yaml(recipe)

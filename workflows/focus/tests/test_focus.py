@@ -8,15 +8,12 @@ is without either being tuned.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import tifffile
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from score_focus import run  # noqa: E402
+from score_focus import run
 
 SHARP_AT = 4
 N_PLANES = 9

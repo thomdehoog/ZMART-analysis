@@ -25,7 +25,6 @@ metadata:
 object_detection:
   - detect_objects:       # Cellpose; for the watershed, see object_analysis_fast.yaml
       channels: null
-      channel_axis: null
       cellprob_threshold: 0.0
       flow_threshold: 0.4
       niter: null

@@ -1,4 +1,37 @@
-"""extract_classical_features -- per-object features for one detected tile."""
+"""extract_classical_features -- measure every object the detector found.
+
+Takes the label image and the channels that ``detect_objects`` published,
+and measures each object: its size and shape, how bright it is in every
+channel, how far its neighbours are, and, when asked, its texture. Each
+measurement is one column, one value per object, in the order of the
+labels. ``build_object_table`` turns them into the table that readers
+rely on.
+
+The base set is scikit-image's ``regionprops_table``: area, perimeter,
+axes, orientation, bounding box, intensity mean, min, max and standard
+deviation. A few cheap ratios are always added to it (circularity, aspect
+ratio, the integrated intensity). The optional families are chosen with
+``extras`` in the recipe:
+
+    intensity       global_bg, local_bg      the background around each object
+    neighbourhood   neighbours               distances to and counts of neighbours
+    texture         gradients, stat_texture, lbp, fft, glrlm
+    morphology      rg_spread                radius of gyration
+
+A name may be a family or one of its members, and ``all`` takes every one.
+The per-object texture families (lbp, fft, glrlm) loop over every object
+in Python and are the slow ones; the fast recipe leaves them out.
+
+When the image has several channels, every intensity measurement is
+reported per channel too: ``intensity_mean`` is the first channel, and
+``intensity_mean_c0``, ``intensity_mean_c1``, ... are each channel by
+index.
+
+Publishes under ``pipeline_data["extract_classical_features"]``::
+
+    properties   one column per measurement, one value per object
+    n_objects    how many objects were measured
+"""
 
 from __future__ import annotations
 
@@ -16,10 +49,10 @@ METADATA = {
 
 
 # ---------------------------------------------------------------------------
-# Default feature configuration. Native properties are passed to
-# regionprops_table; compatibility properties in SYNTHETIC_PROPERTIES are
-# computed below so the output contract is stable across scikit-image
-# versions.
+# The base measurements. Most are asked of scikit-image's regionprops_table
+# by name. intensity_median is not one scikit-image offers under a stable
+# name, so it is measured here, and the column means the same whichever
+# version of scikit-image the environment holds.
 # ---------------------------------------------------------------------------
 
 SYNTHETIC_PROPERTIES = {"intensity_median"}
@@ -63,7 +96,6 @@ DEFAULT_PROPERTIES = [
 
 
 def run(pipeline_data: dict, state: dict, **params) -> dict:
-    """Engine entry point. See module docstring for the full parameter set."""
     from skimage.measure import regionprops_table
 
     verbose = pipeline_data["metadata"].get("verbose", 0)
@@ -80,8 +112,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
             f"{sorted(EXTRAS)}."
         )
 
-    masks = np.asarray(pipeline_data["segment"]["masks"])
-    img = _normalise_image_axes(pipeline_data["preprocess"]["image"], masks.shape)
+    detection = pipeline_data["detect_objects"]
+    masks = np.asarray(detection["masks"])
+    img = _normalise_image_axes(detection["image"], masks.shape)
 
     spacing_kw = {"spacing": tuple(pixel_size_um)} if pixel_size_um else {}
     native_properties = [prop for prop in properties if prop not in SYNTHETIC_PROPERTIES]
@@ -92,19 +125,19 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     _normalise_intensity_columns(props, img)
 
     labels = np.asarray(props.get("label", []))
-    n_cells = int(len(labels))
+    n_objects = int(len(labels))
 
-    if n_cells > 0:
+    if n_objects > 0:
         _add_derived(props)
         if extras:
             _run_extras(props, masks, img, labels, extras, params, pixel_size_um)
 
     if verbose >= 2:
-        print(f"  [extract_features] cells: {n_cells}, properties: {sorted(props)}")
+        print(f"  [extract_classical_features] objects: {n_objects}, columns: {sorted(props)}")
 
-    pipeline_data["extract_features"] = {
+    pipeline_data["extract_classical_features"] = {
         "properties": props,
-        "n_cells": n_cells,
+        "n_objects": n_objects,
     }
     return pipeline_data
 
@@ -112,7 +145,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 def _add_synthetic_properties(
     props: dict, masks: np.ndarray, img: np.ndarray, properties: list[str]
 ) -> None:
-    """Add requested properties that are not portable regionprops names."""
+    """Measure the properties scikit-image does not offer under a stable name."""
     if "intensity_median" not in properties:
         return
 
@@ -127,7 +160,7 @@ def _add_synthetic_properties(
 
 
 def _intensity_medians(masks: np.ndarray, img: np.ndarray) -> np.ndarray:
-    """Return per-label median intensity in ascending label order."""
+    """The median intensity inside each object, in label order."""
     from skimage.measure import regionprops
 
     medians = []
@@ -142,7 +175,7 @@ def _intensity_medians(masks: np.ndarray, img: np.ndarray) -> np.ndarray:
 
 
 def _normalise_image_axes(img, mask_shape: tuple[int, int]) -> np.ndarray:
-    """Return image as 2D or channel-last ``(H, W, C)`` aligned to masks."""
+    """The image as one plane, or as channels-last ``(H, W, C)``, the size of the masks."""
     arr = np.asarray(img)
     if arr.ndim == 2 and arr.shape == mask_shape:
         return arr
@@ -154,24 +187,25 @@ def _normalise_image_axes(img, mask_shape: tuple[int, int]) -> np.ndarray:
 
 
 def _channel_images(img: np.ndarray) -> tuple[np.ndarray, ...] | None:
-    """Return per-channel 2D images when ``img`` is channel-last."""
+    """One plane per channel when the image has several; None for a single plane."""
     if np.asarray(img).ndim != 3:
         return None
     return tuple(img[..., idx] for idx in range(img.shape[-1]))
 
 
 def _primary_image(img: np.ndarray) -> np.ndarray:
-    """Return the primary 2D intensity image used for existing base columns."""
+    """The first channel: the plane the unsuffixed intensity columns measure."""
     channels = _channel_images(img)
     return img if channels is None else channels[0]
 
 
 def _normalise_intensity_columns(props: dict, img: np.ndarray) -> None:
-    """Expose multichannel intensity stats as base + ``_cN`` columns.
+    """Name the per-channel intensity columns the way the table promises them.
 
-    scikit-image emits multichannel intensity columns as ``name-0`` /
-    ``name-1``. The workflow contract uses ``name`` for the primary channel
-    and ``name_c0`` / ``name_c1`` / ... for explicit per-channel columns.
+    scikit-image calls them ``name-0``, ``name-1``, ... . The table uses
+    ``name`` for the first channel and ``name_c0``, ``name_c1``, ... for
+    each channel by index, so a reader never has to know how many there
+    were.
     """
     channels = _channel_images(img)
     if channels is None:
@@ -196,18 +230,17 @@ def _normalise_intensity_columns(props: dict, img: np.ndarray) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Always-on derived columns.
-# Each is added only if its sources are present in ``props``, so trimming
-# the native regionprops set naturally trims its derivatives.
+# Ratios that are always added. Each one needs a few base columns and is
+# added only when they are there, so a recipe that asks for fewer base
+# properties gets fewer ratios and no error.
 # ---------------------------------------------------------------------------
 
 
 def _add_derived(props: dict) -> None:
-    """Cheap algebraic derivatives of the native regionprops set.
+    """A few ratios of the base measurements that are useful for gating.
 
-    All divisions are wrapped in ``np.errstate`` so degenerate objects
-    (zero perimeter, zero minor axis, zero mean intensity) yield NaN
-    through the surrounding ``np.where`` without emitting warnings.
+    An object with a zero perimeter, a zero minor axis or a zero mean
+    intensity would divide by zero; it gets NaN instead, quietly.
     """
     with np.errstate(divide="ignore", invalid="ignore"):
         if {"area", "perimeter_crofton"} <= props.keys():
@@ -221,16 +254,17 @@ def _add_derived(props: dict) -> None:
             props["aspect_ratio"] = np.where(mn > 0, maj / mn, np.nan)
 
         if "orientation" in props:
-            # skimage `orientation` is the angle from the row axis in
-            # [-pi/2, pi/2]. Convert to angle from the x-axis in [0, 180):
-            # horizontal major axis -> 0 deg, vertical major axis -> 90 deg.
+            # scikit-image measures the angle from the row axis, between
+            # -90 and 90 degrees. Here it becomes the angle from the x axis
+            # between 0 and 180: a long axis lying flat is 0 degrees, one
+            # standing upright is 90.
             props["orientation_deg"] = (90.0 - np.degrees(props["orientation"])) % 180.0
 
         if "intensity_mean" in props:
             mean_i = np.asarray(props["intensity_mean"], dtype=float)
-            # ``num_pixels`` is the genuine pixel count even when
-            # ``spacing=`` is set, which keeps intensity_total a real
-            # integrated intensity in any unit configuration.
+            # ``num_pixels`` is the count of pixels even when ``area`` is
+            # in micrometres (a pixel size was given), so the total stays
+            # a sum of pixel values whatever the units.
             if "num_pixels" in props:
                 n_px = np.asarray(props["num_pixels"], dtype=float)
                 props["intensity_total"] = mean_i * n_px
@@ -266,40 +300,25 @@ def _intensity_channel_indices(props: dict) -> list[int]:
 
 
 # ---------------------------------------------------------------------------
-# Extras dispatcher.
+# The optional families. Each is a function that takes the context below
+# and adds its columns to ``props``. ``EXTRAS`` at the bottom of the file
+# lists them.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _Context:
-    """Bundle handed to every extras handler. Handlers mutate ``props`` to
-    add output columns; everything else is read-only.
+    """What every optional family is handed: the same picture, once.
 
-    Fields
-    ------
-    props : dict
-        Mutable output dict. Handlers add named columns to it.
-    masks : ndarray
-        Int label image of shape (H, W).
-    img : ndarray
-        Primary 2D intensity image (any non-negative dtype).
-    channel_images : tuple[ndarray, ...] | None
-        Per-channel 2D images when the input was multichannel. Handlers use
-        this to add explicit ``_cN`` columns while preserving existing base
-        columns as channel 0.
-    labels : ndarray
-        1D array of label ids, in row order.
-    slices : list | None
-        ``scipy.ndimage.find_objects(masks)`` when at least one requested
-        extra needs per-object bounding boxes; otherwise None. Indexed as
-        ``slices[lab - 1]`` for label ``lab``; ``None`` for absent labels.
-    params : dict
-        Raw YAML params dict; handlers read their own keys with sensible
-        defaults so the dispatcher stays handler-agnostic.
-    pixel_size_um : tuple | list | None
-        ``(dy, dx)`` mirror of the spacing passed to regionprops_table.
-        Handlers that own coordinates (e.g. radius of gyration, neighbour
-        distances) read this to scale to physical units.
+    ``props`` is the only thing a family changes; it adds its columns
+    there. ``masks`` is the label image and ``img`` the first channel.
+    ``channel_images`` holds one plane per channel when there are several,
+    so a family can add ``_c0``, ``_c1``, ... columns beside the base one.
+    ``labels`` lists the objects in row order. ``slices`` is the bounding
+    box of each object (``slices[label - 1]``), worked out once when any
+    family asked for it. ``params`` is the recipe's parameters, in which a
+    family reads its own keys. ``pixel_size_um`` is ``(dy, dx)`` when a
+    pixel size was given, so distances can be in micrometres.
     """
 
     props: dict
@@ -313,12 +332,11 @@ class _Context:
 
 
 def _run_extras(props, masks, img, labels, extras, params, pixel_size_um) -> None:
-    """Build the context once, then dispatch each requested handler.
+    """Build the context once, then run each family asked for.
 
-    Handler execution order is family-then-name so outputs are
-    reproducible. Order does not affect correctness because handlers do
-    not read each other's columns -- they all consume default regionprops
-    and derived columns.
+    They run in a fixed order (family, then name) so two runs add their
+    columns the same way. The order does not change any value: no family
+    reads another's columns, only the base measurements.
     """
     from scipy.ndimage import find_objects
 
@@ -341,11 +359,10 @@ def _run_extras(props, masks, img, labels, extras, params, pixel_size_um) -> Non
 
 
 def _expand_extras(extras):
-    """Expand group names to their constituent extras.
+    """The families asked for, with each family name opened into its members.
 
-    Returns ``(expanded_set, unknown_names)``. Group names and individual
-    extra names may be mixed freely; duplicates de-dupe naturally because
-    the result is a set.
+    Returns ``(names, unknown)``: the members to run, and any name that is
+    neither a family nor a member. Families and members may be mixed.
     """
     expanded: set[str] = set()
     unknown: set[str] = set()
@@ -386,9 +403,9 @@ def _texture_scale(img: np.ndarray, masks: np.ndarray, params: dict) -> float:
 
 
 def _to_uint8(img: np.ndarray, scale: float) -> np.ndarray:
-    """Map an image to ``uint8 [0, 255]`` with *scale* at 255, for texture
-    features that expect 8-bit input, currently LBP. Values above the scale
-    are clipped."""
+    """The image as 8-bit, with *scale* at 255, for the texture measures
+    that need 8-bit input (the local binary pattern). Values above the
+    scale are clipped."""
     arr = np.asarray(img)
     return np.clip(arr.astype(np.float64) / scale * 255.0, 0, 255).astype(np.uint8)
 
@@ -396,12 +413,12 @@ def _to_uint8(img: np.ndarray, scale: float) -> np.ndarray:
 def _per_label_mean(
     values_image: np.ndarray, label_image: np.ndarray, labels: np.ndarray
 ) -> np.ndarray:
-    """Per-label mean of ``values_image`` via two ``np.bincount`` passes.
+    """The mean of ``values_image`` inside each object.
 
-    Equivalent to ``[values_image[label_image == lab].mean() for lab in
-    labels]`` but vectorised: one sum-by-label pass and one count-by-label
-    pass over the flattened image, then one division per label. Avoids the
-    O(N_labels * H * W) cost of repeated ``label_image == lab`` scans.
+    Done in two passes over the whole image (a sum per label and a count
+    per label, both with ``np.bincount``) rather than one scan of the
+    image per object, which is what makes it fast on a tile with
+    thousands of objects.
     """
     n_lbl = int(label_image.max()) + 1
     flat_lbl = label_image.ravel()
@@ -415,12 +432,9 @@ def _per_label_mean(
 
 
 def _bbox_padded(slice_pair, pad: int, shape) -> tuple:
-    """Return a ``(slice, slice)`` pair padded by ``pad`` pixels on every
-    side and clipped to ``shape``.
-
-    Used by handlers that need a ring of context around the object's
-    bounding box (the local_bg collar, for example).
-    """
+    """An object's bounding box widened by ``pad`` pixels on every side,
+    kept inside the image. For the families that need a ring of context
+    around the object, such as the local background collar."""
     sy, sx = slice_pair
     return (
         slice(max(0, sy.start - pad), min(shape[0], sy.stop + pad)),
@@ -429,13 +443,13 @@ def _bbox_padded(slice_pair, pad: int, shape) -> tuple:
 
 
 def _assign_columns(props: dict, values: dict[str, np.ndarray], suffix: str = "") -> None:
-    """Assign feature columns, optionally suffixing each column name."""
+    """Add the columns to ``props``, with ``suffix`` on each name."""
     for key, value in values.items():
         props[f"{key}{suffix}"] = value
 
 
 def _assign_channelised(ctx: _Context, compute: Callable[[np.ndarray], dict]) -> None:
-    """Assign base feature columns plus per-channel ``_cN`` columns."""
+    """Add the columns for the first channel, then ``_cN`` ones for every channel."""
     _assign_columns(ctx.props, compute(ctx.img))
     if ctx.channel_images is None:
         return
@@ -449,11 +463,11 @@ def _assign_channelised(ctx: _Context, compute: Callable[[np.ndarray], dict]) ->
 
 
 def _global_bg_mean(ctx: _Context) -> None:
-    """Mean intensity over all unlabelled pixels (``label == 0``).
+    """The mean of every pixel that belongs to no object.
 
-    The result is a single scalar broadcast across all rows so it can be
-    selected, sorted, or compared like any per-object column. ``NaN`` if
-    every pixel is labelled.
+    One number for the whole tile, repeated on every row so it can be
+    selected, sorted or compared like any other column. NaN when every
+    pixel is inside an object.
 
     Adds:
         bg_global_mean
@@ -469,19 +483,14 @@ def _global_bg_mean(ctx: _Context) -> None:
 
 
 def _local_bg_collar(ctx: _Context) -> None:
-    """Background mean from a per-object collar.
+    """The background right around each object, from a collar.
 
-    For each object the collar is constructed inside the bounding box
-    padded by ``bg_radius + 1``:
-
-        1. fill internal holes (so a ring's hole is treated as object,
-           not background);
-        2. dilate by a disk of ``bg_radius`` pixels to reach into the
-           surround;
-        3. subtract the filled object (we want the surround, not the
-           object itself);
-        4. intersect with ``crop_lab == 0`` so neighbouring labels whose
-           dilation overlaps are excluded.
+    The collar is the ring of pixels within ``bg_radius`` of the object
+    that belong to no object. It is built inside the object's bounding
+    box, widened by the radius: the object's holes are filled first (the
+    hole in a ring is not background), the filled shape is grown by the
+    radius, the object itself is taken out, and so is any pixel of a
+    neighbouring object the ring reached into.
 
     Adds:
         bg_local_mean         per-object collar mean
@@ -531,12 +540,10 @@ def _local_bg_values(
 
 
 def _add_local_bg_derivatives(props: dict, bg_local: np.ndarray, suffix: str = "") -> None:
-    """Compute the four background-corrected intensity columns.
+    """The four intensity columns corrected for the local background.
 
-    Split out from ``_local_bg_collar`` so the bbox loop stays focussed on
-    collar construction and the algebra reads in one place. ``np.errstate``
-    suppresses the harmless divide-by-zero that surfaces inside
-    ``np.where`` when ``bg_local`` is zero for some objects.
+    An object whose collar is zero gets NaN for the ratios instead of a
+    division warning.
     """
     with np.errstate(divide="ignore", invalid="ignore"):
         mean_key = f"intensity_mean{suffix}"
@@ -562,11 +569,10 @@ def _add_local_bg_derivatives(props: dict, bg_local: np.ndarray, suffix: str = "
 
 
 def _neighbour_features(ctx: _Context) -> None:
-    """Object-to-object spatial features.
+    """How close each object is to the others.
 
-    Distances and radii are in centroid-coordinate units: pixels by
-    default, microns when ``pixel_size_um`` was passed to
-    ``regionprops_table`` (centroids come back scaled).
+    Distances and radii are in the units of the centroids: pixels, or
+    micrometres when ``pixel_size_um`` was given.
 
     Adds:
         nn_distance              distance to the closest other object
@@ -578,8 +584,8 @@ def _neighbour_features(ctx: _Context) -> None:
                                  ``[5, 50, 250]``); each holds the count of
                                  other objects within ``R`` units.
 
-    For a workflow with fewer than 2 objects all distances are ``NaN`` and
-    all counts are zero (no exception).
+    With fewer than two objects every distance is NaN and every count is
+    zero; nothing fails.
     """
     from scipy.spatial import cKDTree
 
@@ -601,11 +607,10 @@ def _neighbour_features(ctx: _Context) -> None:
             axis=1,
         )
         tree = cKDTree(pts)
-        # k=2 because the closest hit at every point is itself (distance 0).
+        # Two neighbours are asked for because the closest one is the point itself.
         d, _ = tree.query(pts, k=2)
         nn_dist = d[:, 1]
-        # Cap K at (n - 1) neighbours when the population is smaller than
-        # the requested K so the tree query stays well-defined.
+        # A small population has fewer than K others; ask for what there is.
         k_query = min(k + 1, n)
         if k_query > 1:
             d_k, _ = tree.query(pts, k=k_query)
@@ -628,11 +633,10 @@ def _neighbour_features(ctx: _Context) -> None:
 
 
 def _gradient_means(ctx: _Context) -> None:
-    """Per-object mean of the Prewitt and Roberts gradient magnitudes.
+    """How much the intensity changes across each object, on average.
 
-    Each filter is evaluated once over the whole image (cheap
-    convolutions), then aggregated per label by ``_per_label_mean`` --
-    two ``np.bincount`` passes, no Python-level per-object loop.
+    Two edge filters (Prewitt and Roberts) are run once over the whole
+    image, and the result is averaged inside each object.
 
     Adds:
         prewitt_magnitude_mean
@@ -656,13 +660,12 @@ def _gradient_values(
 
 
 def _statistical_texture(ctx: _Context) -> None:
-    """Per-object intensity histogram statistics in a single vector pass.
+    """The shape of each object's intensity histogram.
 
-    The intensity image is quantised to ``n_intensity_bins`` (default
-    256). A single ``np.bincount`` over a ``(label * n_bins + value)`` key
-    produces every per-label histogram simultaneously; probabilities,
-    central moments, and Shannon entropy then follow as standard
-    vectorised reductions.
+    The intensities are quantised into ``n_intensity_bins`` levels
+    (default 256) and a histogram is made per object, all of them in one
+    pass. From each histogram come four numbers: how uniform it is, its
+    entropy, its skewness and its kurtosis.
 
     Adds:
         intensity_uniformity   sum(p^2)              ("Angular Second Moment")
@@ -729,13 +732,12 @@ def _statistical_texture_values(
 
 
 def _lbp_features(ctx: _Context) -> None:
-    """Six per-object statistics over the local binary pattern image.
+    """Six numbers describing the local binary pattern inside each object.
 
-    The LBP image is computed once over the whole intensity image (after
-    quantisation to uint8), so border pixels of an object encode neighbour
-    pixels from outside the object too. This is the standard whole-image
-    convention; for texture *strictly inside* the object, run LBP on
-    per-object crops instead.
+    The local binary pattern codes each pixel by which of its neighbours
+    are brighter than it; it is computed once over the whole image, after
+    quantisation to 8 bits, so a pixel at an object's edge also sees the
+    neighbours just outside. That is the usual convention.
 
     Adds:
         lbp_mean, lbp_std, lbp_energy, lbp_entropy,
@@ -803,20 +805,17 @@ def _lbp_values(
 
 
 def _fft_features(ctx: _Context) -> None:
-    """Six statistics over the magnitude spectrum of each object's bbox FFT.
+    """Six numbers describing each object's frequency content.
 
-    For each object the bounding-box crop is multiplied by the object mask
-    (background zeroed) and passed through ``np.fft.fft2``. Statistics are
-    over ``|F|``; the energy column reports ``sum(|F|**2)`` explicitly.
+    Each object's bounding box, with the background set to zero, goes
+    through a 2-D Fourier transform; the numbers describe the spread of
+    the magnitudes. The entropy is taken over a histogram of
+    ``fft_entropy_bins`` bins, because binning floats by unique value
+    (what ``skimage.measure.shannon_entropy`` does) would make every
+    object look alike.
 
-    Entropy uses an explicit ``fft_entropy_bins``-bin histogram over the
-    per-object magnitude range. ``skimage.measure.shannon_entropy`` is
-    avoided here because it bins by unique value and degenerates to
-    ``log(N)`` on float magnitudes.
-
-    No windowing or padding is applied. Switch to a windowed crop or a
-    fixed-size pad if you need cross-object comparability of high-
-    frequency power.
+    No windowing or padding is applied, so the high-frequency power of
+    two objects of different sizes is not directly comparable.
 
     Adds:
         fft_mean, fft_std, fft_energy, fft_entropy,
@@ -881,17 +880,18 @@ def _fft_values(
 
 
 def _glrlm_features(ctx: _Context) -> None:
-    """Four gray-level run-length features summed over four 2D directions.
+    """Four gray-level run-length features, summed over four directions.
 
-    The intensity image is quantised to ``glrlm_levels`` (default 16). For
-    each object the bounding-box crop is masked to ``-1`` outside the
-    object so runs never cross into neighbouring labels or background.
-    The four-direction summed run-length matrix ``P(g, r)`` is then built
-    one line at a time via ``_runs_in_line``.
+    A run is a stretch of pixels in a line with the same gray level, after
+    quantising to ``glrlm_levels`` levels (default 16). Pixels outside the
+    object are marked so a run never continues into the background or a
+    neighbour. The runs are counted along rows, columns and both
+    diagonals, and the four numbers summarise the count table: how uneven
+    the run lengths are, how much dark and bright runs weigh, and how
+    uneven the gray levels are.
 
-    Gray levels are stored 0-indexed in the matrix but 1-indexed in the
-    formulas (``g = matrix_row + 1``) to keep ``LGLRE`` finite for the
-    darkest gray level.
+    Gray levels count from one in the formulas, so the darkest level does
+    not divide by zero.
 
     Adds:
         glrlm_rlnu   run length non-uniformity     sum_r (sum_g P)^2 / TR
@@ -958,14 +958,11 @@ def _glrlm_values(
 
 
 def _runs_in_line(line: np.ndarray):
-    """Run-length decomposition of a 1D integer array.
+    """The runs in one line of pixels: ``(gray_levels, run_lengths)``.
 
-    Pixels marked as negative (the background sentinel ``-1`` placed by
-    ``_glrlm_features`` outside the object) are filtered after run
-    detection, so runs never span across the object boundary.
-
-    Returns ``(gray_levels, run_lengths)`` -- two 1D arrays of equal
-    length.
+    Pixels marked negative (the background mark set outside the object)
+    are dropped after the runs are found, so no run crosses the object's
+    edge.
     """
     if line.size == 0:
         return np.empty(0, dtype=line.dtype), np.empty(0, dtype=np.int64)
@@ -979,11 +976,9 @@ def _runs_in_line(line: np.ndarray):
 
 
 def _glrlm_matrix_4dir(crop_q: np.ndarray, n_levels: int) -> np.ndarray:
-    """Sum of run-length matrices over directions 0, 45, 90, 135 degrees.
+    """The run count table summed over 0, 45, 90 and 135 degrees.
 
-    Returns a matrix of shape ``(n_levels, max(H, W))`` where the second
-    axis is indexed by ``run_length - 1``. Most entries are zero for
-    typical objects; dense storage keeps inner-loop indexing O(1).
+    Row ``g`` is a gray level and column ``r`` a run length of ``r + 1``.
     """
     H, W = crop_q.shape
     if H == 0 or W == 0:
@@ -1009,14 +1004,15 @@ def _glrlm_matrix_4dir(crop_q: np.ndarray, n_levels: int) -> np.ndarray:
 
 
 def _radius_of_gyration_and_spread(ctx: _Context) -> None:
-    """Radius of gyration and normalised intensity radial variance.
+    """How spread out each object is, and whether its brightness sits at the centre.
 
-    Both quantities are computed from the per-object bounding-box crop;
-    ``regionprops_table('coords')`` is intentionally avoided because it
-    materialises a per-object Python object array that scales poorly with
-    object count.
+    The radius of gyration is the root mean square distance of the
+    object's pixels from its centre. The radial variance compares where
+    the intensity sits with where the pixels sit: 1 for an object that is
+    evenly bright, below 1 when the brightness is concentrated at the
+    centre, above 1 when it sits at the rim.
 
-    Closed-form sanity values for a uniform-intensity disk of radius R::
+    For an evenly bright disc of radius R::
 
         radius_of_gyration                         = R / sqrt(2)
         intensity_radial_variance_normalised       = 1
@@ -1059,15 +1055,13 @@ def _radius_of_gyration_and_spread(ctx: _Context) -> None:
 
 
 # ===========================================================================
-# Registry. Single source of truth for which extras exist, which family
-# they belong to, and which need per-object bounding boxes. ``EXTRAS``
-# drives dispatch, group expansion, validation messages, and the public
-# ``FEATURE_GROUPS`` table.
+# The list of optional families: which exist, which family each belongs
+# to, and which need the per-object bounding boxes. Everything else (the
+# recipe's ``extras``, the error message for an unknown name, the family
+# names) is derived from this one table.
 #
-# To add a new extra:
-#   1. write a ``_my_handler(ctx)`` function in the appropriate family
-#      section above;
-#   2. add an entry below.
+# To add a measurement: write a function above that takes the context and
+# adds its columns, then add a line here.
 # ===========================================================================
 
 

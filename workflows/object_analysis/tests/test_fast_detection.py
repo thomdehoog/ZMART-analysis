@@ -9,21 +9,14 @@ the segmentation's own identity.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
 pytest.importorskip("skimage")
 pytest.importorskip("scipy")
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
-from detect_objects import (  # noqa: E402
-    segmentation_params,
-    segmentation_params_hash,
-    watershed_masks,
-)
+from object_analysis.parts.settings import segmentation_params, segmentation_params_hash
+from object_analysis.parts.watershed import watershed_masks
 
 
 def a_field(*, side=512, radius=9, spacing=48, seed=0):
