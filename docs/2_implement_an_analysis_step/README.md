@@ -68,6 +68,9 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 | `**params` | The parameters under this step in the recipe. |
 
 **Return `pipeline_data`** with your output added under your step's name.
+The last step of a workflow may publish under the workflow's name instead,
+when that is what every reader will ask for: `build_object_table` publishes
+the object table under `object_analysis`.
 
 A step that returns anything but a dictionary fails its job. A step that
 raises fails only its own job. Its name and message appear under
@@ -271,14 +274,17 @@ workflows/object_analysis/
 ├── README.md                   what the workflow does and how to choose its settings
 ├── pipelines/                  the recipes (YAML)
 ├── steps/                      one Python file per step
+├── parts/                      the pieces the steps are built from, when a step
+│                               would otherwise grow long (object_analysis has one)
 ├── environments/
 │   ├── setup_env.py            the packages each environment needs
 │   └── clean_env.py            removes the environments again
 └── tests/
 ```
 
-Helpers more than one workflow uses live in `workflows/shared/`. A step
-file is loaded on its own, not as part of a package, so it adds
+Helpers more than one workflow uses live in `workflows/shared/`; helpers
+of one workflow live in its own `parts/`. A step file is loaded by its
+path, as a module named after it, not as part of a package, so it adds
 `workflows/` to the search path first:
 
 ```python
@@ -287,6 +293,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from shared.image_io import load_plane
+from object_analysis.parts.masks import filter_masks_by_area
 ```
 
 To add a workflow: copy `focus`, the smallest. Write the steps. Name each
@@ -296,13 +303,11 @@ tests and a short `README.md`.
 
 ## Test a step
 
-A step is an ordinary function. A test calls it directly:
+A step is an ordinary function. A test under `workflows/<name>/tests/`
+imports it by name and calls it directly; `workflows/conftest.py` puts
+every workflow's `steps/` folder on the search path for the tests:
 
 ```python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "steps"))
 from double_it import run
 
 
@@ -319,7 +324,7 @@ they skip rather than fail:
 
 | Marker | Needs |
 |---|---|
-| `cellpose` | Cellpose and scikit-image in the active environment. |
+| `cellpose` | The `ZMART--object_analysis--cellpose` environment, with Cellpose and its model. The test runs it through the engine. |
 | `conda_env` | The conda environments the workflow's `setup_env.py` makes. |
 | `pooch` | Public sample images, downloaded on first use. |
 | `slow` | More than about five seconds. |
