@@ -31,7 +31,7 @@ import time
 from multiprocessing.connection import Listener
 from pathlib import Path
 
-from .conda_utils import CONDA_CMD, get_conda_info
+from .conda import CONDA_CMD, get_conda_info
 
 logger = logging.getLogger(__name__)
 

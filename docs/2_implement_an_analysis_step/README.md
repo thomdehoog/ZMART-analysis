@@ -128,7 +128,7 @@ word for the environment. A workflow with one environment calls it `main`.
 needs only the classical steps does not pay for torch.
 
 The workflow's `environments/setup_env.py` lists the packages and a few
-checks. It hands the work to `engine/conda_utils.py`:
+checks. It hands the work to `zmart_analysis/environments.py`:
 
 ```bash
 python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main

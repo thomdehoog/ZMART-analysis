@@ -24,8 +24,9 @@ Architecture
     workers.py        the worker processes that run the steps, and their errors
     worker_script.py  runs inside a step's conda environment; imports nothing
                       from the engine, so it works in any environment
-    conda_utils.py    finds conda, and creates or removes a workflow's
-                      environments for its setup_env.py and clean_env.py
+    conda.py          finds conda and the environments it knows
+    environments.py   creates or removes a workflow's environments, for its
+                      setup_env.py and clean_env.py
 """
 
 from .engine import Engine
