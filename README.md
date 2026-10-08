@@ -76,7 +76,7 @@ The ZMART Analysis pipeline engine addresses all four of them.
 ## Want to give it a try?
 
 ```python
-from engine import Engine
+from zmart_analysis import Engine
 
 engine = Engine()
 engine.register("focus", "workflows/focus/pipelines/focus.yaml")
@@ -108,7 +108,7 @@ pip install -e .
 python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
-The package installs as `engine`: `from engine import Engine`. The
+The package installs as `engine`: `from zmart_analysis import Engine`. The
 tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status

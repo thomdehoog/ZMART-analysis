@@ -118,7 +118,7 @@ def engine_factory():
 
     The factory accepts the same kwargs as ``engine.Engine``.
     """
-    from engine import Engine
+    from zmart_analysis import Engine
 
     created = []
 
@@ -165,7 +165,7 @@ def _has_cellpose_runtime() -> tuple[bool, str]:
     if _CELLPOSE_RUNTIME_CACHE is not None:
         return _CELLPOSE_RUNTIME_CACHE
 
-    from engine.workers import _the_interpreter_in, _the_prefix_of
+    from zmart_analysis.workers import _the_interpreter_in, _the_prefix_of
 
     prefix = _the_prefix_of(CELLPOSE_ENVIRONMENT)
     if prefix is None:

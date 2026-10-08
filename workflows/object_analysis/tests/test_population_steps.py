@@ -164,7 +164,7 @@ def test_both_steps_write_their_tables_when_asked(tmp_path):
 def test_the_scoped_recipe_registers_with_its_two_scopes():
     recipe = Path(__file__).resolve().parents[1] / "pipelines" / "object_analysis_scoped.yaml"
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-    from engine.pipeline import parse_yaml, split_phases
+    from zmart_analysis.pipeline import parse_yaml, split_phases
 
     _, steps, metadata = parse_yaml(recipe)
     phases = split_phases(steps)

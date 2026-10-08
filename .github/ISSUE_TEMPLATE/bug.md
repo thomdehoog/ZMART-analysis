@@ -14,7 +14,7 @@ The recipe, the `submit` call, and a small input if you can.
 - OS:
 - Python:
 - conda version:
-- ZMART Analysis version (`engine.__version__`):
+- ZMART Analysis version (`zmart_analysis.__version__`):
 
 **From `engine.status(name)["failures"]`**
 ```

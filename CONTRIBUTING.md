@@ -25,7 +25,7 @@ downloaded sample images carry the markers `conda_env`, `cellpose` and
 
 ## What goes where
 
-- `engine/` is the engine. Changes there come with a test in `tests/`.
+- `zmart_analysis/` is the engine. Changes there come with a test in `tests/`.
 - A workflow lives in `workflows/<name>/` with its recipes, steps,
   environment scripts and tests. [Part 2 of the
   docs](docs/2_implement_an_analysis_step/README.md) says how a step is

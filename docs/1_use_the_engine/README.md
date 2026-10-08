@@ -40,7 +40,7 @@ for the next. `submit` returns at once.
 ## Engine()
 
 ```python
-from engine import Engine
+from zmart_analysis import Engine
 
 engine = Engine()
 ```
