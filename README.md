@@ -75,15 +75,9 @@ The ZMART Analysis pipeline engine addresses all four of them.
 
 ## Want to give it a try?
 
-1. **[Use the engine](docs/1_use_the_engine/README.md).** Every call, the
-   recipe format, scopes, workers, and what comes back.
-   Tutorial: [notebook](docs/1_use_the_engine/tutorial.ipynb).
-2. **[Implement an analysis step](docs/2_implement_an_analysis_step/README.md).**
-   The one function a step needs, its own environment, and where everything
-   lives. Tutorial: [notebook](docs/2_implement_an_analysis_step/tutorial.ipynb).
-3. **[The workflows we use](docs/3_workflows_we_use/README.md).** Focus,
-   object analysis and driver configuration: what each does and where to
-   start.
+1. **[Use the engine](docs/1_use_the_engine/README.md)**
+2. **[Implement an analysis step](docs/2_implement_an_analysis_step/README.md)**
+3. **[The workflows we use](docs/3_workflows_we_use/README.md)**
 
 ## Install it
 
