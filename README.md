@@ -126,8 +126,10 @@ Zurich (thom.dehoog@zmb.uzh.ch, thomdehoog@gmail.com).
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details, and [CITATION.cff](CITATION.cff)
-for how to cite ZMART Analysis.
+MIT License. See [LICENSE](LICENSE) for details.
+
+If the code in this repository inspires you, or you use it or build on it, please acknowledge it.
+The [CITATION.cff](CITATION.cff) file says how to cite it.
 
 ## Links
 
