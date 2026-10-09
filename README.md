@@ -119,21 +119,6 @@ This is a release candidate. The step format, the recipe layout and the
 before 1.0. If you build a workflow on it, please open an issue so we can
 keep the contract honest together.
 
-## Testing
-
-```bash
-pip install -e ".[test]"
-pytest -m "not cellpose and not conda_env and not pooch"
-```
-
-This is what the continuous integration runs on every change, on Linux,
-macOS and Windows with Python 3.11 to 3.13, after `ruff check .` and `ruff format --check .`. Without
-the `-m` filter the suite also runs the tests that need the per-step conda
-environments, Cellpose with its model, and public sample images downloaded
-on first use. `tests/` holds the engine's tests and those of
-`workflows/shared/`; each workflow's steps are tested in its own
-`workflows/<name>/tests/`.
-
 ## Author
 
 Thom de Hoog, Center for Microscopy and Image Analysis (ZMB), University of
