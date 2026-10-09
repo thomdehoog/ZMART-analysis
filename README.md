@@ -75,16 +75,6 @@ The ZMART Analysis pipeline engine addresses all four of them.
 
 ## Want to give it a try?
 
-```python
-from zmart_analysis import Engine
-
-engine = Engine()
-engine.register("focus", "workflows/focus/pipelines/focus.yaml")
-engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
-print(engine.results("focus"))
-engine.shutdown()
-```
-
 1. **[Use the engine](docs/1_use_the_engine/README.md).** Every call, the
    recipe format, scopes, workers, and what comes back.
    Tutorial: [notebook](docs/1_use_the_engine/tutorial.ipynb).
