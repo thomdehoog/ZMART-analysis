@@ -1,49 +1,43 @@
 # 3. The workflows we use
 
 Three workflows ship with ZMART Analysis. Each is a folder under
-[`workflows/`](../../workflows) with its recipes, steps, environment
-scripts and a README of its own.
+[`workflows/`](../../workflows) with its recipes, its steps, its environment
+scripts and a README that explains its settings.
 
-```text
-workflows/
-  focus/                  find the sharp height in a z-stack
-  object_analysis/        detect objects, measure them, describe populations
-  driver_configuration/   measure what a driver needs to know about a microscope
-```
+| Workflow | What it does | What it needs |
+|---|---|---|
+| [`focus`](#focus) | Finds the sharp height in a z-stack. | One small environment. No GPU. |
+| [`object_analysis`](#object_analysis) | Detects objects, measures them and describes populations. | Up to three environments. A GPU for Cellpose. |
+| [`driver_configuration`](#driver_configuration) | Measures what a driver needs to know about a microscope. | One environment. No GPU. |
 
-To run one, see [Use the engine](../1_use_the_engine/README.md). To write
-one, see [Implement an analysis step](../2_implement_an_analysis_step/README.md).
+How to run a workflow is in [part 1](../1_use_the_engine/README.md). How to
+write one is in [part 2](../2_implement_an_analysis_step/README.md).
 
 ## focus
 
-Finds the sharp height in a z-stack. Every plane gets a sharpness score,
-and the height where it peaks is the focus. This is how the microscope
-finds the tissue before it images a position.
+Every plane of a z-stack gets a sharpness score. The height where the score
+peaks is the focus. This is how the microscope finds the tissue before it
+images a position.
 
 ```text
-focus.yaml:   score_focus   every plane scored, the peak refined between planes
+focus.yaml:   score_focus   scores every plane and reports the height of the peak
 ```
 
-Four measures are scored on every stack; `metric` in the recipe says which
-decides. `brenner` (default) gives a sharp peak on structured tissue,
-`vollath_f4` holds up on dim noisy fluorescence, `dct` ignores brightness,
-`intensity` is for sparse samples on a confocal.
+It is one step in one environment. Try this workflow first.
 
-One step, one environment, no GPU. Try this one first.
-
-→ [`workflows/focus/README.md`](../../workflows/focus/README.md)
+→ [`workflows/focus/README.md`](../../workflows/focus/README.md) explains
+how to choose a sharpness measure.
 
 ## object_analysis
 
-Finds the objects in an image, measures each, and publishes a table with
-one row per object. Detection is Cellpose on the GPU, or a faster classical
-method without one. Over the scopes the acquisition completes, a
-compartment's objects are described as a population and a carrier's
-compartments are laid side by side.
+Finds the objects in an image, measures each one, and returns a table with
+one row per object. Detection uses Cellpose on a GPU, or a faster classical
+method that needs no GPU. Two further steps describe the objects of a
+compartment as a population and compare the compartments of a carrier.
 
 ```text
 object_analysis.yaml:        detect_objects -> extract_classical_features -> build_object_table
-object_analysis_fast.yaml:   the same, classical detection, fewer texture features
+object_analysis_fast.yaml:   the same, with classical detection and fewer texture features
 object_detection.yaml:       detect_objects only: masks and a checkpoint
 object_analysis_scoped.yaml: the three steps per image, then
                              summarise_population (scope: compartment)
@@ -51,31 +45,26 @@ object_analysis_scoped.yaml: the three steps per image, then
 population_plots.yaml:       plot_population: a PCA or UMAP of a population
 ```
 
-This workflow uses most of what the engine offers: a step in its own
-environment, a model kept loaded, several workers for the classical steps,
-and steps that wait for a compartment or a carrier.
+Read this workflow to see everything the engine offers. It has steps in
+separate environments, a model that stays loaded, and steps that wait for a
+compartment or a carrier.
 
 → [`workflows/object_analysis/README.md`](../../workflows/object_analysis/README.md)
+describes the input, the output and the environments.
 
 ## driver_configuration
 
-Measures two things a [ZMART driver](https://github.com/thomdehoog/ZMART-drivers)
+Measures two things that a [ZMART driver](https://github.com/thomdehoog/ZMART-drivers)
 must know before it can steer the stage by what it sees. Both are measured
-from pictures alone, so the same steps serve every microscope.
+from pictures alone, so the same steps work on every microscope.
 
 ```text
-orientation.yaml:      measure_orientation     which way the picture is turned relative to the stage
+orientation.yaml:      measure_orientation     how the camera is turned relative to the stage,
+                                               and how much specimen one pixel covers
 objective_pair.yaml:   measure_objective_pair  how far apart two objectives look and focus
 ```
 
-**Orientation**: from three pictures of one field, at home and after a
-known move along each axis, the step reports how the camera is turned
-relative to the stage and how much specimen one pixel covers.
-
-**Objective pair**: a target found under a low-power lens is imaged again
-under a high-power one, and the two do not look at the same place or focus
-at the same height. The step measures both offsets.
-
-Both write a review picture so you can check the measurement by eye.
+Both steps write a review picture, so you can check the measurement by eye.
 
 → [`workflows/driver_configuration/README.md`](../../workflows/driver_configuration/README.md)
+explains which pictures each measurement needs.

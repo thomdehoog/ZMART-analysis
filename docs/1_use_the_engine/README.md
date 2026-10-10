@@ -1,30 +1,32 @@
 # 1. Use the engine
 
-How to run an analysis with the ZMART Analysis engine. This page is the
-reference. The [tutorial](tutorial.ipynb), a notebook, walks you through a first run.
+This page shows how to run an analysis with the ZMART Analysis engine. For
+a guided first run, open the [tutorial notebook](tutorial.ipynb).
 
-## Contents
+## A complete run
 
-1. [The idea](#the-idea)
-2. [Engine()](#engine)
-3. [register](#register)
-4. [Recipes](#recipes)
-5. [submit](#submit)
-6. [Scopes](#scopes)
-7. [Workers](#workers)
-8. [results](#results)
-9. [status](#status)
-10. [shutdown](#shutdown)
-11. [Errors](#errors)
-12. [What the engine does not do](#what-the-engine-does-not-do)
-13. [All calls](#all-calls)
+```python
+from zmart_analysis import Engine
 
-## The idea
+engine = Engine()
+engine.register("focus", "workflows/focus/pipelines/focus.yaml")
+engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
+engine.shutdown()                      # waits until the job has finished
 
-An analysis is a *recipe*: a YAML file that lists steps in order, with their
-parameters. Each step is one Python file with one function, `run`.
+for result in engine.results("focus"):
+    print(result["score_focus"]["peak_z_um"])
+```
 
-You register the recipe, submit images, and collect results.
+You make an engine, register a recipe, submit images and collect the
+results. The rest of this page explains each of these calls.
+
+Three words come back throughout:
+
+- A **recipe** is a YAML file. It lists the steps of an analysis, in order,
+  with their parameters.
+- A **step** is one Python file with one function, `run`.
+- A **worker** is a Python process that runs a step, in the conda
+  environment the step asks for.
 
 ```
 your script ──► Engine ──► worker (conda env A) ──► step 1
@@ -32,199 +34,115 @@ your script ──► Engine ──► worker (conda env A) ──► step 1
             ◄── results ◄──
 ```
 
-The engine never runs a step itself. It hands the work to a *worker*: a
-Python process in the conda environment the step asks for. A worker starts
-once and stays running, so a model loaded for the first image is still there
-for the next. `submit` returns at once.
+The engine never runs a step itself. It hands each job to a worker. A
+worker starts the first time it is needed and then stays running, so a
+model loaded for the first image is ready for the next one.
 
-## Engine()
+The conda environments must exist before the first run. Each workflow has a
+script that makes them; see [Install it](../../README.md#install-it).
+
+## Make an engine
 
 ```python
-from zmart_analysis import Engine
-
 engine = Engine()
 ```
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `idle_timeout` | `300.0` | Seconds a worker may sit idle before it is stopped. `None`: never. |
+| `idle_timeout` | `300.0` | Seconds a worker may sit idle before it is stopped. `None` means never. |
 | `max_concurrent` | `8` | How many jobs run at the same time. |
-| `execution_timeout` | `300.0` | Seconds one step may run before it is killed and its job fails. `None`: no limit. |
+| `execution_timeout` | `300.0` | Seconds one step may run before it is stopped and its job fails. `None` means no limit. |
 
-During an acquisition the gap between images is often longer than five
-minutes. Use `Engine(idle_timeout=None)` so no worker is lost while the
-stage moves.
+During an acquisition, the gap between two images is often longer than five
+minutes. Use `Engine(idle_timeout=None)` there, so no worker is stopped
+while the stage moves.
 
 `with Engine() as engine:` shuts the engine down when the block ends.
 
-## register
+## Register a recipe
 
 ```python
 engine.register("focus", "workflows/focus/pipelines/focus.yaml")
 ```
 
-`register(name, yaml_path)` reads the recipe and the `METADATA` at the top
-of each step file. No step code runs. The `name` is yours; every later call
-uses it.
+`register(name, yaml_path)` reads the recipe and checks that every step
+file exists. No step code runs yet. You choose the `name`, and every later
+call uses it. Registering the same name twice raises `ValueError`.
 
-Registering a name twice raises `ValueError`. A missing step file raises
-here, not later.
-
-Each step runs in a conda environment that the workflow's
-`environments/setup_env.py` makes. Run it once before the first `submit`
-(see [Install it](../../README.md#install-it)).
-
-## Recipes
+A recipe looks like this:
 
 ```yaml
 metadata:
   purpose: "Focus scoring for a z-stack"
   version: "1.0"
-  functions_dir: "../steps"     # where the step files are, relative to this file
-  levels: [carrier, compartment, group]   # the sample's levels, widest first (see Scopes)
-  verbose: 1                    # 0 is silent; the steps print progress above that
+  functions_dir: "../steps"
+  verbose: 1
 
 focus:
   - score_focus:
-      metric: brenner           # a parameter, handed to the step
+      metric: brenner
       skip_ends: 2
 ```
 
-- The first key that is not `metadata` names the recipe. The list under it
-  is the steps, in the order they run.
-- `purpose` and `version` are for the reader. `verbose` reaches every step
-  in `pipeline_data["metadata"]`.
-- A step is named after its file. `score_focus` is `score_focus.py` in
-  `functions_dir` (default `../steps`).
-- Everything under a step is a parameter for it, except two keys the engine
-  keeps:
+The `metadata` block describes the recipe:
 
 | Key | Meaning |
 |---|---|
-| `scope` | Run this step once per unit (a compartment, a carrier, ...), not once per image. See [Scopes](#scopes). |
-| `max_workers` | How many copies of this step may run at once. Overrides the step's `METADATA`. |
+| `purpose`, `version` | Notes for the reader. |
+| `functions_dir` | The folder with the step files, relative to the recipe. Default `../steps`. |
+| `verbose` | `0` is silent. Above that, the steps print progress. Default `2`. |
+| `levels` | Only for recipes with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
-A step with a `scope` starts a new phase. The steps after it, until the
-next `scope`, run in that same phase, on the same unit.
+The other top-level key, here `focus`, holds the steps in the order they
+run. A step is named after its file: `score_focus` is `score_focus.py`.
 
-A recipe cannot set a step's `environment`; the step file does
+Everything under a step is a parameter for that step, except two keys that
+the engine reads itself:
+
+| Key | Meaning |
+|---|---|
+| `scope` | Run this step once per group of images, not once per image. |
+| `max_workers` | How many copies of this step may run at once. This overrides the value in the step file. |
+
+A recipe cannot choose a step's conda environment. The step file does that
 ([part 2](../2_implement_an_analysis_step/README.md#metadata)).
 
-## submit
+## Submit images
 
 ```python
 engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
 ```
 
-`submit(name, data, scope=None, priority=None, complete=None)` hands one job
-to a recipe and returns at once.
+`submit(name, data, scope=None, priority=None, complete=None)` hands one
+job to a recipe. It returns at once; the work happens in the background.
 
 | Argument | Meaning |
 |---|---|
-| `data` | A dictionary. The steps see it as `pipeline_data["input"]`. What it holds is up to the recipe. |
-| `scope` | The units this image belongs to, e.g. `{"carrier": 1, "compartment": 3}`. Only for recipes with scoped steps. |
-| `priority` | Whole number. Higher runs first; equal runs in submission order. Default `0`. |
-| `complete` | The level, or levels, this image closes: `"compartment"` or `["compartment", "carrier"]`. |
+| `data` | A dictionary with the input for this job. The recipe decides what belongs in it; the comment at the top of a shipped recipe says what to submit. |
+| `priority` | A whole number. Higher runs first. Jobs with the same priority run in the order they were submitted. Default `0`. |
+| `scope`, `complete` | Only for recipes with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
-Submitting to an unknown name raises `KeyError`. After `shutdown`,
-`RuntimeError`.
+Submitting to a name that is not registered raises `KeyError`. Submitting
+after `shutdown` raises `RuntimeError`.
 
-## Scopes
-
-Some analysis runs per image. Some can only start when a whole unit is in:
-a stitch needs every image of a region, a summary needs every region. A
-step with a `scope` waits for that.
-
-The levels are names of your choosing. The shipped scoped recipe uses,
-narrowest first, **group**, **compartment** and **carrier**. A compartment
-is a well, a region of a slide, or part of a cleared sample. A carrier is
-the plate or the slide. The recipe lists its levels, widest first, in
-`metadata.levels`.
-
-Each image is submitted with the units it belongs to. The image that closes
-a unit says so:
-
-```python
-engine.submit("analysis", image, scope={"carrier": 1, "compartment": 3})
-engine.submit("analysis", last_image, scope={"carrier": 1, "compartment": 3},
-              complete="compartment")
-```
-
-In the recipe, steps before the first `scope` run on every image as it
-comes in. A step with `scope: compartment` runs once per compartment, after
-`complete="compartment"`, on that compartment's results. A later step with
-`scope: carrier` runs once per carrier, on its compartments:
-
-```yaml
-object_analysis:
-  - detect_objects:               # every image, as soon as it lands
-  - extract_classical_features:
-  - summarise_population:         # each compartment, once it is complete
-      scope: compartment
-  - compare_populations:          # each carrier, once it is complete
-      scope: carrier
-```
-
-What a scoped step receives is in
-[part 2](../2_implement_an_analysis_step/README.md#a-step-over-a-scope).
-
-### The rules
-
-- **A unit keeps its wider levels.** Compartment 3 of carrier 1 never mixes
-  with compartment 3 of carrier 2. With `levels` declared, this holds for
-  levels the recipe has no step for as well.
-- **A unit waits for its images.** On `complete`, the step waits until
-  every image of the unit submitted so far has finished.
-- **A wider unit waits for its narrower ones.** A carrier waits for a
-  compartment still being summarised, if that compartment was closed before
-  the carrier. Send a compartment's `complete` before its carrier's.
-- **Nothing is lost quietly.** A carrier step is told about a compartment
-  that failed, and about images of a compartment that was never closed.
-  Those images are kept, listed in `status()` under `held`, until their
-  compartment is closed. An image that arrives after its unit was closed
-  is held the same way.
-
-One image may close several levels: `complete=["compartment", "carrier"]`
-runs the compartment step, then the carrier step.
-
-A level no image names in its `scope`, such as `all`, collects everything:
-`scope: all` in the recipe, `complete="all"` on the last image.
-
-## Workers
-
-Every step runs in a worker: a Python process in the conda environment
-named in the step's `METADATA`. A step that names none, or names the
-engine's own, runs in a worker started with the engine's own Python.
-
-- A worker starts the first time its step is needed and stays running. A
-  step keeps anything expensive, such as a loaded model, in `state`.
-- `max_workers` above one gives a step that many workers.
-- `idle_timeout` stops a worker that sits idle; `execution_timeout` kills
-  a step that runs too long. See [Engine()](#engine).
-- A crashing step fails only its own job. The worker is replaced.
-
-## results
+## Collect results
 
 ```python
 for result in engine.results("focus"):
     print(result["score_focus"]["peak_z_um"])
 ```
 
-`results(name)` returns every result finished since the last call and
-removes them from the queue. Each is a dictionary:
+`results(name)` returns the results that finished since the last call. Each
+result is handed out once. A result is a dictionary:
 
 | Key | What it is |
 |---|---|
-| the step's name | What that step published. One key per step. |
-| `input` | What was submitted. |
-| `metadata` | Recipe name and file, the steps that ran, the `scope`, when it ran. |
-| `provenance` | Per step: `environment`, `python`, a `fingerprint` of the installed packages, the versions of the `packages` it imported. What ran, not what was asked. |
-| `lineage` | Scoped results only. `submissions`: every image under this unit. `failed`: every failure under it. `provenance`: every step below, one record per distinct environment. |
-| `_phase` | `0` for a per-image result. `1`, `2`, ... for a scoped one. |
-| `_scope` | The `scope` of the submit. For a scoped result, of the submit that closed it. The unit itself is `metadata["unit"]`. |
-| `_scope_level` | The level of a scoped result. `None` per image. |
+| the step's name | What that step produced. There is one key per step. |
+| `input` | What you submitted. |
+| `metadata` | The recipe's name and file, the steps that ran, the `scope` and the time. |
+| `provenance` | Where each step ran: the `environment`, the `python` version, the versions of the `packages` it imported, and a `fingerprint` of everything installed. Two results with the same fingerprint ran in identical environments. |
 
-## status
+To see how far a recipe is, ask for its status:
 
 ```python
 engine.status("focus")
@@ -236,69 +154,157 @@ engine.status("focus")
  'held': {'results': 0, 'units': []}}
 ```
 
-`status(name)` counts jobs waiting, running, done and failed, and lists each
-failure. A failure leaves this list once a scoped step has been told about
-it; it is then in that step's result, under `lineage`. `held` is what waits
-for a unit to close. `status()` gives this for every recipe.
+A job is finished when it is counted under `completed` or `failed`.
+`status()` without a name gives the status of every recipe.
 
-## shutdown
+## Steps that wait for a group of images
 
-```python
-engine.shutdown()
+Some steps cannot run on a single image. A summary of a well needs every
+image of that well. Such a step gets a `scope` in the recipe. It waits
+until you say the group is complete, and then runs once on all its results.
+
+Two more words:
+
+- A **level** is a way to group images, such as `compartment` or `carrier`.
+  You choose the names.
+- A **unit** is one such group, such as compartment 3 of carrier 1.
+
+The shipped recipes use three levels. A *carrier* is a plate or a slide. A
+*compartment* is a well, a region of a slide, or part of a cleared sample.
+A *group* is a set of images within a compartment.
+
+### In the recipe
+
+```yaml
+metadata:
+  functions_dir: "../steps"
+  levels: [carrier, compartment, group]   # widest first
+
+object_analysis:
+  - detect_objects:               # every image, as soon as it arrives
+  - extract_classical_features:
+  - build_object_table:
+  - summarise_population:         # once per compartment
+      scope: compartment
+  - compare_populations:          # once per carrier
+      scope: carrier
 ```
 
-`shutdown(wait=True)` stops accepting work, lets queued jobs finish, and
-stops every worker. `shutdown(wait=False)` kills the workers first, a step
-in flight included.
+Steps before the first `scope` run on every image. A step with a `scope`
+runs once per unit of that level. The steps after it, up to the next
+`scope`, run with it on the same unit.
 
-## Errors
+A scoped step works on the results of the level below. Here
+`summarise_population` receives one result per image, and
+`compare_populations` receives one result per compartment.
 
-A failing step does not stop the engine. Its job counts under `failed` in
-`status`, with the error's name and message under `failures`. The other
-jobs carry on. You do not catch these; you read them in `status`:
+### In your script
 
-| In `failures` | When |
+Every image says which units it belongs to. The last image of a unit says
+that the unit is complete:
+
+```python
+engine.submit("analysis", image, scope={"carrier": 1, "compartment": 3})
+engine.submit("analysis", last_image, scope={"carrier": 1, "compartment": 3},
+              complete="compartment")
+```
+
+The engine never guesses when a unit is done. Your acquisition has to say
+so.
+
+One image can complete several levels. With
+`complete=["compartment", "carrier"]` the compartment step runs first, then
+the carrier step.
+
+To run a step once over everything, use a level that no image names in its
+`scope`, such as `all`. Put `scope: all` in the recipe and send
+`complete="all"` with the last image.
+
+### What the engine guarantees
+
+- **Units with the same number stay apart.** Compartment 3 of carrier 1 is
+  never mixed with compartment 3 of carrier 2. List your levels under
+  `levels`, widest first, so this also holds for a level that has no step
+  of its own.
+- **A scoped step waits for its images.** After `complete`, the step waits
+  until every image of the unit that was submitted so far has finished.
+- **A wider unit waits for its narrower ones.** A carrier waits for a
+  compartment that is still being summarised. For this to work, send a
+  compartment's `complete` before its carrier's.
+- **Nothing is dropped silently.** A carrier step is told which
+  compartments failed, and which images belong to a compartment that was
+  never completed. Those images are kept until their compartment is
+  completed. An image that arrives after its unit was completed is kept in
+  the same way. `status()` lists what is kept under `held`.
+
+### The result of a scoped step
+
+A scoped result holds what the step returned, with `metadata` and
+`provenance` as above. It has no `input`. The engine adds:
+
+| Key | What it is |
 |---|---|
-| `StepExecutionError` | The step's `run` raised. The message is the exception's name and text. |
+| `metadata["unit"]` | The unit this result is about, for example `{"carrier": 1, "compartment": 3}`. |
+| `lineage` | What the result was built from. `submissions` lists every image of the unit, `failed` lists every failure in it, and `provenance` says where every earlier step ran. |
+
+Every result also carries three keys that tell the two kinds apart:
+
+| Key | Per-image result | Scoped result |
+|---|---|---|
+| `_scope_level` | `None` | The level, for example `"compartment"`. |
+| `_phase` | `0` | `1` for the first scoped level in the recipe, `2` for the next, and so on. |
+| `_scope` | The `scope` you submitted. | The `scope` of the submit that completed the unit. |
+
+## When something fails
+
+A failing step does not stop the engine. Only its own job fails, and the
+other jobs carry on. You do not catch these errors. You read them in
+`status`, under `failures`:
+
+| Error | When |
+|---|---|
+| `StepExecutionError` | The step's `run` raised an error. The message holds that error's name and text. |
 | `WorkerTimeoutError` | The step ran longer than `execution_timeout`. |
-| `WorkerCrashedError` | The worker process died during the step. |
-| `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist: run the workflow's `environments/setup_env.py`. |
+| `WorkerCrashedError` | The worker process died during the step. The engine starts a new worker for the next job. |
+| `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist yet. Run the workflow's `environments/setup_env.py`. |
 
-Two kinds of error are raised by the calls themselves, so you see them at
-once:
+A failure leaves this list once a scoped step has been told about it. From
+then on it is in that step's result, under `lineage`.
 
-| Raised | When |
-|---|---|
-| `ValueError`, `KeyError`, `RuntimeError` | A bad recipe or name at `register` or `submit`; a call after `shutdown`. |
-| `ScopeError` | A `complete` for a level the recipe has a step for, which earlier images named in their `scope` and this one leaves out: `scope={"carrier": 1}, complete="compartment"` after images with a `compartment`. That would close every compartment at once. |
+One error is raised by `submit` itself. `ScopeError` means that `complete`
+names a level which the `scope` of the same call leaves out, although
+earlier images did name it. An example is `scope={"carrier": 1},
+complete="compartment"`. The engine refuses this, because it would complete
+every compartment at once.
 
-The engine logs what it does through Python's `logging`. To see why a
-scoped step did not run:
+If a scoped step did not run and you want to know why, turn on the engine's
+log:
 
 ```python
 import logging
 logging.basicConfig(level=logging.INFO)
 ```
 
+## Shut down
+
+```python
+engine.shutdown()
+```
+
+`shutdown()` stops accepting new work, lets the queued jobs finish and then
+stops every worker. You can still collect results afterwards.
+
+`shutdown(wait=False)` stops at once. It kills the workers, including a
+step that is running, and the queued jobs do not run.
+
 ## What the engine does not do
 
-- It does not decide what to image next. The acquisition reads the results
+- It does not decide what to image next. Your acquisition reads the results
   and decides.
-- It does not store results. Steps that need files write them.
+- It does not store results. A step that needs a file writes it.
 - It runs on one computer. It is not a cluster scheduler.
-- It runs step files as they are, with your rights. Only run steps you
-  trust.
-
-## All calls
-
-| Call | What it does | Returns |
-|---|---|---|
-| `Engine(idle_timeout=300.0, max_concurrent=8, execution_timeout=300.0)` | Make an engine | the engine |
-| `register(name, yaml_path)` | Read a recipe and its steps' `METADATA` | nothing |
-| `submit(name, data, scope=None, priority=None, complete=None)` | Hand one job to a recipe | nothing |
-| `results(name)` | The results finished since the last call | list of dicts |
-| `status(name=None)` | Jobs waiting, running, done, failed, held | dict |
-| `shutdown(wait=True)` | Stop the engine and its workers | nothing |
+- It does not check step files. They run as they are, with your rights, so
+  only run steps you trust.
 
 Next: [implement an analysis step](../2_implement_an_analysis_step/README.md),
 or [the workflows we use](../3_workflows_we_use/README.md).
