@@ -23,23 +23,24 @@ It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's
 When building smart microscopy workflows, you are likely to run into the
 following four problems.
 
-1. **Analysis over scopes.** Depending on the experiment, analysis needs to
+1. **Analysis over scopes.**
+   Depending on the experiment, analysis needs to
    be done over single images, a group of images, a compartment, a carrier,
    or a whole experiment. However, the data does not come in all at once. A
    step over a larger scope can only start once the right set of images is
    in. Keeping track of all these analysis requirements calls for more
    sophisticated degree of workflow orchestration.
 
-2. **Reproducibility.** The complexity in workflow orchestration need to be
+3. **Reproducibility.** The complexity in workflow orchestration need to be
    documented and reproducible. This is already a challenge in post-acquisition
    workflows, and is more tricky for smart microscopy workflows.
 
-3. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
+4. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
    Each step needs often need specific decencies. However, these decencies
    can often not be installed together in the same virtual environment. This creates real
    barrier for getting your analysis up and running quickly  
 
-4. **Time.** The microscope waits for feedback to move one, therefore analysis
+5. **Time.** The microscope waits for feedback to move one, therefore analysis
    needs to be finished as soon as possible. Even though computational resources
    are often limited.
 
