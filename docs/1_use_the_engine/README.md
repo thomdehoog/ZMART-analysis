@@ -3,22 +3,29 @@
 This page shows how to run an analysis with the ZMART Analysis engine. For
 a guided first run, open the [tutorial notebook](tutorial.ipynb).
 
+> **Planned.** This page describes the next version of the engine: the job
+> board, `deregister`, and workers that live with their recipe. The code does
+> not do this yet. The tutorial notebook still shows the current version.
+
 ## A complete run
 
 ```python
+import time
 from zmart_analysis import Engine
 
 engine = Engine()
-engine.register("focus", "workflows/focus/pipelines/focus.yaml")
-engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
-engine.shutdown()                      # waits until the job has finished
+engine.register("my_pipeline", "path/to/my_pipeline.yaml")
+job = engine.submit("my_pipeline", {"image_path": "image.tif"})
 
-for result in engine.results("focus"):
-    print(result["score_focus"]["peak_z_um"])
+while engine.status("my_pipeline")[job]["state"] not in ("done", "failed"):
+    time.sleep(0.1)
+print(engine.status("my_pipeline")[job]["output"])
+
+engine.shutdown()
 ```
 
-You make an engine, register a recipe, submit images and collect the
-results. The rest of this page explains each of these calls.
+You make an engine, register a recipe, submit images and read their output
+from the job board. The rest of this page explains each of these calls.
 
 Three words come back throughout:
 
@@ -31,12 +38,13 @@ Three words come back throughout:
 ```
 your script ──► Engine ──► worker (conda env A) ──► step 1
                        ──► worker (conda env B) ──► step 2
-            ◄── results ◄──
+            ◄── job board ◄──
 ```
 
 The engine never runs a step itself. It hands each job to a worker. A
-worker starts the first time it is needed and then stays running, so a
-model loaded for the first image is ready for the next one.
+worker starts the first time it is needed and then stays running for as long
+as a recipe that needs it is registered, so a model loaded for the first
+image is ready for the next one.
 
 The conda environments must exist before the first run. Each workflow has a
 script that makes them; see [Install it](../../README.md#install-it).
@@ -49,25 +57,24 @@ engine = Engine()
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `idle_timeout` | `300.0` | Seconds a worker may sit idle before it is stopped. `None` means never. |
 | `max_concurrent` | `8` | How many jobs run at the same time. |
 | `execution_timeout` | `300.0` | Seconds one step may run before it is stopped and its job fails. `None` means no limit. |
 
-During an acquisition, the gap between two images is often longer than five
-minutes. Use `Engine(idle_timeout=None)` there, so no worker is stopped
-while the stage moves.
+Workers are not stopped while they wait. A worker stops only when you
+deregister the last recipe that needs it, or shut the engine down.
 
 `with Engine() as engine:` shuts the engine down when the block ends.
 
 ## Register a recipe
 
 ```python
-engine.register("focus", "workflows/focus/pipelines/focus.yaml")
+engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 ```
 
 `register(name, yaml_path)` reads the recipe and checks that every step
-file exists. No step code runs yet. You choose the `name`, and every later
-call uses it. Registering the same name twice raises `ValueError`.
+file exists. No step code runs yet and no worker starts. You choose the
+`name`, and every later call uses it. Registering the same name twice raises
+`ValueError`; deregister it first.
 
 A recipe looks like this:
 
@@ -110,11 +117,12 @@ A recipe cannot choose a step's conda environment. The step file does that
 ## Submit images
 
 ```python
-engine.submit("focus", {"image_path": "stack.tiff", "z_um": [0, 2, 4, 6, 8]})
+job = engine.submit("my_pipeline", {"image_path": "image.tif"})
 ```
 
 `submit(name, data, scope=None, priority=None, complete=None)` hands one
-job to a recipe. It returns at once; the work happens in the background.
+job to a recipe. It returns the job's id at once; the work happens in the
+background. Ids are whole numbers, counted per recipe from 1.
 
 | Argument | Meaning |
 |---|---|
@@ -125,43 +133,64 @@ job to a recipe. It returns at once; the work happens in the background.
 Submitting to a name that is not registered raises `KeyError`. Submitting
 after `shutdown` raises `RuntimeError`.
 
-## Collect results
+The first job of a step starts its worker. That job waits while the worker
+starts; the jobs after it do not.
+
+## The job board
 
 ```python
-for result in engine.results("focus"):
-    print(result["score_focus"]["peak_z_um"])
+engine.status("my_pipeline")
+```
+```
+{1: {'step': 'score_focus', 'scope': {'group': 2}, 'state': 'done', 'output': {...}},
+ 2: {'step': 'segment', 'scope': {'group': 2}, 'state': 'running', 'output': None},
+ 3: {'step': 'population_plots', 'scope': {'carrier': 1}, 'state': 'waiting', 'output': None}}
 ```
 
-`results(name)` returns the results that finished since the last call. Each
-result is handed out once. A result is a dictionary:
+`status(name)` is the job board of a recipe: every job it has had, by id.
+You poll it to see how far your jobs are and to read their output.
+
+| Key | What it is |
+|---|---|
+| `step` | The step the job is at, or the last one it ran. |
+| `scope` | The unit the job runs over. `{}` for a recipe without scopes. |
+| `state` | `queued`, `running`, `waiting`, `done`, `failed` or `cancelled`. |
+| `output` | What the steps returned, once the job is `done`. `None` before. |
+| `error` | Only on a `failed` job: what went wrong. |
+
+The states:
+
+| State | Meaning |
+|---|---|
+| `queued` | Submitted, not started. |
+| `running` | A step is running. |
+| `waiting` | A scoped job waits for the images of its unit to finish. |
+| `done` | Finished. The output is there. |
+| `failed` | A step raised an error. |
+| `cancelled` | Stopped by `deregister` or `shutdown` before it finished. |
+
+`status()` without a name gives one board per recipe, keyed by the recipe's
+name. Each recipe counts its own ids, so two recipes can both have a job 1.
+
+The board keeps every job and its output until you deregister the recipe or
+shut the engine down. Read what you need before that.
+
+### The output
+
+The output of a job is a dictionary:
 
 | Key | What it is |
 |---|---|
 | the step's name | What that step produced. There is one key per step. |
 | `input` | What you submitted. |
 | `metadata` | The recipe's name and file, the steps that ran, the `scope` and the time. |
-| `provenance` | Where each step ran: the `environment`, the `python` version, the versions of the `packages` it imported, and a `fingerprint` of everything installed. Two results with the same fingerprint ran in identical environments. |
-
-To see how far a recipe is, ask for its status:
-
-```python
-engine.status("focus")
-```
-```
-{'pending': 0, 'running': 1, 'completed': 7, 'failed': 1,
- 'failures': [{'scope': {}, 'step': 'score_focus', 'error': '...',
-               'phase': 0, 'submission_idx': 4}],
- 'held': {'results': 0, 'units': []}}
-```
-
-A job is finished when it is counted under `completed` or `failed`.
-`status()` without a name gives the status of every recipe.
+| `provenance` | Where each step ran: the `environment`, the `python` version, the versions of the `packages` it imported, and a `fingerprint` of everything installed. Two outputs with the same fingerprint ran in identical environments. |
 
 ## Steps that wait for a group of images
 
 Some steps cannot run on a single image. A summary of a well needs every
 image of that well. Such a step gets a `scope` in the recipe. It waits
-until you say the group is complete, and then runs once on all its results.
+until you say the group is complete, and then runs once on all their outputs.
 
 Two more words:
 
@@ -194,9 +223,9 @@ Steps before the first `scope` run on every image. A step with a `scope`
 runs once per unit of that level. The steps after it, up to the next
 `scope`, run with it on the same unit.
 
-A scoped step works on the results of the level below. Here
-`summarise_population` receives one result per image, and
-`compare_populations` receives one result per compartment.
+A scoped step works on the outputs of the level below. Here
+`summarise_population` receives one output per image, and
+`compare_populations` receives one output per compartment.
 
 ### In your script
 
@@ -235,11 +264,26 @@ To run a step once over everything, use a level that no image names in its
   compartments failed, and which images belong to a compartment that was
   never completed. Those images are kept until their compartment is
   completed. An image that arrives after its unit was completed is kept in
-  the same way. `status()` lists what is kept under `held`.
+  the same way.
 
-### The result of a scoped step
+### Scoped jobs on the board
 
-A scoped result holds what the step returned, with `metadata` and
+Completing a unit adds a new job to the board: the scoped job. It has its
+own id, the step it runs, and the unit as its `scope`. It is `waiting` until
+the images of the unit have finished, then `running`, then `done`.
+
+```
+{7: {'step': 'summarise_population', 'scope': {'carrier': 1, 'compartment': 3},
+     'state': 'waiting', 'output': None}}
+```
+
+`submit` returns the id of the image job only. You find the scoped job by
+its `step` and `scope`. If the same unit is completed twice, the newer job
+has the higher id.
+
+### The output of a scoped job
+
+A scoped output holds what the step returned, with `metadata` and
 `provenance` as above. It has no `input`. The engine adds:
 
 | Key | What it is |
@@ -247,19 +291,11 @@ A scoped result holds what the step returned, with `metadata` and
 | `metadata["unit"]` | The unit this result is about, for example `{"carrier": 1, "compartment": 3}`. |
 | `lineage` | What the result was built from. `submissions` lists every image of the unit, `failed` lists every failure in it, and `provenance` says where every earlier step ran. |
 
-Every result also carries three keys that tell the two kinds apart:
-
-| Key | Per-image result | Scoped result |
-|---|---|---|
-| `_scope_level` | `None` | The level, for example `"compartment"`. |
-| `_phase` | `0` | `1` for the first scoped level in the recipe, `2` for the next, and so on. |
-| `_scope` | The `scope` you submitted. | The `scope` of the submit that completed the unit. |
-
 ## When something fails
 
 A failing step does not stop the engine. Only its own job fails, and the
-other jobs carry on. You do not catch these errors. You read them in
-`status`, under `failures`:
+other jobs carry on. You do not catch these errors. You read them on the
+board: the job's `state` is `failed`, and its `error` says what happened:
 
 | Error | When |
 |---|---|
@@ -268,8 +304,8 @@ other jobs carry on. You do not catch these errors. You read them in
 | `WorkerCrashedError` | The worker process died during the step. The engine starts a new worker for the next job. |
 | `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist yet. Run the workflow's `environments/setup_env.py`. |
 
-A failure leaves this list once a scoped step has been told about it. From
-then on it is in that step's result, under `lineage`.
+A failed image job stays on the board. A scoped step over its unit is also
+told about it, under `lineage` in its output.
 
 One error is raised by `submit` itself. `ScopeError` means that `complete`
 names a level which the `scope` of the same call leaves out, although
@@ -285,23 +321,42 @@ import logging
 logging.basicConfig(level=logging.INFO)
 ```
 
+## Deregister a recipe
+
+```python
+engine.deregister("my_pipeline")
+```
+
+`deregister(name)` is the end of a recipe:
+
+1. The recipe stops accepting new images.
+2. Its queued and running jobs finish. A scoped job whose unit was never
+   completed does not run; it is `cancelled`.
+3. Workers that no other registered recipe needs are stopped. A worker
+   that another recipe still needs keeps running.
+4. The recipe and its board are removed.
+
+`deregister(name, wait=False)` stops at once. Running steps are killed and
+queued jobs do not run; they are all `cancelled`.
+
+Read the board before you deregister. Afterwards the name can be registered
+again.
+
 ## Shut down
 
 ```python
 engine.shutdown()
 ```
 
-`shutdown()` stops accepting new work, lets the queued jobs finish and then
-stops every worker. You can still collect results afterwards.
-
-`shutdown(wait=False)` stops at once. It kills the workers, including a
-step that is running, and the queued jobs do not run.
+`shutdown()` deregisters every recipe and stops every worker. It lets the
+queued jobs finish first. `shutdown(wait=False)` stops at once, like
+`deregister(name, wait=False)` for every recipe.
 
 ## What the engine does not do
 
-- It does not decide what to image next. Your acquisition reads the results
+- It does not decide what to image next. Your acquisition reads the board
   and decides.
-- It does not store results. A step that needs a file writes it.
+- It does not store outputs. A step that needs a file writes it.
 - It runs on one computer. It is not a cluster scheduler.
 - It does not check step files. They run as they are, with your rights, so
   only run steps you trust.
