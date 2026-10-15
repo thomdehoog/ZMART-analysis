@@ -18,27 +18,48 @@ engine = Engine()
 # Register a recipe under a name
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 
-# Submit images of group 1; each submit returns a job id
-job_1 = engine.submit("my_pipeline", {"image_path": "image1.tif"}, scope={"group": 1})
-job_2 = engine.submit("my_pipeline", {"image_path": "image2.tif"}, scope={"group": 1})
+# Submit three positions of group 1; each submit returns a job id
+job_1 = engine.submit(
+    "my_pipeline",
+    {"image_path": "image1.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 1},
+)
+job_2 = engine.submit(
+    "my_pipeline",
+    {"image_path": "image2.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 2},
+)
 
-# The last image of the group says the group is complete
-job_3 = engine.submit("my_pipeline", {"image_path": "image3.tif"}, scope={"group": 1},
-                      complete="group")
+# The last position of the group says the group is complete
+job_3 = engine.submit(
+    "my_pipeline",
+    {"image_path": "image3.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 3},
+    complete="group",
+)
 
 # Look at the job board
 print(engine.status("my_pipeline"))
 ```
 ```
-{1: {'step': 'segment',   'scope': {'group': 1}, 'state': 'done',    'output': {...}},
- 2: {'step': 'segment',   'scope': {'group': 1}, 'state': 'running', 'output': None},
- 3: {'step': 'segment',   'scope': {'group': 1}, 'state': 'queued',  'output': None},
- 4: {'step': 'summarise', 'scope': {'group': 1}, 'state': 'waiting', 'output': None}}
+{1: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 1},
+     'state': 'done', 'output': {...}},
+ 2: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 2},
+     'state': 'running', 'output': None},
+ 3: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 3},
+     'state': 'queued', 'output': None},
+ 4: {'step': 'summarise',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1},
+     'state': 'waiting', 'output': None}}
 ```
 
-Jobs 1 to 3 run `segment` on each image. Job 4 is the group step: the
-recipe runs `summarise` once per group. It waits until the three images are
-done, then runs on their outputs.
+Each image names its carrier, compartment, group and position. Jobs 1 to 3
+run `segment` on each image. Job 4 is the group step: the recipe runs
+`summarise` once per group, so its scope stops at the group. It waits until
+the three positions are done, then runs on their outputs.
 
 When you are done:
 
