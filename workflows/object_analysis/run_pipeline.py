@@ -1,4 +1,4 @@
-"""Run the object_analysis recipe on one image from the command line.
+"""Run the object_analysis pipeline on one image from the command line.
 
     python run_pipeline.py image.tif --pixel-size-um 0.65,0.65
 

@@ -1,7 +1,7 @@
 # A multidimensional plot of a discovered population, on request.
 #
 # What to submit with each job -- the input changes every time, this file is
-# the recipe:
+# the pipeline:
 #
 #   table   the population table written when a whole overview was detected
 #   ids     the objects to plot, or null for every one in the table

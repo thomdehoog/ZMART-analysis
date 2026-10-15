@@ -1,7 +1,7 @@
 # 3. The workflows we use
 
 Three workflows ship with ZMART Analysis. Each is a folder under
-[`workflows/`](../../workflows) with its recipes, its steps, its environment
+[`workflows/`](../../workflows) with its pipelines, its steps, its environment
 scripts and a README that explains its settings.
 
 | Workflow | What it does | What it needs |

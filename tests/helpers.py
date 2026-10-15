@@ -1,7 +1,7 @@
-"""What the engine tests build their cases from: step files, recipes, and waiting.
+"""What the engine tests build their cases from: step files, pipelines, and waiting.
 
-Every engine test writes a small step file and a recipe into one temporary
-folder for the whole session, registers the recipe, and waits for the
+Every engine test writes a small step file and a pipeline into one temporary
+folder for the whole session, registers the pipeline, and waits for the
 engine to finish. These are the few functions that do that, kept in a
 module of their own so a test can import them by name (``conftest.py`` is
 pytest's and cannot be imported from a test under two folders at once).

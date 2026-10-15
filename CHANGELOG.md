@@ -3,26 +3,27 @@
 ## Unreleased
 
 - **The job board (breaking).** `submit(pipeline, data, ...)` returns the
-  job's id; ids count per recipe from 1. `status(name)` is the board: every
+  job's id; ids count per pipeline from 1. `status(name)` is the board: every
   job with its `step`, `scope`, `state` (`queued`, `running`, `waiting`,
   `done`, `failed`, `cancelled`) and `output`, and `error` on a failed one.
-  `status()` gives one board per recipe. Completing a unit adds a scope job
+  `status()` gives one board per pipeline. Completing a unit adds a scope job
   of its own. `results()` is gone, and so are the status counts, the
   `failures` list, `held`, and the `_phase`, `_scope` and `_scope_level`
   keys on every output. `submit`'s first argument is now `pipeline`.
-- **`deregister(name, wait=True)`.** Ends a recipe: its jobs finish (or,
+- **`deregister(name, wait=True)`.** Ends a pipeline: its jobs finish (or,
   with `wait=False`, its running steps are killed and the rest cancelled),
-  the workers no other registered recipe needs are stopped, and the final
-  board is returned. `shutdown()` deregisters every recipe.
+  the workers no other registered pipeline needs are stopped, and the final
+  board is returned. `shutdown()` deregisters every pipeline.
 - **No idle timeout.** `Engine(idle_timeout=...)` is gone, and so is the
-  reaper. A worker lives while a recipe that needs it is registered.
+  reaper. A worker lives while a pipeline that needs it is registered.
 - The submission index in `metadata` and `lineage` is the image job's id.
+- What the docs and code called a recipe is called a pipeline everywhere.
 - **Completing a level completes everything inside it.** `complete="carrier"`
   first closes that carrier's groups and compartments that are still open,
   narrowest first, then the carrier; `complete="experiment"` closes
   everything. An image that arrives after its unit closed opens it again.
-  Which level is narrower comes from the recipe's `levels`, or else from the
-  order of its scoped steps. The scoped object analysis recipe lists
+  Which level is narrower comes from the pipeline's `levels`, or else from the
+  order of its scoped steps. The scoped object analysis pipeline lists
   `experiment` as its widest level.
 - The package is `zmart_analysis`: `from zmart_analysis import Engine`.
   The old name, `engine`, still imports.

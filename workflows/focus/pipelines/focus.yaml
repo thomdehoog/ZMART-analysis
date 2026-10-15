@@ -1,7 +1,7 @@
 # Sharpness of every plane in an acquired z-stack, and the height it peaks at.
 #
 # What to submit with each job -- the input is not here because it changes with
-# every stack, while this file is the recipe:
+# every stack, while this file is the pipeline:
 #
 #   image_paths  the planes of one stack, in depth order, as the driver wrote
 #                them (one 2-D file per plane), or

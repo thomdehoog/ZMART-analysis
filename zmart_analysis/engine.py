@@ -1,16 +1,16 @@
 """
 Engine -- what you call to run analyses.
 
-You register a recipe, submit images to it, and read their output from the
+You register a pipeline, submit images to it, and read their output from the
 job board. The Engine never runs step code itself: it reads each step's
 METADATA without running the file, and hands the work to workers (see
-workers.py). Scope handling, phases, the board and per-recipe state live in
+workers.py). Scope handling, phases, the board and per-pipeline state live in
 pipeline.py.
 
-A worker lives for as long as a registered recipe needs it: deregister a
-recipe and the workers no other recipe needs are stopped.
+A worker lives for as long as a registered pipeline needs it: deregister a
+pipeline and the workers no other pipeline needs are stopped.
 
-Thread safety: ``_lock`` guards the registered recipes and the accepting
+Thread safety: ``_lock`` guards the registered pipelines and the accepting
 flag; each PipelineState has its own lock. ``submit`` and ``status`` may
 be called from different threads.
 """
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 class Engine:
     """
-    Runs recipes: register, submit, status, deregister, shutdown.
+    Runs pipelines: register, submit, status, deregister, shutdown.
 
     Parameters
     ----------
@@ -175,12 +175,12 @@ class Engine:
 
     def submit(self, pipeline, data, scope=None, priority=None, complete=None):
         """
-        Submit one image to a registered recipe. Returns its job id at once.
+        Submit one image to a registered pipeline. Returns its job id at once.
 
         Parameters
         ----------
         pipeline : str
-            The recipe's registered name.
+            The pipeline's registered name.
         data : dict
             What the steps see as ``pipeline_data["input"]``.
         scope : dict, optional
@@ -190,17 +190,17 @@ class Engine:
             Higher runs first. Equal priorities run in submission order.
         complete : str or list, optional
             The level, or levels, this image closes for its unit. Each
-            level the recipe has a step for adds a scope job to the board.
+            level the pipeline has a step for adds a scope job to the board.
 
         Returns
         -------
         int
-            The image job's id on the board, counted per recipe from 1.
+            The image job's id on the board, counted per pipeline from 1.
 
         Raises
         ------
         ScopeError
-            A level in ``complete`` is a scope of this recipe, this scope
+            A level in ``complete`` is a scope of this pipeline, this scope
             leaves out its key, and earlier submits used that key: the
             signal would close every unit of that level at once.
         """
@@ -248,7 +248,7 @@ class Engine:
                     state.begin_scoped(k, unit_scope, job)
                     for k, (_, unit_scope) in zip(phases, signals, strict=True)
                 ]
-                # One scope job per close the recipe has a step for.
+                # One scope job per close the pipeline has a step for.
                 scope_jobs = [
                     None
                     if k is None
@@ -280,12 +280,12 @@ class Engine:
 
     def status(self, name=None):
         """
-        The job board of a recipe, or of every recipe.
+        The job board of a pipeline, or of every pipeline.
 
         Parameters
         ----------
         name : str, optional
-            The recipe's name. If None, one board per recipe, by name.
+            The pipeline's name. If None, one board per pipeline, by name.
 
         Returns
         -------
@@ -303,18 +303,18 @@ class Engine:
 
     def deregister(self, name, wait=True):
         """
-        End a recipe and stop the workers no other recipe needs.
+        End a pipeline and stop the workers no other pipeline needs.
 
-        The recipe takes no new images. With ``wait`` its queued and running
+        The pipeline takes no new images. With ``wait`` its queued and running
         jobs finish first; without, running steps are killed and the jobs
         that did not finish are cancelled. Then the workers of every
-        environment no other registered recipe uses are stopped, and the
+        environment no other registered pipeline uses are stopped, and the
         name can be registered again.
 
         Returns
         -------
         dict
-            The recipe's final board.
+            The pipeline's final board.
         """
         with self._lock:
             if name not in self._pipelines:
@@ -330,7 +330,7 @@ class Engine:
         concurrent.futures.wait(list(state.futures))
         board = state.board()
 
-        # Taken under the lock, so a recipe registered meanwhile that needs
+        # Taken under the lock, so a pipeline registered meanwhile that needs
         # one of these environments gets fresh workers, not these.
         with self._lock:
             in_use = set()
@@ -343,14 +343,14 @@ class Engine:
         return board
 
     def shutdown(self, wait=True):
-        """Deregister every recipe and stop the engine and all workers.
+        """Deregister every pipeline and stop the engine and all workers.
 
         Parameters
         ----------
         wait : bool, optional
             If True, let the queued jobs finish first. If False, kill the
             running steps at once and cancel the rest, as
-            ``deregister(name, wait=False)`` does for every recipe.
+            ``deregister(name, wait=False)`` does for every pipeline.
 
         Returns
         -------
@@ -606,7 +606,7 @@ class Engine:
     def _execute_step(self, state, step_config, pipeline_data, job):
         """Execute a single step of *job* via the worker pool.
 
-        The board shows the job at this step from here on. A recipe being
+        The board shows the job at this step from here on. A pipeline being
         cancelled starts no further step.
         """
         if state.cancelling:

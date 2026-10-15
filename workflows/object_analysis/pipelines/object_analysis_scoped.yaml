@@ -3,7 +3,7 @@
 #
 # A sample is divided into four levels, narrowest first: tile, group (a tile
 # set), compartment, carrier. Each is a plain number in the capture label
-# (K<carrier>_M<compartment>_G<group>_P<tile>), so the same recipe serves a
+# (K<carrier>_M<compartment>_G<group>_P<tile>), so the same pipeline serves a
 # plate, a slide or a light-sheet sample.
 #
 # Every tile runs the three per-tile steps as soon as it lands. When the
@@ -30,7 +30,7 @@
 # every step below it ran.
 #
 # Tiles are kept in memory until their compartment is complete, so this
-# recipe is for runs that close their compartments. For tile-by-tile
+# pipeline is for runs that close their compartments. For tile-by-tile
 # analysis with no summary, use object_analysis.yaml.
 
 metadata:

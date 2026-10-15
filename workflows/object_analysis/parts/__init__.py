@@ -7,7 +7,7 @@ what to drop, or which Cellpose device was used, finds it in a file named
 for it rather than in the middle of a long step.
 
 - ``settings.py``       reads the detection settings from the submit and the
-                        recipe, and makes the hash that identifies a segmentation
+                        pipeline, and makes the hash that identifies a segmentation
 - ``masks.py``          filters and resizes label images
 - ``watershed.py``      the fast detector, a watershed without a model
 - ``cellpose_model.py`` loads Cellpose once per worker, on the best device

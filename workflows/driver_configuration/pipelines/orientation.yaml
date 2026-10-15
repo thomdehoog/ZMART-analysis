@@ -3,7 +3,7 @@
 # move along +Y.
 #
 # What to submit with each job -- the input is not here because it changes
-# with every microscope, while this file is the recipe:
+# with every microscope, while this file is the pipeline:
 #
 #   home, plus_x, plus_y   the three raw 2-D images, as the driver wrote them
 #   stage_move_um          how far the stage moved for the second and third

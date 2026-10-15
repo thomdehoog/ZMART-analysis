@@ -1,8 +1,8 @@
-"""The detection settings, read from the submit and the recipe.
+"""The detection settings, read from the submit and the pipeline.
 
-Every setting has a default in the recipe, and a submit may override it for
+Every setting has a default in the pipeline, and a submit may override it for
 one image by naming the same key in its input. That is how the operator
-page tunes detection on a single position without registering a recipe of
+page tunes detection on a single position without registering a pipeline of
 its own. ``setting`` is that one rule, used for every key.
 
 ``segmentation_params`` gathers the settings that decide what the masks
@@ -38,7 +38,7 @@ SEGMENTATION_IDENTITY_KEYS = (
 
 
 def setting(inp: dict, params: dict, key: str, default=None):
-    """The value of one setting: the submit's when it names it, else the recipe's."""
+    """The value of one setting: the submit's when it names it, else the pipeline's."""
     return inp[key] if key in inp else params.get(key, default)
 
 

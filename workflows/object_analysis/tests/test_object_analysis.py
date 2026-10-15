@@ -93,7 +93,7 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
 SCOPED_YAML = WORKFLOW / "pipelines" / "object_analysis_scoped.yaml"
 
 
-def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypatch):
+def test_the_scoped_pipeline_end_to_end_with_the_fast_detector(tmp_path, monkeypatch):
     """Two carriers, two compartments each, one failed tile. The fast
     detector stands in for Cellpose so this runs in CI. Every step names
     the classical environment; naming the engine's own after it makes the
@@ -106,20 +106,20 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
 
     monkeypatch.setenv("CONDA_DEFAULT_ENV", "ZMART--object_analysis--classical")
     fast = yaml.safe_load(FAST_YAML.read_text())["object_analysis"]
-    # The synthetic tile's two squares are small; the fast recipe's
+    # The synthetic tile's two squares are small; the fast pipeline's
     # defaults are for nuclei at a real magnification.
     fast[0]["detect_objects_fast"].update(threshold=50, diameter=8)
     scoped = yaml.safe_load(SCOPED_YAML.read_text())
-    recipe = {
+    pipeline = {
         "metadata": dict(scoped["metadata"], functions_dir=STEPS_DIR.as_posix()),
         "object_analysis": fast + scoped["object_analysis"][3:],
     }
-    recipe_path = tmp_path / "scoped_fast.yaml"
-    recipe_path.write_text(yaml.safe_dump(recipe, sort_keys=False))
+    pipeline_path = tmp_path / "scoped_fast.yaml"
+    pipeline_path.write_text(yaml.safe_dump(pipeline, sort_keys=False))
     image_path = _write_synthetic_tile(tmp_path)
 
     with Engine(max_concurrent=4) as engine:
-        engine.register("scoped", str(recipe_path))
+        engine.register("scoped", str(pipeline_path))
         for carrier in (1, 2):
             for compartment in (1, 2):
                 scope = {"carrier": carrier, "compartment": compartment}

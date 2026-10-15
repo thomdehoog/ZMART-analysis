@@ -11,7 +11,7 @@ The base set is scikit-image's ``regionprops_table``: area, perimeter,
 axes, orientation, bounding box, intensity mean, min, max and standard
 deviation. A few cheap ratios are always added to it (circularity, aspect
 ratio, the integrated intensity). The optional families are chosen with
-``extras`` in the recipe:
+``extras`` in the pipeline:
 
     intensity       global_bg, local_bg      the background around each object
     neighbourhood   neighbours               distances to and counts of neighbours
@@ -20,7 +20,7 @@ ratio, the integrated intensity). The optional families are chosen with
 
 A name may be a family or one of its members, and ``all`` takes every one.
 The per-object texture families (lbp, fft, glrlm) loop over every object
-in Python and are the slow ones; the fast recipe leaves them out.
+in Python and are the slow ones; the fast pipeline leaves them out.
 
 When the image has several channels, every intensity measurement is
 reported per channel too: ``intensity_mean`` is the first channel, and
@@ -231,7 +231,7 @@ def _normalise_intensity_columns(props: dict, img: np.ndarray) -> None:
 
 # ---------------------------------------------------------------------------
 # Ratios that are always added. Each one needs a few base columns and is
-# added only when they are there, so a recipe that asks for fewer base
+# added only when they are there, so a pipeline that asks for fewer base
 # properties gets fewer ratios and no error.
 # ---------------------------------------------------------------------------
 
@@ -316,7 +316,7 @@ class _Context:
     so a family can add ``_c0``, ``_c1``, ... columns beside the base one.
     ``labels`` lists the objects in row order. ``slices`` is the bounding
     box of each object (``slices[label - 1]``), worked out once when any
-    family asked for it. ``params`` is the recipe's parameters, in which a
+    family asked for it. ``params`` is the pipeline's parameters, in which a
     family reads its own keys. ``pixel_size_um`` is ``(dy, dx)`` when a
     pixel size was given, so distances can be in micrometres.
     """
@@ -388,7 +388,7 @@ def _texture_scale(img: np.ndarray, masks: np.ndarray, params: dict) -> float:
     number an object gets depends on where the top of the scale sits. It
     used to sit at the brightest pixel of the tile, so one hot pixel or one
     speck of debris re-binned every object on that tile, and no two tiles
-    binned alike. Now it is ``intensity_scale`` from the recipe when given
+    binned alike. Now it is ``intensity_scale`` from the pipeline when given
     (the camera's full range is the natural choice: 4095 for 12-bit data),
     and otherwise the 99.9th percentile of the pixels inside objects, which
     a single bright pixel cannot move.
@@ -1057,7 +1057,7 @@ def _radius_of_gyration_and_spread(ctx: _Context) -> None:
 # ===========================================================================
 # The list of optional families: which exist, which family each belongs
 # to, and which need the per-object bounding boxes. Everything else (the
-# recipe's ``extras``, the error message for an unknown name, the family
+# pipeline's ``extras``, the error message for an unknown name, the family
 # names) is derived from this one table.
 #
 # To add a measurement: write a function above that takes the context and

@@ -9,7 +9,7 @@ because the neighbouring tile holds them too, and so are those outside the
 size bounds. The masks and a record of how they were made are filed beside
 the data (``parts/checkpoint.py``).
 
-Every setting has its default in the recipe, and a submit may override any
+Every setting has its default in the pipeline, and a submit may override any
 of them for one image by naming the same key in its input. ``method`` may
 be ``"fast"`` to run the watershed instead of Cellpose; the step file
 ``detect_objects_fast`` does that in the environment without torch.

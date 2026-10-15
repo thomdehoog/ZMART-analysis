@@ -4,9 +4,9 @@ Finds the sharp height in a z-stack. Every plane gets a sharpness score,
 and the height where the score peaks is the focus. This is how the
 microscope finds the tissue before it images a position.
 
-There is one recipe, [`pipelines/focus.yaml`](pipelines/focus.yaml), with
+There is one pipeline, [`pipelines/focus.yaml`](pipelines/focus.yaml), with
 one step, [`steps/score_focus.py`](steps/score_focus.py). The comment at
-the top of the recipe says what to submit. The step's docstring lists
+the top of the pipeline says what to submit. The step's docstring lists
 exactly what it takes and returns.
 
 ## Choosing a sharpness measure

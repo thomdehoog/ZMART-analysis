@@ -23,7 +23,7 @@ def write_detection_checkpoint(detection: dict, raw_masks, inp: dict, params: di
 
     An image inside an acquisition files itself in the ``analysis`` folder
     beside the ``data`` it came from. One kept outside an acquisition has
-    no such place and writes nothing, unless the submit or the recipe
+    no such place and writes nothing, unless the submit or the pipeline
     names an ``output_dir``.
     """
     output_dir = inp.get("output_dir", params.get("output_dir", None))

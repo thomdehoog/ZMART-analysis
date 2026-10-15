@@ -1,7 +1,7 @@
 """summarise_population -- the objects of one completed unit, as a population.
 
 A scoped step. It runs once a unit of the sample is complete -- a group (a
-tile set), a compartment, or a carrier, whichever scope the recipe gives it
+tile set), a compartment, or a carrier, whichever scope the pipeline gives it
 -- and receives the object tables of every tile in that unit. It joins them
 into one population and describes it:
 

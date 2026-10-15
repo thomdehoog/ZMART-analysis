@@ -5,13 +5,13 @@ Measures two things that a
 it can steer the stage by what it sees in the picture. Both are measured
 from pictures alone, so the same steps work on every microscope.
 
-| Recipe | Step | What it measures |
+| Pipeline | Step | What it measures |
 |---|---|---|
 | `orientation.yaml` | `measure_orientation` | How the camera is turned relative to the stage, and how much specimen one pixel covers. |
 | `objective_pair.yaml` | `measure_objective_pair` | How far apart two objectives look and focus. |
 
 You rarely submit these yourself. The setup notebooks in ZMART Microscopy
-run both recipes for you. The docstring of each step, in `steps/`, says
+run both pipelines for you. The docstring of each step, in `steps/`, says
 exactly what goes in and what comes back.
 
 ## Orientation

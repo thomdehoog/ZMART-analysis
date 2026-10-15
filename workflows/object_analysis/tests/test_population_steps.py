@@ -159,11 +159,11 @@ def test_both_steps_write_their_tables_when_asked(tmp_path):
     assert Path(got["written"]["profiles"]).name == "carrier1_compartment_profiles.csv"
 
 
-def test_the_scoped_recipe_registers_with_its_two_scopes():
-    recipe = Path(__file__).resolve().parents[1] / "pipelines" / "object_analysis_scoped.yaml"
+def test_the_scoped_pipeline_registers_with_its_two_scopes():
+    pipeline = Path(__file__).resolve().parents[1] / "pipelines" / "object_analysis_scoped.yaml"
     from zmart_analysis.pipeline import parse_yaml, split_phases
 
-    _, steps, metadata = parse_yaml(recipe)
+    _, steps, metadata = parse_yaml(pipeline)
     phases = split_phases(steps)
     assert metadata["levels"] == ["carrier", "compartment", "group"]
     assert [p.scope for p in phases] == [None, "compartment", "carrier"]

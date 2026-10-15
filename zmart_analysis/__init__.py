@@ -1,7 +1,7 @@
 """
-ZMART Analysis -- the engine that runs analysis recipes.
+ZMART Analysis -- the engine that runs analysis pipelines.
 
-A recipe (YAML) lists steps; every step runs in a worker, a process in the
+A pipeline (YAML) lists steps; every step runs in a worker, a process in the
 conda environment the step names. Steps may be scoped to run once per unit
 of the sample (a compartment, a carrier) once the acquisition closes it.
 
@@ -22,7 +22,7 @@ API
 Architecture
 ------------
     engine.py         the Engine: register, submit, status, deregister, shutdown
-    pipeline.py       reads a recipe, splits it into phases, tracks scopes,
+    pipeline.py       reads a pipeline, splits it into phases, tracks scopes,
                       keeps the job board
     priority_pool.py  the thread pool that starts the most urgent job first
     workers.py        the worker processes that run the steps, and their errors

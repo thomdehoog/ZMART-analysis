@@ -8,7 +8,7 @@ about: Something does not work as the docs say
 **What you expected**
 
 **How to reproduce**
-The recipe, the `submit` call, and a small input if you can.
+The pipeline, the `submit` call, and a small input if you can.
 
 **Environment**
 - OS:

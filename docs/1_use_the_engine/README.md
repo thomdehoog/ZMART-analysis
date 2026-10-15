@@ -5,12 +5,12 @@ a guided first run, open the [tutorial notebook](tutorial.ipynb).
 
 ## How it works
 
-You make an engine, register a recipe, submit images and read their output
+You make an engine, register a pipeline, submit images and read their output
 from the job board. Each section below is one of these steps, in that order.
 
 Three words come back throughout:
 
-- A **recipe** is a YAML file. It lists the steps of an analysis, in order,
+- A **pipeline** is a YAML file. It lists the steps of an analysis, in order,
   with their parameters.
 - A **step** is one Python file with one function, `run`.
 - A **worker** is a Python process that runs a step, in the conda
@@ -27,7 +27,7 @@ flowchart LR
 
 The engine never runs a step itself. It hands each job to a worker. A
 worker starts the first time it is needed and then stays running for as long
-as a recipe that needs it is registered, so a model loaded for the first
+as a pipeline that needs it is registered, so a model loaded for the first
 image is ready for the next one.
 
 The conda environments must exist before the first run. Each workflow has a
@@ -47,7 +47,7 @@ engine = Engine()
 | `execution_timeout` | `300.0` | Seconds one step may run before it is stopped and its job fails. `None` means no limit. |
 
 Workers are not stopped while they wait. A worker stops only when you
-deregister the last recipe that needs it, or shut the engine down.
+deregister the last pipeline that needs it, or shut the engine down.
 
 `with Engine() as engine:` shuts the engine down when the block ends.
 
@@ -59,12 +59,12 @@ deregister the last recipe that needs it, or shut the engine down.
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 ```
 
-`register(name, yaml_path)` reads the recipe and checks that every step
+`register(name, yaml_path)` reads the pipeline and checks that every step
 file exists. No step code runs yet and no worker starts. You choose the
 `name`, and every later call uses it. Registering the same name twice raises
 `ValueError`; deregister it first.
 
-A recipe looks like this:
+A pipeline looks like this:
 
 ```yaml
 metadata:
@@ -79,14 +79,14 @@ focus:
       skip_ends: 2
 ```
 
-The `metadata` block describes the recipe:
+The `metadata` block describes the pipeline:
 
 | Key | Meaning |
 |---|---|
 | `purpose`, `version` | Notes for the reader. |
-| `functions_dir` | The folder with the step files, relative to the recipe. Default `../steps`. |
+| `functions_dir` | The folder with the step files, relative to the pipeline. Default `../steps`. |
 | `verbose` | `0` is silent. Above that, the steps print progress. Default `2`. |
-| `levels` | Only for recipes with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
+| `levels` | Only for pipelines with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
 The other top-level key, here `focus`, holds the steps in the order they
 run. A step is named after its file: `score_focus` is `score_focus.py`.
@@ -99,7 +99,7 @@ the engine reads itself:
 | `scope` | Run this step once per group of images, not once per image. |
 | `max_workers` | How many copies of this step may run at once. This overrides the value in the step file. |
 
-A recipe cannot choose a step's conda environment. The step file does that
+A pipeline cannot choose a step's conda environment. The step file does that
 ([part 2](../2_implement_an_analysis_step/README.md#metadata)).
 
 ## Submit images
@@ -130,18 +130,18 @@ job_3 = engine.submit(
 ```
 
 `submit(pipeline, data, scope=None, priority=None, complete=None)` hands one
-image to a recipe. It returns the job's id at once; the work happens in the
-background. Ids are whole numbers, counted per recipe from 1.
+image to a pipeline. It returns the job's id at once; the work happens in the
+background. Ids are whole numbers, counted per pipeline from 1.
 
 Each image names its carrier, compartment, group and position. The last
 image of the group says that the group is complete.
 
 | Argument | Meaning |
 |---|---|
-| `pipeline` | The name you registered the recipe under. |
-| `data` | A dictionary with the input for this job. The recipe decides what belongs in it; the comment at the top of a shipped recipe says what to submit. |
+| `pipeline` | The name you registered the pipeline under. |
+| `data` | A dictionary with the input for this job. The pipeline decides what belongs in it; the comment at the top of a shipped pipeline says what to submit. |
 | `priority` | A whole number. Higher runs first. Jobs with the same priority run in the order they were submitted. Default `0`. |
-| `scope`, `complete` | Only for recipes with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
+| `scope`, `complete` | Only for pipelines with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
 Submitting to a name that is not registered raises `KeyError`. Submitting
 after `shutdown` raises `RuntimeError`.
@@ -169,17 +169,17 @@ print(engine.status("my_pipeline"))
      'state': 'waiting', 'output': None}}
 ```
 
-`status(name)` is the job board of a recipe: every job it has had, by id.
+`status(name)` is the job board of a pipeline: every job it has had, by id.
 You poll it to see how far your jobs are and to read their output.
 
 Jobs 1 to 3 run `segment` on each image. Job 4 is the group step: the
-recipe runs `summarise` once per group, so its scope stops at the group. It
+pipeline runs `summarise` once per group, so its scope stops at the group. It
 waits until the three positions are done, then runs on their outputs.
 
 | Key | What it is |
 |---|---|
 | `step` | The step the job is at, or the last one it ran. |
-| `scope` | The unit the job runs over. `{}` for a recipe without scopes. |
+| `scope` | The unit the job runs over. `{}` for a pipeline without scopes. |
 | `state` | `queued`, `running`, `waiting`, `done`, `failed` or `cancelled`. |
 | `output` | What the steps returned, once the job is `done`. `None` before. |
 | `error` | Only on a `failed` job: what went wrong. |
@@ -195,10 +195,10 @@ The states:
 | `failed` | A step raised an error. |
 | `cancelled` | Stopped by `deregister` or `shutdown` before it finished. |
 
-`status()` without a name gives one board per recipe, keyed by the recipe's
-name. Each recipe counts its own ids, so two recipes can both have a job 1.
+`status()` without a name gives one board per pipeline, keyed by the pipeline's
+name. Each pipeline counts its own ids, so two pipelines can both have a job 1.
 
-The board keeps every job and its output until you deregister the recipe or
+The board keeps every job and its output until you deregister the pipeline or
 shut the engine down. `deregister` hands you the final board.
 
 ### The output
@@ -209,13 +209,13 @@ The output of a job is a dictionary:
 |---|---|
 | the step's name | What that step produced. There is one key per step. |
 | `input` | What you submitted. |
-| `metadata` | The recipe's name and file, the steps that ran, the `scope` and the time. |
+| `metadata` | The pipeline's name and file, the steps that ran, the `scope` and the time. |
 | `provenance` | Where each step ran: the `environment`, the `python` version, the versions of the `packages` it imported, and a `fingerprint` of everything installed. Two outputs with the same fingerprint ran in identical environments. |
 
 ## Steps that wait for a group of images
 
 Some steps cannot run on a single image. A summary of a well needs every
-image of that well. Such a step gets a `scope` in the recipe. It waits
+image of that well. Such a step gets a `scope` in the pipeline. It waits
 until you say the group is complete, and then runs once on all their outputs.
 
 Two more words:
@@ -224,12 +224,12 @@ Two more words:
   You choose the names.
 - A **unit** is one such group, such as compartment 3 of carrier 1.
 
-The shipped recipes use four levels, widest first. The *experiment* holds
+The shipped pipelines use four levels, widest first. The *experiment* holds
 everything. A *carrier* is a plate or a slide. A *compartment* is a well, a
 region of a slide, or part of a cleared sample. A *group* is a set of
 images within a compartment. Each image is one *position*.
 
-### In the recipe
+### In the pipeline
 
 ```yaml
 metadata:
@@ -360,20 +360,20 @@ import logging
 logging.basicConfig(level=logging.INFO)
 ```
 
-## Deregister a recipe
+## Deregister a pipeline
 
 ```python
 board = engine.deregister("my_pipeline")
 ```
 
-`deregister(name)` is the end of a recipe:
+`deregister(name)` is the end of a pipeline:
 
-1. The recipe stops accepting new images.
+1. The pipeline stops accepting new images.
 2. Its queued and running jobs finish. Images of a unit that was never
    completed stay as they are: no scoped job was made for that unit.
-3. Workers that no other registered recipe needs are stopped. A worker
-   that another recipe still needs keeps running.
-4. The recipe and its board are removed. `deregister` returns the final
+3. Workers that no other registered pipeline needs are stopped. A worker
+   that another pipeline still needs keeps running.
+4. The pipeline and its board are removed. `deregister` returns the final
    board.
 
 `deregister(name, wait=False)` stops at once. Running steps are killed,
@@ -388,9 +388,9 @@ Afterwards the name can be registered again. Its job ids start at 1 again.
 engine.shutdown()
 ```
 
-`shutdown()` deregisters every recipe and stops every worker. It lets the
+`shutdown()` deregisters every pipeline and stops every worker. It lets the
 queued jobs finish first. `shutdown(wait=False)` stops at once, like
-`deregister(name, wait=False)` for every recipe.
+`deregister(name, wait=False)` for every pipeline.
 
 ## What the engine does not do
 

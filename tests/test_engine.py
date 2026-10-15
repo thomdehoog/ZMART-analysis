@@ -41,7 +41,7 @@ from unittest.mock import patch
 
 import pytest
 
-# Step files, recipes and the polling helpers are the shared ones from helpers.py.
+# Step files, pipelines and the polling helpers are the shared ones from helpers.py.
 from helpers import (
     _SESSION_TEMP,
     _next_id,
@@ -211,7 +211,7 @@ class TestPhases:
         assert phases[0].scope == "region"
 
     def test_a_pipeline_may_not_set_a_steps_environment(self):
-        """The step file owns its environment; a recipe that tries to set
+        """The step file owns its environment; a pipeline that tries to set
         one is refused with a message saying where it belongs."""
         with pytest.raises(ValueError, match="step file owns its environment"):
             split_phases([{"step": {"environment": "other-env", "sigma": 1.0}}])
@@ -1176,8 +1176,8 @@ class TestEngineLifecycle:
     def test_shutdown_without_wait_cancels_queue_and_closes_workers(self):
         """Twelve 0.3 s steps on one thread would take 3.6 s to run out; a
         shutdown that cancels the queue returns long before. The board goes
-        with the recipes, so what is left to see is the time it took, that
-        no recipe remains and that no worker is left."""
+        with the pipelines, so what is left to see is the time it took, that
+        no pipeline remains and that no worker is left."""
         _temp_step(
             """
             import time
@@ -1656,7 +1656,7 @@ class TestTheBrake:
         )
         time.sleep(0.5)
         assert not _alive(pid), "the step's worker must be gone"
-        # The board goes with the recipe; that the job ends cancelled, with
+        # The board goes with the pipeline; that the job ends cancelled, with
         # no output, is test_job_board's deregister-without-waiting case.
         assert e.status() == {}
 

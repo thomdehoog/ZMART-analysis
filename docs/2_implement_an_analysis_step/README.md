@@ -2,7 +2,7 @@
 
 This page shows how to write a step for the ZMART Analysis engine. For a
 guided example, open the [tutorial notebook](tutorial.ipynb). How to run a
-recipe is in [part 1](../1_use_the_engine/README.md).
+pipeline is in [part 1](../1_use_the_engine/README.md).
 
 ## The smallest step
 
@@ -16,7 +16,7 @@ def run(pipeline_data, state, **params):
     return pipeline_data
 ```
 
-A recipe that uses it, `pipelines/hello.yaml`:
+A pipeline that uses it, `pipelines/hello.yaml`:
 
 ```yaml
 metadata:
@@ -26,7 +26,7 @@ hello:
   - double_it:
 ```
 
-The step's name is its file name without `.py`. The recipe looks for the
+The step's name is its file name without `.py`. The pipeline looks for the
 file in `functions_dir`.
 
 ## What `run` receives and returns
@@ -39,7 +39,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 |---|---|
 | `pipeline_data` | The job. `["input"]` is what was passed to `engine.submit`. `["metadata"]` is what the engine knows about the job. Every earlier step has added its output under its own name. |
 | `state` | A dictionary that this step keeps from one job to the next. It is empty on the first job. See [Keep a model loaded](#keep-a-model-loaded). |
-| `**params` | The parameters listed under this step in the recipe. |
+| `**params` | The parameters listed under this step in the pipeline. |
 
 **Add your output to `pipeline_data` under the step's name, and return
 `pipeline_data`.** The next step receives it. A step that returns anything
@@ -56,13 +56,13 @@ If your step raises an error, only its own job fails. On the job board,
 
 | Key | What it is |
 |---|---|
-| `workflow_name` | The name of the recipe's step list, for example `focus`. |
-| `yaml_filename` | The recipe's file name. |
+| `workflow_name` | The name of the pipeline's step list, for example `focus`. |
+| `yaml_filename` | The pipeline's file name. |
 | `steps` | The names of the steps that run with this one, in order. |
 | `scope` | The `scope` given at submit, for example `{"carrier": 1, "compartment": 3}`. |
 | `submission_idx` | The job's number in submission order, counted from zero. |
 | `datetime` | When the job started, as `YYYYMMDD-HHMMSS`. |
-| `verbose` | The recipe's `verbose` setting. Print progress when it is above `0`, and nothing when it is `0`. |
+| `verbose` | The pipeline's `verbose` setting. Print progress when it is above `0`, and nothing when it is `0`. |
 
 ## METADATA
 
@@ -88,8 +88,8 @@ The engine reads `METADATA` as text, without running the file. So write it
 as plain values at the top level of the file, not as something that is
 computed.
 
-A recipe can override `max_workers`, but not `environment`. The engine
-refuses a recipe that tries. If a step has to run in two environments, make
+A pipeline can override `max_workers`, but not `environment`. The engine
+refuses a pipeline that tries. If a step has to run in two environments, make
 two step files.
 
 ## Give a step its own environment
@@ -177,16 +177,16 @@ Two things to know:
 
 - Each worker has its own `state`. With `max_workers: 2`, each of the two
   copies loads its own model.
-- A worker keeps its `state` until its recipe is deregistered (and no
-  other recipe needs the worker) or the engine shuts down. The next job
+- A worker keeps its `state` until its pipeline is deregistered (and no
+  other pipeline needs the worker) or the engine shuts down. The next job
   after that starts with an empty `state`.
 
 ## A step that waits for a scope
 
-A step with a `scope` in the recipe does not run per image. It runs once
+A step with a `scope` in the pipeline does not run per image. It runs once
 per unit, for example once per compartment, when that unit is complete.
 [Part 1](../1_use_the_engine/README.md#steps-that-wait-for-a-group-of-images)
-explains scopes and shows such a recipe.
+explains scopes and shows such a pipeline.
 
 A scoped step receives a different `pipeline_data`. There is no `input`:
 
@@ -202,7 +202,7 @@ A scoped step receives a different `pipeline_data`. There is no `input`:
 A failure with `"step": "engine"` did not come from a step. It is the
 engine's own note: an image of a narrower unit that was never completed.
 Completing a level completes the narrower units inside it, so this happens
-only when the recipe cannot tell that a level is narrower: list your levels
+only when the pipeline cannot tell that a level is narrower: list your levels
 under `levels`.
 
 **Return a new dictionary with your output.** Do not copy the per-image
@@ -215,9 +215,9 @@ example.
 
 ## Parameters
 
-The parameters under a step in the recipe arrive in `**params`.
+The parameters under a step in the pipeline arrive in `**params`.
 
-Give every parameter a value in the recipe, with a comment. The recipe is
+Give every parameter a value in the pipeline, with a comment. The pipeline is
 the record of what was done, and a reader should not need to open the step
 file to understand it.
 
@@ -230,7 +230,7 @@ def _setting(inp, params, key):
 ```
 
 `detect_objects` does this, so an operator can tune detection for one
-position. The recipe holds the default, and a job that carries `diameter`
+position. The pipeline holds the default, and a job that carries `diameter`
 uses its own value for that image only. Say in the docstring which
 parameters can be overridden this way.
 
@@ -239,7 +239,7 @@ parameters can be overridden this way.
 ```text
 workflows/object_analysis/
 ├── README.md              what the workflow does and how to choose its settings
-├── pipelines/             the recipes (YAML)
+├── pipelines/             the pipelines (YAML)
 ├── steps/                 one Python file per step
 ├── parts/                 optional: code the steps share, so a step stays short
 ├── environments/
@@ -267,7 +267,7 @@ To add a workflow, copy `focus`. It is the smallest one. Then:
 
 1. Write the steps.
 2. Name each environment and list its packages in `setup_env.py`.
-3. Write a recipe that holds every parameter, each with a comment.
+3. Write a pipeline that holds every parameter, each with a comment.
 4. Add tests and a short `README.md`.
 
 ## Test a step

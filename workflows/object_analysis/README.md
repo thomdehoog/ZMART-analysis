@@ -4,9 +4,9 @@ Finds the objects in an image, measures each one, and returns a table with
 one row per object. It works on one *tile* at a time. A tile is one image of
 a larger field, submitted as soon as it is acquired.
 
-## The recipes
+## The pipelines
 
-| Recipe | What it runs |
+| Pipeline | What it runs |
 |---|---|
 | `object_analysis.yaml` | `detect_objects` → `extract_classical_features` → `build_object_table`. Detection uses Cellpose. |
 | `object_analysis_fast.yaml` | The same, with `detect_objects_fast`: a watershed that needs no GPU. It leaves out the texture features that need a crop of every object (`glrlm`, `lbp`, `fft`). |
@@ -14,9 +14,9 @@ a larger field, submitted as soon as it is acquired.
 | `object_analysis_scoped.yaml` | The three steps per tile. Then `summarise_population` describes each compartment, and `compare_populations` compares the compartments of each carrier. |
 | `population_plots.yaml` | `plot_population`: a PCA or UMAP of a detected population, made on request. |
 
-Every recipe puts its result under `pipeline_data["object_analysis"]`.
+Every pipeline puts its result under `pipeline_data["object_analysis"]`.
 
-Every parameter is in the recipe, with its default. The docstring of each
+Every parameter is in the pipeline, with its default. The docstring of each
 step, in `steps/`, says exactly what the step takes and returns.
 
 ## Input
@@ -42,21 +42,21 @@ when it has them:
 
 | Key | What it is |
 |---|---|
-| `method` | `"robust"` (Cellpose, the default) or `"fast"` (the watershed). The detector in the recipe decides which of the two can run. |
+| `method` | `"robust"` (Cellpose, the default) or `"fast"` (the watershed). The detector in the pipeline decides which of the two can run. |
 | `z_selection` | Which plane of a z-stack to detect on: an index, `"mid"` (the default), or `"max"` / `"mean"` for a projection. |
 | `extra_channel_paths` | The other channels, for a frame that is stored as one file per plane. They are added to the detection image, so the features are measured in every colour. |
 | `extra_channel_indices` | The same for a frame that is stored as one position: the indices of the channels to read from it. |
 | `synthetic_pixels` | For images from a mock microscope: how the pixels were made. It is copied into the checkpoint for the record. |
 | `output_dir` | Where to write the masks and the checkpoint. The default is the `analysis` folder next to the `data` folder the image came from. |
 
-You can also give any detection setting of the recipe here, such as
+You can also give any detection setting of the pipeline here, such as
 `diameter`, `cellprob_threshold` or `border_margin_px`. It then replaces
-the recipe's value for this one image. This is how the operator page tunes
+the pipeline's value for this one image. This is how the operator page tunes
 detection on one position.
 
 ### Try it on one image
 
-To try the Cellpose recipe from a shell, without writing the input
+To try the Cellpose pipeline from a shell, without writing the input
 yourself:
 
 ```bash
@@ -88,7 +88,7 @@ The checkpoint records the parameters that were actually used, a hash of
 the parameters that shaped the masks, and hashes of the image and the
 masks. With it, a run can be reproduced from what really ran.
 
-## The scoped recipe
+## The scoped pipeline
 
 `object_analysis_scoped.yaml` is for runs that tell the engine when a
 compartment and a carrier are complete. It adds two steps.
@@ -112,16 +112,16 @@ These are the standard aggregation and normalisation of image-based
 profiling, the same as `aggregate` and `mad_robustize` in pycytominer. Here
 they are computed with pandas, numpy and scikit-learn.
 
-Both steps take their level from the recipe. To summarise per group
+Both steps take their level from the pipeline. To summarise per group
 instead, give them `scope: group` and `scope: compartment`. The `levels`
-entry of the recipe keeps each group inside its own compartment.
+entry of the pipeline keeps each group inside its own compartment.
 
 Every summary and comparison carries its `lineage`: the tiles it was built
 from and where every earlier step ran.
 
 ## The population plot
 
-`population_plots.yaml` is the one recipe here that does not run per tile.
+`population_plots.yaml` is the one pipeline here that does not run per tile.
 When a whole overview has been detected and its object table is written,
 the operator can ask for a plot of that population. The plot shows the
 first two principal components, or a UMAP made from the first fifty.
@@ -149,8 +149,8 @@ There is one environment per model, and one for everything classical:
 
 Create each one with `python environments/setup_env.py --step <name>`.
 
-Each step file names its own environment, so a recipe only starts the
-workers it needs. The fast recipe never loads PyTorch.
+Each step file names its own environment, so a pipeline only starts the
+workers it needs. The fast pipeline never loads PyTorch.
 
 ### Why they are split this way
 
@@ -178,7 +178,7 @@ compiler with it, which the classical steps do not need.
    inside the function that uses it, so the module loads without it.
 2. Add a branch for it in `segment_position` in `detect_objects.py`.
 3. Add its package list to `environments/setup_env.py`.
-4. Write a recipe that uses a step in the new environment.
+4. Write a pipeline that uses a step in the new environment.
 
 ## Tuning notes
 

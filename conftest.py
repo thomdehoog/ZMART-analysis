@@ -4,7 +4,7 @@ Loaded for every test file in the repository. Puts the package and the
 workflows' shared helpers on the path, offers an ``engine_factory`` fixture
 that shuts its engines down, the ``wait_for_results`` and ``wait_for_status``
 fixtures that poll an engine's job board instead of sleeping, and the Cellpose probe the
-object_analysis tests skip on. The step and recipe factories the engine
+object_analysis tests skip on. The step and pipeline factories the engine
 tests write files with live in ``tests/helpers.py``. The markers are
 declared in ``pyproject.toml``.
 """

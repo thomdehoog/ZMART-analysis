@@ -1,13 +1,13 @@
 """
-Pipeline -- how a recipe is read and how its jobs are tracked.
+Pipeline -- how a pipeline is read and how its jobs are tracked.
 
-Not part of the public API; the Engine uses it. It reads a recipe (YAML),
+Not part of the public API; the Engine uses it. It reads a pipeline (YAML),
 splits its steps into phases at scope boundaries, keeps track of which
 jobs are waiting for which scope to complete, and keeps the job board.
 
 The job board
 -------------
-Every job has an id, counted per recipe from 1. A submit makes an image
+Every job has an id, counted per pipeline from 1. A submit makes an image
 job; a submit that completes a unit also makes one scope job per level it
 closes. Each entry holds the step the job is at, its scope (the unit, for
 a scope job), its state and, once done, its output:
@@ -37,7 +37,7 @@ Scope matching
 When complete="X" is signaled from a submit with scope={"X": val}:
   - If "X" is a key in the scope dicts: match by value (scope["X"] == val),
     together with the value of every wider level (see scope_key). The
-    wider levels are the recipe's ``levels`` when it declares them, else
+    wider levels are the pipeline's ``levels`` when it declares them, else
     the scopes of the later phases.
   - If "X" is not a key: collect everything from the previous phase
 
@@ -63,7 +63,7 @@ a level first closes every narrower unit of it that is still open,
 narrowest first: completing carrier 1 closes its open groups, then its
 open compartments, then the carrier. A unit is open from the first image
 submitted into it until it is closed; a later image opens it again. Which
-levels are narrower comes from the recipe's ``levels`` (widest first, the
+levels are narrower comes from the pipeline's ``levels`` (widest first, the
 experiment above all), or else from the order of its scoped steps.
 
 Up the levels
@@ -112,7 +112,7 @@ class StepConfig:
 
     Where a step runs is not configured here. The step file names its own
     conda environment in ``METADATA``, beside the imports that need it, so a
-    recipe describes only the analysis: the steps, their order, their
+    pipeline describes only the analysis: the steps, their order, their
     parameters and their scopes. Which environment each step actually used,
     and the package versions in it, is recorded in every result under
     ``provenance``.
@@ -229,7 +229,7 @@ def split_phases(steps_config):
 
 class PipelineState:
     """
-    Internal state for one registered recipe.
+    Internal state for one registered pipeline.
 
     Tracks jobs, units, collected results and the job board.
     Thread-safe: all mutable state is protected by _lock.
@@ -249,23 +249,23 @@ class PipelineState:
         self.name = name
         self.yaml_path = Path(yaml_path)
         self.phases = phases
-        #: The sample's levels, widest first, from the recipe's metadata.
+        #: The sample's levels, widest first, from the pipeline's metadata.
         #: Without them, the phases' scopes stand in (narrowest first).
         self.levels = list(levels) if levels else None
         self.functions_dir = functions_dir
         self.step_settings = step_settings
         self.verbose = verbose
-        #: The recipe's top-level key, for the results' metadata.
+        #: The pipeline's top-level key, for the results' metadata.
         self.workflow_name = workflow_name or name
 
         self._lock = threading.Lock()
         # The job board: id -> {step, scope, state, output[, error]}.
         self._jobs = {}
         self._next_job = 1
-        #: Every future this recipe started, image jobs and scope chains, so
+        #: Every future this pipeline started, image jobs and scope chains, so
         #: deregister can wait for them or cancel them.
         self.futures = []
-        #: Set by deregister(wait=False): no step of this recipe starts again.
+        #: Set by deregister(wait=False): no step of this pipeline starts again.
         self.cancelling = False
         # Every scope key a submit has used, for check_complete.
         self._seen_scope_keys = set()
@@ -293,7 +293,7 @@ class PipelineState:
 
     @property
     def environments(self):
-        """The environments this recipe's steps run in."""
+        """The environments this pipeline's steps run in."""
         return {settings["environment"] for settings in self.step_settings.values()}
 
     def check_complete(self, levels, scope):
@@ -330,7 +330,7 @@ class PipelineState:
             return job
 
     def new_image_job(self, scope):
-        """An image job, queued at the first step of the recipe."""
+        """An image job, queued at the first step of the pipeline."""
         return self.new_job(self.phases[0].steps[0].name, scope, "queued")
 
     def new_scope_job(self, phase_idx, unit):
@@ -405,7 +405,7 @@ class PipelineState:
             )
 
     def wider_levels(self, level):
-        """The levels wider than *level*, widest first: from the recipe's
+        """The levels wider than *level*, widest first: from the pipeline's
         ``levels`` when it has them, else from the later phases' scopes."""
         if self.levels is not None:
             levels = self.levels
@@ -430,13 +430,13 @@ class PipelineState:
         return key
 
     def scoped_levels(self):
-        """The levels this recipe has a step for, narrowest first."""
+        """The levels this pipeline has a step for, narrowest first."""
         return [phase.scope for phase in self.phases if phase.scope]
 
     def narrower_levels(self, level):
         """The scoped levels narrower than *level*, narrowest first.
 
-        From the recipe's ``levels`` when *level* is one of them, else from
+        From the pipeline's ``levels`` when *level* is one of them, else from
         the order of the scoped steps. A level known to neither has none.
         """
         scoped = self.scoped_levels()

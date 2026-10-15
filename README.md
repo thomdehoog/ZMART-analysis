@@ -97,7 +97,7 @@ tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status
 
-This is a release candidate. The step format, the recipe layout and the
+This is a release candidate. The step format, the pipeline layout and the
 `Engine` calls are settled in spirit, and small changes may still happen
 before 1.0. If you build a workflow on it, please open an issue so we can
 keep the contract honest together.

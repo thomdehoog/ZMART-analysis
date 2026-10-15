@@ -16,8 +16,8 @@ the errors a worker can raise:
     +-- StepExecutionError    the step's run() raised
 
 A worker is never stopped for being idle. It stops when the engine takes
-its environment away (a recipe was deregistered and no other needs it), when
-the recipe it runs for is cancelled, or at shutdown.
+its environment away (a pipeline was deregistered and no other needs it), when
+the pipeline it runs for is cancelled, or at shutdown.
 
 Thread safety: the pools guard their dictionaries with locks and each
 _EnvPool guards its idle and busy lists.
@@ -675,7 +675,7 @@ class WorkerPool:
                 with self._pool_lock:
                     refused = owner is not None and owner in self._killed
                 if refused:
-                    raise WorkerCrashedError("Step not started: its recipe was cancelled")
+                    raise WorkerCrashedError("Step not started: its pipeline was cancelled")
                 return worker.execute(step_path, pipeline_data, params, timeout=timeout)
             finally:
                 pool.release(worker)
