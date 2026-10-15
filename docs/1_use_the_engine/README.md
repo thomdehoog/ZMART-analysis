@@ -33,6 +33,8 @@ image is ready for the next one.
 The conda environments must exist before the first run. Each workflow has a
 script that makes them; see [Install it](../../README.md#install-it).
 
+<br>
+
 ## Make an engine
 
 ```python
@@ -49,7 +51,9 @@ deregister the last recipe that needs it, or shut the engine down.
 
 `with Engine() as engine:` shuts the engine down when the block ends.
 
-## Register a recipe
+<br>
+
+## Register a pipeline
 
 ```python
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
