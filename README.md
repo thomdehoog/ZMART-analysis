@@ -10,7 +10,9 @@
 <td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
 <td valign="middle">
 
-**ZMART Analysis** is an image analysis engine built for smart microscopy. It analyses images as the microscope acquires them, so the results can decide what to image next. Tools with conflicting dependencies work together in one pipeline, and every pipeline is reproducible. Any interface, AI agent or acquisition workflow can drive it.
+**ZMART Analysis** is an image analysis engine built for smart microscopy. It allows you to triggers image analysis when the data comes in, handles dependencies,
+
+It analyses images as the microscope acquires them, so the results can decide what to image next. Tools with conflicting dependencies work together in one pipeline, and every pipeline is reproducible. Any interface, AI agent or acquisition workflow can drive it.
 
 It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 
@@ -23,55 +25,50 @@ It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's
 When building smart microscopy workflows, you are likely to run into the
 following four problems.
 
-1. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
-   Each step needs the right environment with the right dependencies, and
-   often there is no single environment in which all steps can run.
-
-2. **Reproducibility.** Image analysis pipelines can be complex and are often
-   fitted to one use case. They chain many algorithms, each with their own
-   parameters. Making sure that these pipelines are reproducible, properly
-   documented and easy to share is a challenge on its own.
-
-3. **Time.** The analysis is often time sensitive. The microscope waits for the
-   answer, so images must be analysed as soon as they come in.
-
-4. **Analysis over scopes.** Depending on the experiment, analysis needs to
+1. **Analysis over scopes.** Depending on the experiment, analysis needs to
    be done over single images, a group of images, a compartment, a carrier,
    or a whole experiment. However, the data does not come in all at once. A
    step over a larger scope can only start once the right set of images is
-   in. Keeping track of all these analysis requirements calls for a higher
-   degree of orchestration.
+   in. Keeping track of all these analysis requirements calls for more
+   sophisticated degree of workflow orchestration.
+
+2. **Reproducibility.** The complexity in workflow orchestration need to be
+   documented and reproducible. This is already a challenge in post-acquisition
+   workflows, and is more tricky for smart microscopy workflows.
+
+3. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
+   Each step needs often need specific decencies. However, these decencies
+   can often not be installed together in the same virtual environment. This creates real
+   barrier for getting your analysis up and running quickly  
+
+4. **Time.** The microscope waits for feedback to move one, therefore analysis
+   needs to be finished as soon as possible. Even though computational resources
+   are often limited.
+
 
 ## The Solution
 
-The ZMART Analysis pipeline engine addresses all four of them.
+I am not aware of a current tool that takes these 4 barriers away. Therefore, I created
+the ZMART Analysis pipeline engine. It address these barriers in the following way, 
+while aiming the minimize as much friction as possible.
 
-1. **Every step can be executed in its own environment.** Each step says which
-   conda environment it needs. The pipeline engine runs each step in that
-   environment and pieces the steps together into one pipeline. In this way,
-   steps can share an environment or be separated to neutralise dependency
-   conflicts.
+1. **Analysis steps declare a scope.** Each step says over which scope its analysis
+   needs to run: a single image, a group, a compartment, a carrier, or the experiment.
+   An analysis step automatically is triggered as soon as the data over the
+   given scope is completely acquired.
 
-2. **Pipelines are constructed in YAML files.** Which steps are pieced
-   together, in which order, with which parameters, is defined in a YAML
-   file: the *recipe*. An analysis is always started from this file, so it
-   is reproducible and easy to share and document. Every result also records
-   the environment, Python version and package versions each step actually
-   ran with.
+2. **Analysis pipelines are declared in YAML files.** A YAML file defines
+   which steps are run, in which order, and with which settings. You can reuse theme
+   as templates, so it is easy to adjust and provide documentation that makes you analysis.
+   
+3. **Steps can be isolated and executed by different workers** Each step names
+   the conda environment it needs. Steps can share an environment or use separate
+   ones, so dependency conflicts are avoided.
+   
+4. **Workers stay active and can run steps concurrently.** Multiple workers
+   can be initialized. They stay active and accept tasks as soon as they are
+   free.
 
-3. **Environments stay active, and several can run at once.** During a run,
-   the analysis environments (workers) are started once and stay active, so
-   each image is processed the moment it comes in. For one step, several
-   workers can be spawned to analyse images concurrently. A queue routes
-   incoming work to the right worker and lets urgent jobs go first.
-
-4. **Steps declare a scope.** Each step says over which scope its analysis
-   needs to run: a single image, a group, a compartment, a carrier, or the
-   experiment. When all the data for a scope is in, the step starts. Steps
-   within one pipeline can differ in scope, so per-image steps run as each
-   image comes in while a per-carrier step waits for the whole carrier, is
-   told what failed beneath it, and carries the lineage of every image it
-   was built from.
 
 ## Want to give it a try?
 
@@ -113,12 +110,3 @@ Zurich (thom.dehoog@zmb.uzh.ch, thomdehoog@gmail.com).
 MIT License. See [LICENSE](LICENSE) for details.
 
 If the code in this repository inspires you, or you use it or build on it, please acknowledge it. The [CITATION.cff](CITATION.cff) file says how to cite it.
-
-## Links
-
-- [ZMART Microscopy](https://github.com/thomdehoog/ZMART-microscopy): the main repository, with the acquisition workflows
-- [ZMART Controller](https://github.com/thomdehoog/ZMART-controller): one vocabulary for driving any microscope
-- [ZMART Drivers](https://github.com/thomdehoog/ZMART-drivers): the drivers that plug into the controller
-- [ZMART viewer](https://github.com/thomdehoog/ZMART-viewer): the viewer
-- [ZMART AI agent](https://github.com/thomdehoog/ZMART-ai-agent): drive any microscope by chatting
-- [Center for Microscopy and Image Analysis (ZMB)](https://www.zmb.uzh.ch), University of Zurich
