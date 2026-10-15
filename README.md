@@ -48,7 +48,7 @@ following four problems.
 
 I am not aware of a current tool that takes these 4 barriers away. Therefore, I created
 the ZMART Analysis pipeline engine. It address these barriers in the following way, 
-while aiming the minimize input, configuration as much friction as possible.
+while aiming the minimize input, configuration and fiction as much friction as possible.
 
 1. **Analysis steps declare a scope.** <br>Each step says over which scope its analysis
    needs to run: a single image, a group, a compartment, a carrier, or the experiment.
