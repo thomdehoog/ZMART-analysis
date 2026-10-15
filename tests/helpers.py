@@ -67,23 +67,49 @@ def _write_yaml(content):
 # --------------------------------------------------------------------------
 
 
+FINISHED = ("done", "failed", "cancelled")
+
+
+def outputs(board):
+    """The outputs of the done jobs on a board, in job order."""
+    return [board[job]["output"] for job in sorted(board) if board[job]["state"] == "done"]
+
+
+def phase_of(output):
+    """0 for an image job's output, 1, 2, ... for a scoped one."""
+    return output["metadata"].get("phase", 0)
+
+
+def tally(board):
+    """How many jobs of a board are in each state."""
+    counts = dict.fromkeys(("queued", "running", "waiting", "done", "failed", "cancelled"), 0)
+    for entry in board.values():
+        counts[entry["state"]] += 1
+    return counts
+
+
+def failures(board):
+    """The failed entries of a board, in job order, each with its job id."""
+    return [{"job": job, **board[job]} for job in sorted(board) if board[job]["state"] == "failed"]
+
+
 def _wait_for_results(engine, name, expected, timeout=30):
+    """Poll the board until *expected* jobs are done; return their outputs."""
     t0 = time.monotonic()
-    collected = []
     while time.monotonic() - t0 < timeout:
-        collected.extend(engine.results(name))
-        if len(collected) >= expected:
-            return collected
+        done = outputs(engine.status(name))
+        if len(done) >= expected:
+            return done
         time.sleep(0.05)
-    return collected
+    return outputs(engine.status(name))
 
 
 def _wait_for_status(engine, name, expected_total, timeout=30):
-    """Poll engine.status() until completed+failed >= expected_total."""
+    """Poll the board until *expected_total* jobs have finished; return it."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
-        s = engine.status(name)
-        if s["completed"] + s["failed"] >= expected_total:
-            return s
+        board = engine.status(name)
+        if sum(entry["state"] in FINISHED for entry in board.values()) >= expected_total:
+            return board
         time.sleep(0.05)
     return engine.status(name)

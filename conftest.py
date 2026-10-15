@@ -3,7 +3,7 @@
 Loaded for every test file in the repository. Puts the package and the
 workflows' shared helpers on the path, offers an ``engine_factory`` fixture
 that shuts its engines down, the ``wait_for_results`` and ``wait_for_status``
-fixtures that poll an engine instead of sleeping, and the Cellpose probe the
+fixtures that poll an engine's job board instead of sleeping, and the Cellpose probe the
 object_analysis tests skip on. The step and recipe factories the engine
 tests write files with live in ``tests/helpers.py``. The markers are
 declared in ``pyproject.toml``.
@@ -65,15 +65,15 @@ def engine_factory():
 
 @pytest.fixture
 def wait_for_results():
-    """``wait_for_results(engine, name, expected, timeout=30)``: poll an
-    engine until *expected* results of *name* are in, and return them."""
+    """``wait_for_results(engine, name, expected, timeout=30)``: poll the
+    board until *expected* jobs of *name* are done, and return their outputs."""
     return _wait_for_results
 
 
 @pytest.fixture
 def wait_for_status():
     """``wait_for_status(engine, name, expected_total, timeout=30)``: poll
-    until that many jobs of *name* have completed or failed; return the status."""
+    until that many jobs of *name* have finished; return the board."""
     return _wait_for_status
 
 

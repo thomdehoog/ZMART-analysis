@@ -2,8 +2,22 @@
 Pipeline -- how a recipe is read and how its jobs are tracked.
 
 Not part of the public API; the Engine uses it. It reads a recipe (YAML),
-splits its steps into phases at scope boundaries, and keeps track of which
-jobs are waiting for which scope to complete.
+splits its steps into phases at scope boundaries, keeps track of which
+jobs are waiting for which scope to complete, and keeps the job board.
+
+The job board
+-------------
+Every job has an id, counted per recipe from 1. A submit makes an image
+job; a submit that completes a unit also makes one scope job per level it
+closes. Each entry holds the step the job is at, its scope (the unit, for
+a scope job), its state and, once done, its output:
+
+    queued -> running -> done | failed          an image job
+    waiting -> running -> done | failed         a scope job
+    any state before done -> cancelled          deregister(wait=False)
+
+The id doubles as the submission index below: ids only grow, so "submitted
+up to and including this one" is still a comparison of numbers.
 
 Phases
 ------
@@ -54,7 +68,6 @@ leaves out the level it closes.
 from __future__ import annotations
 
 import logging
-import queue
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
@@ -208,7 +221,7 @@ class PipelineState:
     """
     Internal state for one registered recipe.
 
-    Tracks jobs, units, collected results and status counters.
+    Tracks jobs, units, collected results and the job board.
     Thread-safe: all mutable state is protected by _lock.
     """
 
@@ -236,7 +249,14 @@ class PipelineState:
         self.workflow_name = workflow_name or name
 
         self._lock = threading.Lock()
-        self._submission_counter = 0
+        # The job board: id -> {step, scope, state, output[, error]}.
+        self._jobs = {}
+        self._next_job = 1
+        #: Every future this recipe started, image jobs and scope chains, so
+        #: deregister can wait for them or cancel them.
+        self.futures = []
+        #: Set by deregister(wait=False): no step of this recipe starts again.
+        self.cancelling = False
         # Every scope key a submit has used, for check_complete.
         self._seen_scope_keys = set()
 
@@ -254,17 +274,14 @@ class PipelineState:
         # on, or the signal threads could all wait on each other.
         self._scoped_in_flight = defaultdict(list)
 
-        # Completed results queue (drained by engine.results())
-        self._results_queue = queue.Queue()
-
-        # Status counters. A submit adds one pending; record_start moves it
-        # to running; a completion, a failure or a cancellation takes it
-        # off again, so the three never drift. The failed count is always
-        # derived from _failures, which scope collection drains.
-        self._n_pending = 0
-        self._n_running = 0
-        self._n_completed = 0
+        # Failure records for the scoped steps' lineage; scope collection
+        # drains them. The board keeps its own record of every failed job.
         self._failures = []
+
+    @property
+    def environments(self):
+        """The environments this recipe's steps run in."""
+        return {settings["environment"] for settings in self.step_settings.values()}
 
     def check_complete(self, levels, scope):
         """Refuse a close signal that would close the wrong thing.
@@ -289,74 +306,87 @@ class PipelineState:
                     )
             self._seen_scope_keys.update(scope)
 
-    def next_submission_idx(self):
-        """Get the next submission index (thread-safe)."""
+    # -- The job board ---------------------------------------------------
+
+    def new_job(self, step, scope, state):
+        """Put a new job on the board and return its id."""
         with self._lock:
-            idx = self._submission_counter
-            self._submission_counter += 1
-            self._n_pending += 1
-            return idx
+            job = self._next_job
+            self._next_job += 1
+            self._jobs[job] = {"step": step, "scope": dict(scope), "state": state, "output": None}
+            return job
+
+    def new_image_job(self, scope):
+        """An image job, queued at the first step of the recipe."""
+        return self.new_job(self.phases[0].steps[0].name, scope, "queued")
+
+    def new_scope_job(self, phase_idx, unit):
+        """A scope job for *unit*, waiting at the first step of its phase."""
+        return self.new_job(self.phases[phase_idx].steps[0].name, unit or {}, "waiting")
+
+    def job_at(self, job, step):
+        """The job is running *step*."""
+        with self._lock:
+            self._jobs[job].update(step=step, state="running")
+
+    def job_done(self, job, output):
+        with self._lock:
+            self._jobs[job].update(state="done", output=output)
+
+    def job_failed(self, job, error, step=None):
+        """The job failed; a job stopped by deregister is cancelled instead."""
+        if self.cancelling:
+            self.job_cancelled(job)
+            return
+        with self._lock:
+            entry = self._jobs[job]
+            entry.update(state="failed", error=error)
+            if step:
+                entry["step"] = step
+
+    def job_cancelled(self, job):
+        """Cancel the job, unless it already finished."""
+        with self._lock:
+            entry = self._jobs[job]
+            if entry["state"] not in ("done", "failed"):
+                entry["state"] = "cancelled"
+
+    def board(self):
+        """A copy of the board: the entries are new dicts, the outputs shared."""
+        with self._lock:
+            return {job: dict(entry) for job, entry in self._jobs.items()}
+
+    # -- Futures and failures --------------------------------------------
 
     def add_job_entry(self, future, scope, submission_idx):
-        """Record a submitted job's future and scope."""
+        """Record a submitted image job's future and scope."""
         with self._lock:
             self._job_entries.append((future, scope, submission_idx))
+            self.futures.append(future)
         future.add_done_callback(
-            lambda done: (
-                self.record_cancellation(scope, submission_idx) if done.cancelled() else None
-            )
+            lambda done: self.job_cancelled(submission_idx) if done.cancelled() else None
         )
 
-    def record_start(self, is_submission=True):
-        """Move an operation from pending to running. A scoped phase was
-        never pending: only submits count there."""
+    def add_future(self, future):
+        """Record a scope chain's future."""
         with self._lock:
-            if is_submission:
-                self._n_pending -= 1
-            self._n_running += 1
+            self.futures.append(future)
 
     def store_phase0_result(self, submission_idx, scope, result):
         """Store a Phase 0 result for later scope collection."""
         self.store_phase_result(0, result, scope, submission_idx)
 
-    def publish_result(self, result, phase_idx, scope, scope_level):
-        """Put a completed result in the results queue."""
-        result["_phase"] = phase_idx
-        result["_scope"] = scope
-        result["_scope_level"] = scope_level
-        self._results_queue.put(result)
-
-    def record_completion(self):
-        """Record that a job/phase completed successfully."""
-        with self._lock:
-            self._n_running -= 1
-            self._n_completed += 1
-
     def record_failure(self, scope, step_name, error_msg, phase, submission_idx):
-        """Record a failed step. ``phase`` is the phase it failed in and
-        ``submission_idx`` the tile, or the submit that closed the unit."""
+        """Record a failed step for the lineage of the scoped steps above it.
+        ``phase`` is the phase it failed in and ``submission_idx`` the tile,
+        or the submit that closed the unit."""
         with self._lock:
-            self._n_running -= 1
             self._failures.append(
                 {
                     "scope": scope,
                     "step": step_name,
                     "error": error_msg,
                     "phase": phase,
-                    "submission_idx": submission_idx,
-                }
-            )
-
-    def record_cancellation(self, scope, submission_idx):
-        """Record a queued submission cancelled during engine shutdown."""
-        with self._lock:
-            self._n_pending -= 1
-            self._failures.append(
-                {
-                    "scope": scope,
-                    "step": "engine",
-                    "error": "Cancelled during engine shutdown",
-                    "phase": 0,
                     "submission_idx": submission_idx,
                 }
             )
@@ -525,33 +555,3 @@ class PipelineState:
                 for f, s, idx in self._job_entries
                 if not (idx <= before and _matches(s, unit))
             ]
-
-    def drain_results(self):
-        """Drain and return all completed results."""
-        results = []
-        while True:
-            try:
-                results.append(self._results_queue.get_nowait())
-            except queue.Empty:
-                break
-        return results
-
-    @property
-    def status(self):
-        """Current pipeline state for observability. ``held`` is what waits
-        for a level to close: how many results, and of which units."""
-        with self._lock:
-            held_units, n_held = {}, 0
-            for k in range(len(self.phases) - 1):
-                for _, entry_scope, _ in self._phase_results[k]:
-                    n_held += 1
-                    unit = self.scope_key(self.phases[k + 1].scope, entry_scope) or {}
-                    held_units[tuple(sorted(unit.items()))] = unit
-            return {
-                "pending": self._n_pending,
-                "running": self._n_running,
-                "completed": self._n_completed,
-                "failed": len(self._failures),
-                "failures": list(self._failures),
-                "held": {"results": n_held, "units": list(held_units.values())},
-            }

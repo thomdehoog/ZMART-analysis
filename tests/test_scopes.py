@@ -21,7 +21,7 @@ import textwrap
 import time
 
 import pytest
-from helpers import _wait_for_results, _wait_for_status
+from helpers import _wait_for_results, _wait_for_status, failures, outputs, phase_of, tally
 from helpers import _write_step as _temp_step
 from helpers import _write_yaml as _temp_yaml
 
@@ -96,27 +96,32 @@ def recipe(steps_dir):
 
 
 def scoped(engine, expected, timeout=30):
-    """Poll until *expected* scoped results arrived; return all results."""
-    collected = []
+    """Poll the board until *expected* scoped jobs are done; return the
+    outputs of every done job, tiles and units, in job order.
+
+    The board keeps every output, so each call returns all of them again: a
+    test that closes more units later asks for the new running total.
+    """
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
-        collected += engine.results("p")
-        if sum(r["_phase"] > 0 for r in collected) >= expected:
-            return collected
+        done = outputs(engine.status("p"))
+        if sum(phase_of(r) > 0 for r in done) >= expected:
+            return done
         time.sleep(0.05)
+    board = engine.status("p")
     raise TimeoutError(
         f"{expected} scoped results expected within {timeout}s, got "
-        f"{sum(r['_phase'] > 0 for r in collected)}; status {engine.status('p')}"
+        f"{sum(phase_of(r) > 0 for r in outputs(board))}; board {board}"
     )
 
 
 def status_when(engine, condition, timeout=30):
-    """Poll ``engine.status`` until *condition* holds; return the status."""
+    """Poll the board until *condition* holds; return the board."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
-        status = engine.status("p")
-        if condition(status):
-            return status
+        board = engine.status("p")
+        if condition(board):
+            return board
         time.sleep(0.05)
     return engine.status("p")
 
@@ -301,7 +306,7 @@ def test_several_steps_share_one_scope(recipe):
         submit_tiles(e, [1, 2, 3], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
+    (compartment,) = [r for r in results if phase_of(r) == 1]
     assert compartment["total"] == 6
     assert compartment["doubled"] == 12
     assert set(compartment["provenance"]) == {"unit", "double"}
@@ -336,7 +341,7 @@ def test_a_recipe_that_skips_a_level_keeps_units_apart_when_it_declares_its_leve
         interleaved_groups(e, complete="group")
         results = scoped(e, 2)
 
-    groups = {r["engine_unit"]["compartment"]: r for r in results if r["_phase"] == 1}
+    groups = {r["engine_unit"]["compartment"]: r for r in results if phase_of(r) == 1}
     assert groups[1]["total"] == 2 and groups[2]["total"] == 200
     assert list(groups[1]["engine_unit"]) == ["carrier", "compartment", "group"]
 
@@ -348,7 +353,7 @@ def test_without_declared_levels_a_skipped_level_is_not_part_of_the_unit(recipe)
         interleaved_groups(e, complete="group")
         results = scoped(e, 2)
 
-    totals = sorted(r["total"] for r in results if r["_phase"] == 1)
+    totals = sorted(r["total"] for r in results if phase_of(r) == 1)
     assert totals == [0, 202]
 
 
@@ -360,7 +365,7 @@ def test_the_unit_is_widest_first_and_empty_for_all(recipe):
         )
         results = scoped(e, 2)
 
-    units = {r["level"]: r["engine_unit"] for r in results if r["_phase"] > 0}
+    units = {r["level"]: r["engine_unit"] for r in results if phase_of(r) > 0}
     assert units["compartment"] == {"carrier": 2, "compartment": 3}
     assert list(units["compartment"]) == ["carrier", "compartment"]
     assert units["all"] == {}
@@ -376,26 +381,48 @@ def test_bad_levels_are_refused_at_register(recipe):
 
 
 def test_a_carrier_reports_a_compartment_not_closed_and_keeps_its_tiles(recipe):
+    """The carrier is told, in its lineage, which tiles of compartment 2
+    were never closed; the tiles are kept for the compartment's late close,
+    and that compartment's result is kept for the carrier's next close."""
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
-        submit_tiles(e, [10, 20], {"carrier": 1, "compartment": 2})  # not closed
-        submit_tiles(e, [3], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"])
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")  # 1-3
+        submit_tiles(e, [10, 20], {"carrier": 1, "compartment": 2})  # 4, 5: not closed
+        submit_tiles(
+            e, [3], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
+        )  # 6-8
         results = scoped(e, 3)
-        held = e.status("p")["held"]
-        assert held == {"results": 2, "units": [{"carrier": 1, "compartment": 2}]}
 
-        e.submit("p", {"value": 30}, scope={"carrier": 1, "compartment": 2}, complete="compartment")
-        results += scoped(e, 1)
-        # The late compartment's result now waits for carrier 1 to close again.
-        assert e.status("p")["held"] == {"results": 1, "units": [{"carrier": 1}]}
+        (first,) = [r for r in results if r.get("level") == "carrier"]
+        assert first["n_inputs"] == 2  # compartment 1, closed twice
+        assert first["n_failures"] == 2  # compartment 2's two tiles
+        assert first["lineage"]["submissions"] == [1, 2, 6]
+        assert first["lineage"]["failed"] == [
+            {
+                "scope": {"carrier": 1, "compartment": 2},
+                "step": "engine",
+                "error": "compartment not closed",
+                "phase": 0,
+                "submission_idx": job,
+            }
+            for job in (4, 5)
+        ]
 
-    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    assert carrier["n_inputs"] == 2  # compartment 1, closed twice
-    assert carrier["n_failures"] == 2  # compartment 2's two tiles
+        e.submit(
+            "p", {"value": 30}, scope={"carrier": 1, "compartment": 2}, complete="compartment"
+        )  # 9, 10
+        results = scoped(e, 4)
+        late = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 2))]
+        assert late["total"] == 60
 
-    late = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 2))]
-    assert late["total"] == 60
+        # The late compartment's result waited for carrier 1 to close again.
+        e.submit("p", {"value": 0}, scope={"carrier": 1}, complete="carrier")  # 11, 12
+        results = scoped(e, 5)
+
+    first, second = [r for r in results if r.get("level") == "carrier"]
+    assert second["n_inputs"] == 1
+    assert second["total"] == 60
+    assert second["lineage"]["submissions"] == [4, 5, 9]
 
 
 def test_a_held_failure_is_reported_to_the_carrier_too(recipe):
@@ -418,9 +445,12 @@ def test_closing_a_level_the_recipe_does_not_have_runs_nothing(recipe):
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="carrier")
         submit_tiles(e, [3], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
+        board = e.status("p")
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
+    (compartment,) = [r for r in results if phase_of(r) == 1]
     assert compartment["total"] == 6
+    # Three tiles and one scope job: the carrier close made none.
+    assert len(board) == 4
 
 
 def test_a_close_whose_scope_leaves_out_the_level_is_refused(recipe):
@@ -434,10 +464,12 @@ def test_a_close_whose_scope_leaves_out_the_level_is_refused(recipe):
         with pytest.raises(ScopeError):
             e.submit("p", {"value": 5}, scope={"carrier": 1}, complete=["compartment", "carrier"])
         results = scoped(e, 1)
-        status = e.status("p")
+        board = e.status("p")
 
-    assert [r["value"] for r in results if r["_phase"] == 0] == [1]
-    assert status["pending"] == 0 and status["failed"] == 0
+    assert [r["value"] for r in results if phase_of(r) == 0] == [1]
+    # The refused submits put no job on the board: the tile and its unit only.
+    assert sorted(board) == [1, 2]
+    assert tally(board)["done"] == 2 and tally(board)["failed"] == 0
 
 
 def test_all_and_a_level_the_recipe_lacks_are_still_accepted(recipe):
@@ -455,12 +487,12 @@ def test_a_unit_closed_again_runs_again_on_its_new_tiles(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment"))
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="compartment")
-        results = scoped(e, 1)
+        scoped(e, 1)
         e.submit("p", {"value": 5}, scope={"compartment": 2}, complete="compartment")
         e.submit("p", {"value": 0}, scope={"compartment": 1}, complete="compartment")
-        results += scoped(e, 2)
+        results = scoped(e, 3)
 
-    totals = sorted((r["unit"]["compartment"], r["total"]) for r in results if r["_phase"] == 1)
+    totals = sorted((r["unit"]["compartment"], r["total"]) for r in results if phase_of(r) == 1)
     assert totals == [(1, 0), (1, 3), (2, 5)]
 
 
@@ -570,18 +602,27 @@ def test_many_units_with_few_threads_do_not_deadlock(recipe):
 
 
 def test_a_failed_tile_reaches_its_compartment_and_no_other(recipe):
+    """Compartment 2's failed tile is not handed to compartment 1; it is
+    still there for compartment 2 when that closes."""
     with Engine() as e:
         e.register("p", recipe("compartment"))
         e.submit("p", {"fail": True}, scope={"compartment": 1})
         e.submit("p", {"fail": True}, scope={"compartment": 2})
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="compartment")
-        results = scoped(e, 1)
-        status = status_when(e, lambda s: len(s["failures"]) == 1)
+        scoped(e, 1)
+        e.submit("p", {"value": 5}, scope={"compartment": 2}, complete="compartment")
+        results = scoped(e, 2)
+        board = e.status("p")
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
-    assert compartment["n_inputs"] == 2
-    assert compartment["n_failures"] == 1
-    assert len(status["failures"]) == 1  # compartment 2's, still unclaimed
+    compartments = by_unit(results, "compartment")
+    assert compartments[(("compartment", 1),)]["n_inputs"] == 2
+    assert compartments[(("compartment", 1),)]["n_failures"] == 1
+    assert compartments[(("compartment", 2),)]["n_inputs"] == 1
+    assert compartments[(("compartment", 2),)]["n_failures"] == 1
+    assert [(f["job"], f["step"], f["scope"]) for f in failures(board)] == [
+        (1, "tile", {"compartment": 1}),
+        (2, "tile", {"compartment": 2}),
+    ]
 
 
 def test_a_compartment_of_failed_tiles_still_runs(recipe):
@@ -591,7 +632,7 @@ def test_a_compartment_of_failed_tiles_still_runs(recipe):
         e.submit("p", {"fail": True}, scope={"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
+    (compartment,) = [r for r in results if phase_of(r) == 1]
     assert compartment["n_inputs"] == 0
     assert compartment["n_failures"] == 1
 
@@ -604,12 +645,18 @@ def test_a_failed_compartment_reaches_its_carrier(recipe):
             e, [666], {"carrier": 1, "compartment": 2}, complete=["compartment", "carrier"]
         )
         results = scoped(e, 2)
-        status = e.status("p")
+        board = e.status("p")
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
     assert carrier["n_inputs"] == 1
     assert carrier["n_failures"] == 1
-    assert status["failures"] == []  # claimed by the carrier
+    (failed,) = failures(board)
+    assert failed["job"] == 4  # compartment 2's scope job
+    assert failed["step"] == "unit"
+    assert failed["scope"] == {"carrier": 1, "compartment": 2}
+    assert "unit failed" in failed["error"]
+    # The carrier was told: its lineage names the failed step and its close.
+    assert [(f["step"], f["submission_idx"]) for f in carrier["lineage"]["failed"]] == [("unit", 3)]
 
 
 def test_a_carrier_of_failed_compartments_still_runs(recipe):
@@ -625,31 +672,39 @@ def test_a_carrier_of_failed_compartments_still_runs(recipe):
     assert carrier["n_failures"] == 1
 
 
-def test_a_failure_names_its_step_phase_and_tile(recipe):
+def test_a_failure_names_its_step_job_and_scope(recipe):
+    """On the board a failed tile is its own job; a failed unit step is the
+    scope job of the unit it closed. Phase and submission are what the
+    lineage records add, see test_lineage_lists_a_failed_tile_and_a_failed_compartment."""
     with Engine() as e:
         e.register("p", recipe("compartment"))
-        e.submit("p", {"fail": True}, scope={"compartment": 1})  # idx 0
-        e.submit("p", {"value": 666}, scope={"compartment": 2}, complete="compartment")  # idx 1
-        status = status_when(e, lambda s: len(s["failures"]) == 2)
+        e.submit("p", {"fail": True}, scope={"compartment": 1})  # job 1
+        e.submit(
+            "p", {"value": 666}, scope={"compartment": 2}, complete="compartment"
+        )  # job 2, scope job 3
+        board = status_when(e, lambda b: len(failures(b)) == 2)
 
-    by_step = {f["step"]: f for f in status["failures"]}
-    assert by_step["tile"]["phase"] == 0 and by_step["tile"]["submission_idx"] == 0
-    assert by_step["unit"]["phase"] == 1 and by_step["unit"]["submission_idx"] == 1
-    assert by_step["unit"]["scope"] == {"compartment": 2}
+    by_step = {f["step"]: f for f in failures(board)}
+    assert by_step["tile"]["job"] == 1 and by_step["tile"]["scope"] == {"compartment": 1}
+    assert "tile failed" in by_step["tile"]["error"]
+    assert by_step["unit"]["job"] == 3 and by_step["unit"]["scope"] == {"compartment": 2}
+    assert "unit failed" in by_step["unit"]["error"]
+    assert board[2]["state"] == "done"
 
 
 def test_a_failed_compartment_step_is_not_handed_to_the_next_close_as_a_tile(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment"))
         submit_tiles(e, [666], {"compartment": 1}, complete="compartment")
-        status_when(e, lambda s: len(s["failures"]) == 1)
+        status_when(e, lambda b: len(failures(b)) == 1)
         submit_tiles(e, [1], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
-        status = e.status("p")
+        board = e.status("p")
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
+    (compartment,) = [r for r in results if phase_of(r) == 1]
+    assert compartment["n_inputs"] == 1
     assert compartment["n_failures"] == 0
-    assert [f["step"] for f in status["failures"]] == ["unit"]
+    assert [(f["job"], f["step"]) for f in failures(board)] == [(2, "unit")]
 
 
 def test_all_gets_only_the_failures_of_the_phase_before_it(recipe):
@@ -676,14 +731,15 @@ def test_every_level_records_its_own_step_and_scope(recipe):
         )
         results = scoped(e, 2)
 
+    assert len(results) == 4
     for r in results:
-        assert set(r["_scope"]) == {"carrier", "compartment"}
-        if r["_phase"] == 0:
+        assert set(r["metadata"]["scope"]) == {"carrier", "compartment"}
+        if phase_of(r) == 0:
             assert set(r["provenance"]) == {"tile"}
-            assert r["_scope_level"] is None
+            assert r["metadata"].get("scope_level") is None
         else:
             assert set(r["provenance"]) == {"unit"}
-            assert r["_scope_level"] == r["level"]
+            assert r["metadata"].get("scope_level") == r["level"]
     compartment = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 1))]
     assert compartment["inputs_provenance"] == [["tile"], ["tile"]]
 
@@ -702,13 +758,14 @@ def test_a_carrier_can_be_traced_back_to_its_tiles(recipe):
         )
         results = scoped(e, 4)
 
+    # The image jobs are 1, 2 and 4: job 3 is group 1's scope job.
     group = by_unit(results, "group")[(("carrier", 1), ("compartment", 1), ("group", 1))]
-    assert group["lineage"]["submissions"] == [0, 1]
+    assert group["lineage"]["submissions"] == [1, 2]
     assert set(group["lineage"]["provenance"]) == {"tile"}
     assert set(group["provenance"]) == {"unit"}
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    assert carrier["lineage"]["submissions"] == [0, 1, 2]
+    assert carrier["lineage"]["submissions"] == [1, 2, 4]
     assert carrier["lineage"]["failed"] == []
     assert set(carrier["lineage"]["provenance"]) == {"tile", "unit"}  # below the carrier
     assert len(carrier["lineage"]["provenance"]["unit"]) == 1  # one environment
@@ -723,7 +780,7 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
-    (compartment,) = [r for r in results if r["_phase"] == 1]
+    (compartment,) = [r for r in results if phase_of(r) == 1]
     assert compartment["metadata"]["unit"] == {
         "compartment": 1
     }  # no levels: carrier is not a phase
@@ -734,12 +791,14 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
 def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
-        e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})  # idx 0
-        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")  # idx 1
+        e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})  # job 1
+        submit_tiles(
+            e, [1], {"carrier": 1, "compartment": 1}, complete="compartment"
+        )  # job 2, scope job 3
         submit_tiles(
             e,
             [666],
-            {"carrier": 1, "compartment": 2},  # idx 2
+            {"carrier": 1, "compartment": 2},  # job 4, scope jobs 5 and 6
             complete=["compartment", "carrier"],
         )
         results = scoped(e, 2)
@@ -748,8 +807,8 @@ def test_lineage_lists_a_failed_tile_and_a_failed_compartment(recipe):
     failed = sorted(
         (f["step"], f["phase"], f["submission_idx"]) for f in carrier["lineage"]["failed"]
     )
-    assert failed == [("tile", 0, 0), ("unit", 1, 2)]
-    assert carrier["lineage"]["submissions"] == [1]
+    assert failed == [("tile", 0, 1), ("unit", 1, 4)]
+    assert carrier["lineage"]["submissions"] == [2]
 
 
 # ---- The engine's own scope cases, one each ---------------------------
@@ -858,8 +917,8 @@ class TestEngineScopes:
             results = _wait_for_results(e, "test", 4, timeout=15)
 
         # Should have 3 Phase 0 results + 1 scoped result
-        phase0 = [r for r in results if r.get("_phase") == 0]
-        scoped = [r for r in results if r.get("_phase") == 1]
+        phase0 = [r for r in results if phase_of(r) == 0]
+        scoped = [r for r in results if phase_of(r) == 1]
         assert len(phase0) == 3
         assert len(scoped) == 1
         assert scoped[0]["tiles"] == [0, 1, 2]
@@ -898,7 +957,7 @@ class TestEngineScopes:
                 e.submit("test", {"val": i}, scope={"group": "G1"}, complete=complete)
             results = _wait_for_results(e, "test", 6, timeout=20)
 
-        scoped = [r for r in results if r.get("_phase") == 1]
+        scoped = [r for r in results if phase_of(r) == 1]
         assert len(scoped) == 1
         assert scoped[0]["order"] == [0, 1, 2, 3, 4]
 
@@ -939,7 +998,7 @@ class TestEngineScopes:
             e.submit("test", {"val": 50}, scope={"group": "B"}, complete="group")
             results = _wait_for_results(e, "test", 7, timeout=20)
 
-        scoped = [r for r in results if r.get("_phase") == 1]
+        scoped = [r for r in results if phase_of(r) == 1]
         scoped_vals = sorted([tuple(r["vals"]) for r in scoped])
         assert (10, 20) in scoped_vals
         assert (30, 40, 50) in scoped_vals
@@ -987,7 +1046,7 @@ class TestEngineScopes:
             e.submit("test", {"v": 2}, scope={"group": "G1"}, complete=["group", "all"])
             results = _wait_for_results(e, "test", 4, timeout=20)
 
-        phase2 = [r for r in results if r.get("_phase") == 2]
+        phase2 = [r for r in results if phase_of(r) == 2]
         assert len(phase2) == 1
 
     def test_all_scope_collects_everything(self):
@@ -1023,7 +1082,7 @@ class TestEngineScopes:
             e.submit("test", {"v": 30}, scope={"group": "C"}, complete="all")
             results = _wait_for_results(e, "test", 4, timeout=15)
 
-        scoped = [r for r in results if r.get("_phase") == 1]
+        scoped = [r for r in results if phase_of(r) == 1]
         assert len(scoped) == 1
         assert scoped[0]["total"] == 60
 
@@ -1066,7 +1125,7 @@ class TestEngineScopes:
             e.submit("test", {"v": 2}, scope={"group": "G"}, complete="group")
             results = _wait_for_results(e, "test", 3, timeout=15)
 
-        scoped = [r for r in results if r.get("_phase") == 1]
+        scoped = [r for r in results if phase_of(r) == 1]
         assert len(scoped) == 1
         assert scoped[0]["n_results"] == 2
         assert scoped[0]["n_failures"] == 1
@@ -1074,7 +1133,8 @@ class TestEngineScopes:
         assert "deliberate failure" in scoped[0]["failure_errors"][0]
 
     def test_scope_collection_prunes_consumed_failures(self):
-        """Consumed scope failures leave status; unrelated failures remain."""
+        """A failure handed to its unit is not handed again when the unit
+        closes a second time; another unit's failure waits for its own."""
         _temp_step(
             """
             def run(pd, state, **p):
@@ -1109,18 +1169,21 @@ class TestEngineScopes:
             _wait_for_status(e, "test", expected_total=2, timeout=15)
 
             e.submit("test", {"group": "A", "fail": False}, scope={"group": "A"}, complete="group")
-            results = _wait_for_results(e, "test", 2, timeout=15)
-            status = e.status("test")
+            _wait_for_results(e, "test", 2, timeout=15)
+            e.submit("test", {"group": "A", "fail": False}, scope={"group": "A"}, complete="group")
+            e.submit("test", {"group": "B", "fail": False}, scope={"group": "B"}, complete="group")
+            results = _wait_for_results(e, "test", 6, timeout=15)
 
-        scoped = [r for r in results if r.get("_phase") == 1]
-        assert len(scoped) == 1
-        assert scoped[0]["n_results"] == 1
-        assert len(scoped[0]["failure_errors"]) == 1
-        assert "failed A" in scoped[0]["failure_errors"][0]
-
-        remaining_errors = [f["error"] for f in status["failures"]]
-        assert len(remaining_errors) == 1
-        assert "failed B" in remaining_errors[0]
+        scoped = [r for r in results if phase_of(r) == 1]
+        assert [r["metadata"]["scope"]["group"] for r in scoped] == ["A", "A", "B"]
+        first_a, second_a, b = scoped
+        assert first_a["n_results"] == 1
+        assert len(first_a["failure_errors"]) == 1
+        assert "failed A" in first_a["failure_errors"][0]
+        assert second_a["n_results"] == 1
+        assert second_a["failure_errors"] == []
+        assert len(b["failure_errors"]) == 1
+        assert "failed B" in b["failure_errors"][0]
 
 
 # ---- Engine (environment isolation) ----------------------------------

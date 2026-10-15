@@ -11,16 +11,19 @@ API
 
     engine = Engine()
     engine.register("analysis", "workflows/object_analysis/pipelines/object_analysis_scoped.yaml")
-    engine.submit("analysis", image, scope={"carrier": 1, "compartment": 3})
-    engine.submit("analysis", last_image, scope={"carrier": 1, "compartment": 3},
-                  complete="compartment")
-    results = engine.results("analysis")
+    job = engine.submit(pipeline="analysis", data=image,
+                        scope={"carrier": 1, "compartment": 3})
+    engine.submit(pipeline="analysis", data=last_image,
+                  scope={"carrier": 1, "compartment": 3}, complete="compartment")
+    board = engine.status("analysis")       # every job: step, scope, state, output
+    engine.deregister("analysis")           # its jobs finish, its workers stop
     engine.shutdown()
 
 Architecture
 ------------
-    engine.py         the Engine: register, submit, status, results
-    pipeline.py       reads a recipe, splits it into phases, tracks scopes
+    engine.py         the Engine: register, submit, status, deregister, shutdown
+    pipeline.py       reads a recipe, splits it into phases, tracks scopes,
+                      keeps the job board
     priority_pool.py  the thread pool that starts the most urgent job first
     workers.py        the worker processes that run the steps, and their errors
     worker_script.py  runs inside a step's conda environment; imports nothing

@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The job board (breaking).** `submit(pipeline, data, ...)` returns the
+  job's id; ids count per recipe from 1. `status(name)` is the board: every
+  job with its `step`, `scope`, `state` (`queued`, `running`, `waiting`,
+  `done`, `failed`, `cancelled`) and `output`, and `error` on a failed one.
+  `status()` gives one board per recipe. Completing a unit adds a scope job
+  of its own. `results()` is gone, and so are the status counts, the
+  `failures` list, `held`, and the `_phase`, `_scope` and `_scope_level`
+  keys on every output. `submit`'s first argument is now `pipeline`.
+- **`deregister(name, wait=True)`.** Ends a recipe: its jobs finish (or,
+  with `wait=False`, its running steps are killed and the rest cancelled),
+  the workers no other registered recipe needs are stopped, and the final
+  board is returned. `shutdown()` deregisters every recipe.
+- **No idle timeout.** `Engine(idle_timeout=...)` is gone, and so is the
+  reaper. A worker lives while a recipe that needs it is registered.
+- The submission index in `metadata` and `lineage` is the image job's id.
 - The package is `zmart_analysis`: `from zmart_analysis import Engine`.
   The old name, `engine`, still imports.
 - A step runs in the worker as a real module, registered under its file

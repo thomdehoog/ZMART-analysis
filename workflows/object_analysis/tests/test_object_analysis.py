@@ -78,16 +78,14 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
 
     with Engine() as engine:
         engine.register(name, str(yaml_path))
-        engine.submit(name, payload)
+        job = engine.submit(pipeline=name, data=payload)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            results = engine.results(name)
-            if results:
-                return results[0]
-            status = engine.status(name)
-            if status["failed"]:
-                failure = status["failures"][0]
-                raise AssertionError(f"{failure['step']}: {failure['error']}")
+            entry = engine.status(name)[job]
+            if entry["state"] == "done":
+                return entry["output"]
+            if entry["state"] == "failed":
+                raise AssertionError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.1)
     raise AssertionError(f"Timed out waiting for {name}")
 
@@ -134,19 +132,26 @@ def test_the_scoped_recipe_end_to_end_with_the_fast_detector(tmp_path, monkeypat
                 engine.submit(
                     "scoped", _payload(image_path, gpu=False), scope=scope, complete=closes
                 )
-        results, deadline = [], time.monotonic() + 240
+        deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
-            results += engine.results("scoped")
-            if sum(r["_phase"] == 2 for r in results) == 2:
+            board = engine.status("scoped")
+            results = [e["output"] for e in board.values() if e["state"] == "done"]
+            if sum(r["metadata"].get("phase", 0) == 2 for r in results) == 2:
                 break
             time.sleep(0.1)
         else:
-            raise AssertionError(f"timed out; status {engine.status('scoped')}")
+            raise AssertionError(f"timed out; board {engine.status('scoped')}")
 
     compartments = {
-        tuple(r["population"]["scope"].values()): r for r in results if r["_phase"] == 1
+        tuple(r["population"]["scope"].values()): r
+        for r in results
+        if r["metadata"].get("phase", 0) == 1
     }
-    carriers = {r["comparison"]["scope"]["carrier"]: r for r in results if r["_phase"] == 2}
+    carriers = {
+        r["comparison"]["scope"]["carrier"]: r
+        for r in results
+        if r["metadata"].get("phase", 0) == 2
+    }
     assert set(compartments) == {(1, 1), (1, 2), (2, 1), (2, 2)}
     assert compartments[(2, 1)]["population"]["n_tiles"] == 2
     assert compartments[(2, 1)]["population"]["n_failed_tiles"] == 1

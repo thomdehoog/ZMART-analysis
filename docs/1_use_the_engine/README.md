@@ -3,10 +3,6 @@
 This page shows how to run an analysis with the ZMART Analysis engine. For
 a guided first run, open the [tutorial notebook](tutorial.ipynb).
 
-> **Planned.** This page describes the next version of the engine: the job
-> board, `deregister`, and workers that live with their recipe. The code does
-> not do this yet. The tutorial notebook still shows the current version.
-
 ## A complete run
 
 ```python
@@ -230,7 +226,7 @@ The states:
 name. Each recipe counts its own ids, so two recipes can both have a job 1.
 
 The board keeps every job and its output until you deregister the recipe or
-shut the engine down. Read what you need before that.
+shut the engine down. `deregister` hands you the final board.
 
 ### The output
 
@@ -390,23 +386,24 @@ logging.basicConfig(level=logging.INFO)
 ## Deregister a recipe
 
 ```python
-engine.deregister("my_pipeline")
+board = engine.deregister("my_pipeline")
 ```
 
 `deregister(name)` is the end of a recipe:
 
 1. The recipe stops accepting new images.
-2. Its queued and running jobs finish. A scoped job whose unit was never
-   completed does not run; it is `cancelled`.
+2. Its queued and running jobs finish. Images of a unit that was never
+   completed stay as they are: no scoped job was made for that unit.
 3. Workers that no other registered recipe needs are stopped. A worker
    that another recipe still needs keeps running.
-4. The recipe and its board are removed.
+4. The recipe and its board are removed. `deregister` returns the final
+   board.
 
-`deregister(name, wait=False)` stops at once. Running steps are killed and
-queued jobs do not run; they are all `cancelled`.
+`deregister(name, wait=False)` stops at once. Running steps are killed,
+queued jobs do not run, and scoped jobs still waiting do not run; on the
+final board they are all `cancelled`.
 
-Read the board before you deregister. Afterwards the name can be registered
-again.
+Afterwards the name can be registered again. Its job ids start at 1 again.
 
 ## Shut down
 

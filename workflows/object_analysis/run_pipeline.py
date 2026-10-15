@@ -116,19 +116,17 @@ def main():
 
     with Engine() as engine:
         engine.register("object_analysis", str(CLASSICAL_YAML))
-        engine.submit("object_analysis", payload)
+        job = engine.submit(pipeline="object_analysis", data=payload)
 
         while True:
-            results = engine.results("object_analysis")
-            if results:
+            entry = engine.status("object_analysis")[job]
+            if entry["state"] == "done":
                 break
-            status = engine.status("object_analysis")
-            if status["failed"]:
-                failure = status["failures"][0]
-                raise RuntimeError(f"{failure['step']}: {failure['error']}")
+            if entry["state"] == "failed":
+                raise RuntimeError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.2)
 
-    tile = results[0]["object_analysis"]
+    tile = entry["output"]["object_analysis"]
     print(f"Objects detected: {tile['objects']['n_objects']}")
 
 

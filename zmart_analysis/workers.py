@@ -15,8 +15,12 @@ the errors a worker can raise:
     +-- WorkerTimeoutError    the step ran past its timeout and was killed
     +-- StepExecutionError    the step's run() raised
 
+A worker is never stopped for being idle. It stops when the engine takes
+its environment away (a recipe was deregistered and no other needs it), when
+the recipe it runs for is cancelled, or at shutdown.
+
 Thread safety: the pools guard their dictionaries with locks and each
-_EnvPool guards its idle and busy lists; a reaper thread stops idle workers.
+_EnvPool guards its idle and busy lists.
 """
 
 import collections
@@ -28,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from multiprocessing.connection import Listener
 from pathlib import Path
 
@@ -175,23 +180,18 @@ class Worker:
     environment : str or None
         Conda environment name. None means the orchestrator's own
         environment (uses sys.executable directly).
-    idle_timeout : float or None
-        Seconds of inactivity before eligible for reaper shutdown; None
-        means never.
     connect_timeout : float
         Seconds to wait for the subprocess to connect back.
     """
 
-    def __init__(self, environment=None, idle_timeout=300.0, connect_timeout=60.0):
+    def __init__(self, environment=None, connect_timeout=60.0):
         self.environment = environment
-        self.idle_timeout = idle_timeout
         self.connect_timeout = connect_timeout
 
         self._process = None
         self._conn = None
         self._listener = None
         self._stderr_drainer = None
-        self._last_active = time.monotonic()
         self._current_step = None
         #: Set by :meth:`shutdown` with ``now``. A killed worker stays down,
         #: even when the kill landed before its spawn.
@@ -284,7 +284,6 @@ class Worker:
                 ) from e
 
         self._refuse_if_put_down()
-        self._last_active = time.monotonic()
         logger.info("Worker ready: pid=%d, env=%s", self._process.pid, env_label)
 
     def _accept_in_turns(self):
@@ -381,7 +380,6 @@ class Worker:
 
         elapsed = time.monotonic() - t0
         response = pickle.loads(raw)
-        self._last_active = time.monotonic()
         self._current_step = None
 
         if not isinstance(response, tuple) or len(response) != 2:
@@ -400,18 +398,6 @@ class Worker:
 
         logger.debug("Worker execute done: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
         return payload
-
-    def is_idle(self, now=None):
-        """True if worker has been idle longer than idle_timeout.
-
-        Never, when there is no idle_timeout: the worker is kept for as long
-        as its pool is.
-        """
-        if self.idle_timeout is None:
-            return False
-        if now is None:
-            now = time.monotonic()
-        return (now - self._last_active) > self.idle_timeout
 
     def is_alive(self):
         """Check if the worker process is still running."""
@@ -531,40 +517,37 @@ class Worker:
 class _EnvPool:
     """Worker pool for one conda environment.
 
-    Tracks idle and busy workers. Creates new workers on demand.
-    The pool grows as needed and shrinks via idle timeout reaping.
+    Tracks idle and busy workers, and for every busy one the owner it runs
+    for. Creates new workers on demand; they stay until the pool is shut
+    down or their owner is killed.
     """
 
-    def __init__(self, environment, idle_timeout, connect_timeout):
+    def __init__(self, environment, connect_timeout):
         self.environment = environment
-        self.idle_timeout = idle_timeout
         self.connect_timeout = connect_timeout
         self._idle = []
         self._busy = []
+        self._owners = {}
         self._lock = threading.Lock()
-        self._closed = False
+        self.closed = False
 
-    def acquire(self):
-        """Get an idle worker or create a new one. Marks it busy."""
+    def acquire(self, owner=None):
+        """Get an idle worker or create a new one. Marks it busy for *owner*."""
         with self._lock:
-            if self._closed:
+            if self.closed:
                 raise RuntimeError("WorkerPool has been shut down")
-            # Try to reuse an idle worker
-            while self._idle:
-                worker = self._idle.pop()
-                if worker.is_alive():
-                    self._busy.append(worker)
-                    return worker
-                # Dead worker, discard silently
-                worker.shutdown()
-
-            # No idle worker available, create a new one
-            worker = Worker(
-                environment=self.environment,
-                idle_timeout=self.idle_timeout,
-                connect_timeout=self.connect_timeout,
-            )
+            worker = None
+            while self._idle and worker is None:
+                candidate = self._idle.pop()
+                if candidate.is_alive():
+                    worker = candidate
+                else:
+                    # Dead worker, discard silently
+                    candidate.shutdown()
+            if worker is None:
+                worker = Worker(environment=self.environment, connect_timeout=self.connect_timeout)
             self._busy.append(worker)
+            self._owners[worker] = owner
             return worker
 
     def release(self, worker):
@@ -574,35 +557,32 @@ class _EnvPool:
                 self._busy.remove(worker)
             except ValueError:
                 pass
-            if worker.is_alive() and not self._closed:
+            self._owners.pop(worker, None)
+            if worker.is_alive() and not self.closed:
                 self._idle.append(worker)
 
-    def reap_idle(self):
-        """Shut down workers that have been idle too long."""
-        to_shutdown = []
+    def kill_owner(self, owner):
+        """Kill every busy worker running for *owner*, at once.
+
+        The caller blocked on such a worker is released with
+        WorkerCrashedError. The other workers of the pool are left alone.
+        """
         with self._lock:
-            active = []
-            for worker in self._idle:
-                if worker.is_idle():
-                    to_shutdown.append(worker)
-                else:
-                    active.append(worker)
-            self._idle = active
-
-        for worker in to_shutdown:
-            worker.shutdown()
-
-        if to_shutdown:
-            env_label = _label(self.environment)
-            logger.info("Reaped %d idle worker(s) of %s", len(to_shutdown), env_label)
+            doomed = [w for w in self._busy if self._owners.get(w) is owner]
+            for worker in doomed:
+                self._busy.remove(worker)
+                self._owners.pop(worker, None)
+        for worker in doomed:
+            worker.shutdown(now=True)
 
     def shutdown_all(self, now=False):
         """Shut down all workers in this pool; with ``now``, at once."""
         with self._lock:
-            self._closed = True
+            self.closed = True
             all_workers = self._idle + self._busy
             self._idle.clear()
             self._busy.clear()
+            self._owners.clear()
 
         for worker in all_workers:
             worker.shutdown(now=now)
@@ -624,15 +604,11 @@ class WorkerPool:
 
     Parameters
     ----------
-    idle_timeout : float or None
-        Seconds before idle workers are shut down (default: 300); None
-        means they are never reaped.
     connect_timeout : float
         Seconds to wait for a new worker to connect (default: 60).
     """
 
-    def __init__(self, idle_timeout=300.0, connect_timeout=60.0):
-        self.idle_timeout = idle_timeout
+    def __init__(self, connect_timeout=60.0):
         self.connect_timeout = connect_timeout
 
         self._env_pools = {}
@@ -641,11 +617,20 @@ class WorkerPool:
         self._step_semaphores = {}
         self._sem_lock = threading.Lock()
 
-        self._shutdown_event = threading.Event()
-        self._reaper = None
+        #: Owners whose steps were killed. Their later steps are refused.
+        self._killed = weakref.WeakSet()
         self._closed = False
 
-    def execute(self, environment, step_path, pipeline_data, params, max_workers=1, timeout=300.0):
+    def execute(
+        self,
+        environment,
+        step_path,
+        pipeline_data,
+        params,
+        max_workers=1,
+        timeout=300.0,
+        owner=None,
+    ):
         """
         Execute a step in a worker subprocess.
 
@@ -666,13 +651,31 @@ class WorkerPool:
             Maximum concurrent instances of this step.
         timeout : float
             Seconds to wait for step completion.
+        owner : object, optional
+            Who the step runs for; :meth:`kill_owner` stops its steps.
         """
         sem = self._get_semaphore(step_path, max_workers)
         sem.acquire()
         try:
-            pool = self._get_env_pool(environment)
-            worker = pool.acquire()
+            while True:
+                pool = self._get_env_pool(environment)
+                try:
+                    worker = pool.acquire(owner)
+                    break
+                except RuntimeError:
+                    # The environment was taken away between the two calls;
+                    # the next turn finds a fresh pool for it.
+                    if self._closed:
+                        raise
             try:
+                # Checked after the worker is marked busy for the owner, and
+                # kill_owner marks the owner before it looks for busy
+                # workers: a step racing a kill is either refused here or
+                # killed there, never started unseen.
+                with self._pool_lock:
+                    refused = owner is not None and owner in self._killed
+                if refused:
+                    raise WorkerCrashedError("Step not started: its recipe was cancelled")
                 return worker.execute(step_path, pipeline_data, params, timeout=timeout)
             finally:
                 pool.release(worker)
@@ -687,12 +690,7 @@ class WorkerPool:
             if environment not in self._env_pools:
                 env_label = _label(environment)
                 logger.info("Creating env pool for %s", env_label)
-                self._env_pools[environment] = _EnvPool(
-                    environment,
-                    self.idle_timeout,
-                    self.connect_timeout,
-                )
-                self._ensure_reaper()
+                self._env_pools[environment] = _EnvPool(environment, self.connect_timeout)
             return self._env_pools[environment]
 
     def _get_semaphore(self, step_path, max_workers):
@@ -708,25 +706,26 @@ class WorkerPool:
                 self._step_semaphores[key] = threading.Semaphore(max_workers)
             return self._step_semaphores[key]
 
-    # -- Reaper --------------------------------------------------------
+    # -- Ending part of the pool ---------------------------------------
 
-    def _ensure_reaper(self):
-        """Start the reaper thread on first pool creation."""
-        if self._reaper is None:
-            logger.debug("Starting reaper (idle_timeout=%s)", self.idle_timeout)
-            self._reaper = threading.Thread(
-                target=self._reaper_loop,
-                daemon=True,
-            )
-            self._reaper.start()
+    def take_environment(self, environment):
+        """Take an environment's workers out of the pool and return them.
 
-    def _reaper_loop(self):
-        """Background thread: reap idle workers every 30s."""
-        while not self._shutdown_event.wait(timeout=30.0):
-            with self._pool_lock:
-                pools = list(self._env_pools.values())
-            for pool in pools:
-                pool.reap_idle()
+        Returns the environment's pool, or None when it has none. A later
+        step in that environment gets a fresh pool. The caller shuts the
+        returned pool down, outside any lock it holds.
+        """
+        with self._pool_lock:
+            return self._env_pools.pop(environment, None)
+
+    def kill_owner(self, owner):
+        """Kill every step running for *owner*, in every environment, and
+        refuse every step it asks for from now on."""
+        with self._pool_lock:
+            self._killed.add(owner)
+            pools = list(self._env_pools.values())
+        for pool in pools:
+            pool.kill_owner(owner)
 
     # -- Status & shutdown ---------------------------------------------
 
@@ -745,8 +744,6 @@ class WorkerPool:
         With ``now`` every worker is killed at once, busy or not, so a step
         in flight stops too.
         """
-        self._shutdown_event.set()
-
         with self._pool_lock:
             self._closed = True
             pools = list(self._env_pools.values())

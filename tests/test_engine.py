@@ -3,8 +3,8 @@ Test suite for the engine.
 
 Covers: exception hierarchy, AST-based METADATA extraction, phase splitting,
 per-environment workers with state dicts, worker pool with per-step
-concurrency (semaphores), Engine API (register/submit/status/results),
-concurrent execution,
+concurrency (semaphores), Engine API (register/submit/status, the job
+board), concurrent execution,
 graceful failure handling, and lifecycle management.
 
 Structure
@@ -14,16 +14,17 @@ Structure
 - TestPhases                  Phase splitting from YAML step lists
 - TestWorkerProtocol          Per-env workers, state dict, caching
 - TestWorkerErrorPaths        Crash, timeout, missing file
-- TestPool                    Per-env pools, semaphores, reaper
+- TestPool                    Per-env pools, semaphores
 - TestEngineRegister          Pipeline registration
 - TestEngineSubmit            Job submission, immediate execution
-- TestEngineResults           Results queue, phase tagging
 - TestEngineConcurrency       Parallel jobs, max_workers
 - TestEngineErrors            Graceful failure handling
 - TestEngineLifecycle         Shutdown, context manager
-- TestEngineStatus            Observability
+- TestEngineStatus            The job board
 - TestEngineMultiPipeline     Multiple registered pipelines
+- TestEnginePriority          Priority orders queued jobs
 - TestPackageAPI              Public exports and versioning
+- TestTheBrake                A shutdown that does not wait
 
 Usage
 -----
@@ -46,6 +47,9 @@ from helpers import (
     _next_id,
     _wait_for_results,
     _wait_for_status,
+    failures,
+    phase_of,
+    tally,
 )
 from helpers import (
     _write_step as _temp_step,
@@ -624,7 +628,7 @@ class TestPool:
             import os
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
         """)
-        pool = WorkerPool(idle_timeout=60)
+        pool = WorkerPool()
         r1 = pool.execute(None, path, {}, {}, timeout=10)
         r2 = pool.execute(None, path, {}, {}, timeout=10)
         assert r1["pid"] == r2["pid"]
@@ -650,43 +654,6 @@ class TestPool:
             pool.execute(None, path, {}, {}, timeout=10)
         assert "pool err" in str(ctx.value)
         pool.shutdown_all()
-
-    def test_reaper_removes_idle(self):
-        from zmart_analysis.workers import WorkerPool
-
-        path = _temp_step("def run(pd, state, **p): return pd")
-        pool = WorkerPool(idle_timeout=0.2)
-        pool.execute(None, path, {}, {}, timeout=10)
-
-        env_pool = pool._env_pools[None]
-        assert len(env_pool._idle) > 0 or len(env_pool._busy) > 0
-
-        time.sleep(0.4)
-        env_pool.reap_idle()
-        assert len(env_pool._idle) == 0
-        pool.shutdown_all()
-
-    def test_no_idle_timeout_means_never_reaped(self):
-        """``idle_timeout=None`` keeps a worker for as long as the pool lives.
-
-        The operator page holds one engine for the session and its workers'
-        imports are the cost it exists to avoid paying twice; a press five
-        minutes after the last one found them reaped and paid it again.
-        """
-        from zmart_analysis.workers import Worker, WorkerPool
-
-        path = _temp_step("def run(pd, state, **p): return pd")
-        pool = WorkerPool(idle_timeout=None)
-        pool.execute(None, path, {}, {}, timeout=10)
-
-        env_pool = pool._env_pools[None]
-        time.sleep(0.3)
-        env_pool.reap_idle()
-        assert len(env_pool._idle) == 1
-        assert not env_pool._idle[0].is_idle(now=time.monotonic() + 1e9)
-        pool.shutdown_all()
-
-        assert not Worker(idle_timeout=None).is_idle()
 
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
@@ -967,43 +934,6 @@ class TestEngineSubmit:
         assert sorted(r["job"] for r in results) == list(range(5))
 
 
-# ---- Engine (results) ------------------------------------------------
-
-
-class TestEngineResults:
-    def test_results_consumed_on_retrieval(self):
-        _temp_step("def run(pd, state, **p): return pd", name="drain")
-        yaml = _temp_yaml("wf:\n  - drain:")
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {})
-            r1 = _wait_for_results(e, "test", 1, timeout=10)
-            r2 = e.results("test")
-        assert len(r1) == 1
-        assert len(r2) == 0
-
-    def test_results_tagged_with_phase(self):
-        _temp_step("def run(pd, state, **p): return pd", name="tag")
-        yaml = _temp_yaml("wf:\n  - tag:")
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            e.register("test", yaml)
-            e.submit("test", {})
-            results = _wait_for_results(e, "test", 1, timeout=10)
-        assert results[0]["_phase"] == 0
-        assert results[0]["_scope_level"] is None
-
-    def test_unregistered_pipeline_raises(self):
-        from zmart_analysis import Engine
-
-        with Engine() as e:
-            with pytest.raises(KeyError):
-                e.results("nonexistent")
-
-
 # ---- Engine (concurrency) -------------------------------------------
 
 
@@ -1071,9 +1001,11 @@ class TestEngineErrors:
             e.submit("test", {"fail": True})
             e.submit("test", {"fail": False})
             e.submit("test", {"fail": False})
-            status = _wait_for_status(e, "test", 3, timeout=15)
-        assert status["completed"] >= 2
-        assert status["failed"] >= 1
+            board = _wait_for_status(e, "test", 3, timeout=15)
+        assert tally(board)["done"] == 2
+        assert tally(board)["failed"] == 1
+        assert board[1]["state"] == "failed"
+        assert board[2]["output"]["ok"] and board[3]["output"]["ok"]
 
     def test_failures_in_status(self):
         _temp_step(
@@ -1088,10 +1020,12 @@ class TestEngineErrors:
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
-            status = _wait_for_status(e, "test", 1, timeout=10)
-        assert status["failed"] == 1
-        assert len(status["failures"]) > 0
-        assert "boom" in status["failures"][0]["error"]
+            board = _wait_for_status(e, "test", 1, timeout=10)
+        assert tally(board)["failed"] == 1
+        (failed,) = failures(board)
+        assert failed["job"] == 1
+        assert failed["step"] == "fail_status"
+        assert "boom" in failed["error"]
 
     def test_return_non_dict_raises(self):
         _temp_step(
@@ -1106,8 +1040,9 @@ class TestEngineErrors:
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
-            status = _wait_for_status(e, "test", 1, timeout=10)
-        assert status["failed"] == 1
+            board = _wait_for_status(e, "test", 1, timeout=10)
+        assert tally(board)["failed"] == 1
+        assert "returned str, expected dict" in board[1]["error"]
 
 
 # ---- Engine (lifecycle) ----------------------------------------------
@@ -1239,6 +1174,10 @@ class TestEngineLifecycle:
         e.shutdown()  # should not raise
 
     def test_shutdown_without_wait_cancels_queue_and_closes_workers(self):
+        """Twelve 0.3 s steps on one thread would take 3.6 s to run out; a
+        shutdown that cancels the queue returns long before. The board goes
+        with the recipes, so what is left to see is the time it took, that
+        no recipe remains and that no worker is left."""
         _temp_step(
             """
             import time
@@ -1258,24 +1197,18 @@ class TestEngineLifecycle:
 
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if e.status("test")["running"] == 1:
+            if tally(e.status("test"))["running"] == 1:
                 break
             time.sleep(0.01)
-        assert e.status("test")["running"] == 1
+        counts = tally(e.status("test"))
+        assert counts["running"] == 1
+        assert counts["queued"] + counts["done"] == 11
 
+        t0 = time.monotonic()
         e.shutdown(wait=False)
+        assert time.monotonic() - t0 < 2.0
 
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            status = e.status("test")
-            if status["pending"] == 0 and status["running"] == 0:
-                break
-            time.sleep(0.01)
-
-        status = e.status("test")
-        assert status["pending"] == 0
-        assert status["running"] == 0
-        assert status["completed"] + status["failed"] == 12
+        assert e.status() == {}
         assert e._pool.status["workers"] == []
 
 
@@ -1291,11 +1224,12 @@ class TestEngineStatus:
         with Engine() as e:
             e.register("test", yaml)
             e.submit("test", {})
-            status = _wait_for_status(e, "test", 1, timeout=10)
-        assert "completed" in status
-        assert "failed" in status
-        assert "pending" in status
-        assert status["completed"] == 1
+            board = _wait_for_status(e, "test", 1, timeout=10)
+        assert list(board) == [1]
+        assert board[1]["state"] == "done"
+        assert board[1]["step"] == "st"
+        assert board[1]["scope"] == {}
+        assert board[1]["output"]["input"] == {}
 
     def test_status_all_pipelines(self):
         _temp_step("def run(pd, state, **p): return pd", name="st2")
@@ -1305,9 +1239,8 @@ class TestEngineStatus:
         with Engine() as e:
             e.register("a", yaml)
             e.register("b", yaml)
-            status = e.status()
-        assert "a" in status
-        assert "b" in status
+            boards = e.status()
+        assert boards == {"a": {}, "b": {}}
 
     def test_status_nonexistent_raises(self):
         from zmart_analysis import Engine
@@ -1316,12 +1249,10 @@ class TestEngineStatus:
             with pytest.raises(KeyError):
                 e.status("ghost")
 
-    def test_status_failed_count_matches_failures_after_scope_completion(self):
-        # Regression: scope collection drains the consumed failure records out
-        # of the failures list. The failed COUNT must be derived from that
-        # list, not held in a separate counter that keeps the stale failure
-        # and desyncs status() -- which also made the documented poll pattern
-        # `status["failures"][0] if status["failed"]` raise IndexError.
+    def test_a_failed_tile_stays_on_the_board_after_its_group_closes(self):
+        """Scope collection hands the failed tile to the group step; the
+        board keeps it failed all the same, with its step and error, so a
+        caller polling the board never loses a failure to a scope close."""
         _temp_step(
             """
             def run(pd, state, **p):
@@ -1357,20 +1288,15 @@ class TestEngineStatus:
             # 2 surviving Phase-0 results + 1 scoped result (the failed tile
             # produces no Phase-0 result).
             results = _wait_for_results(e, "test", 3, timeout=15)
-
-            # Let scope collection drain the consumed failure.
-            deadline = time.monotonic() + 5
-            status = e.status("test")
-            while time.monotonic() < deadline and status["failures"]:
-                time.sleep(0.02)
-                status = e.status("test")
+            board = e.status("test")
 
         assert len(results) == 3
-        # The invariant: failed count always equals the failure-record count.
-        assert status["failed"] == len(status["failures"])
-        # The poll pattern used by run_pipeline.py must never IndexError.
-        if status["failed"]:
-            _ = status["failures"][0]
+        assert results[-1]["tiles"] == [0, 2]
+        assert tally(board)["done"] == 3 and tally(board)["failed"] == 1
+        (failed,) = failures(board)
+        assert failed["job"] == 2
+        assert failed["step"] == "drift_seg"
+        assert "bad tile" in failed["error"]
 
     def test_status_tracks_pending_and_running_jobs(self):
         _temp_step(
@@ -1392,21 +1318,21 @@ class TestEngineStatus:
 
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
-                status = e.status("test")
-                if status["running"] == 1 and status["pending"] == 1:
+                counts = tally(e.status("test"))
+                if counts["running"] == 1 and counts["queued"] == 1:
                     break
                 time.sleep(0.01)
 
-            assert status["pending"] == 1
-            assert status["running"] == 1
-            assert status["completed"] == 0
+            assert counts["queued"] == 1
+            assert counts["running"] == 1
+            assert counts["done"] == 0
             results = _wait_for_results(e, "test", 2, timeout=5)
-            status = e.status("test")
+            counts = tally(e.status("test"))
 
         assert len(results) == 2
-        assert status["pending"] == 0
-        assert status["running"] == 0
-        assert status["completed"] == 2
+        assert counts["queued"] == 0
+        assert counts["running"] == 0
+        assert counts["done"] == 2
 
 
 # ---- Engine (multi-pipeline) ----------------------------------------
@@ -1446,12 +1372,18 @@ class TestEnginePriority:
     """Optional priority parameter orders pending jobs."""
 
     def test_higher_priority_runs_before_lower(self):
-        """High-priority pending jobs execute before low-priority pending ones."""
+        """High-priority pending jobs execute before low-priority pending ones.
+
+        The board lists outputs by job id, which is submission order, so the
+        step counts its own runs in its state dict to show the order they ran in.
+        """
         _temp_step(
             """
             import time
             def run(pd, state, **p):
                 time.sleep(0.15)
+                state["runs"] = state.get("runs", 0) + 1
+                pd["ran"] = state["runs"]
                 pd["mark"] = pd["input"]["mark"]
                 return pd
         """,
@@ -1472,8 +1404,9 @@ class TestEnginePriority:
             e.submit("test", {"mark": "high_b"}, priority=10)
             results = _wait_for_results(e, "test", 5, timeout=10)
 
-        marks = [r["mark"] for r in results]
+        marks = [r["mark"] for r in sorted(results, key=lambda r: r["ran"])]
         assert len(marks) == 5
+        assert sorted(r["ran"] for r in results) == [1, 2, 3, 4, 5]
         assert marks[0] == "blocker"
         # High-priority pending jobs come before low-priority pending ones.
         idx = {m: i for i, m in enumerate(marks)}
@@ -1486,10 +1419,13 @@ class TestEnginePriority:
         assert idx["low_a"] < idx["low_b"]
 
     def test_default_priority_preserves_fifo(self):
-        """No priority specified -> submission order is preserved."""
+        """No priority specified -> submission order is preserved. The step
+        counts its runs, as above, since the board's order is the job id's."""
         _temp_step(
             """
             def run(pd, state, **p):
+                state["runs"] = state.get("runs", 0) + 1
+                pd["ran"] = state["runs"]
                 pd["i"] = pd["input"]["i"]
                 return pd
         """,
@@ -1504,8 +1440,9 @@ class TestEnginePriority:
                 e.submit("test", {"i": i})
             results = _wait_for_results(e, "test", 5, timeout=10)
 
-        order = [r["i"] for r in results]
+        order = [r["i"] for r in sorted(results, key=lambda r: r["ran"])]
         assert order == [0, 1, 2, 3, 4]
+        assert sorted(r["ran"] for r in results) == [1, 2, 3, 4, 5]
 
     def test_scope_completion_does_not_block_lower_priority_phase0(self):
         _temp_step(
@@ -1543,7 +1480,7 @@ class TestEnginePriority:
             )
             results = _wait_for_results(e, "test", 2, timeout=5)
 
-        scoped = [result for result in results if result["_phase"] == 1]
+        scoped = [result for result in results if phase_of(result) == 1]
         assert len(results) == 2
         assert len(scoped) == 1
         assert scoped[0]["total"] == 7
@@ -1719,9 +1656,9 @@ class TestTheBrake:
         )
         time.sleep(0.5)
         assert not _alive(pid), "the step's worker must be gone"
-        s = e.status("brake")
-        assert s["completed"] == 0, "a step put down by hand answers nothing"
-        assert list(e.results("brake")) == []
+        # The board goes with the recipe; that the job ends cancelled, with
+        # no output, is test_job_board's deregister-without-waiting case.
+        assert e.status() == {}
 
     def test_a_shutdown_now_during_the_spawn_leaves_nothing_behind(self):
         """A press that lands while the tree is still being built.

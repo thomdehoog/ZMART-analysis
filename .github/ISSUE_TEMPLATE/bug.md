@@ -16,6 +16,6 @@ The recipe, the `submit` call, and a small input if you can.
 - conda version:
 - ZMART Analysis version (`zmart_analysis.__version__`):
 
-**From `engine.status(name)["failures"]`**
+**The failed job from `engine.status(name)` (its step and error)**
 ```
 ```

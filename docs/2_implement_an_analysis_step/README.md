@@ -49,8 +49,8 @@ The last step of a workflow may use the workflow's name as its key instead,
 when that is the result everyone will ask for. `build_object_table` puts
 the object table under `object_analysis`.
 
-If your step raises an error, only its own job fails. The error appears in
-`engine.status()` under `failures`.
+If your step raises an error, only its own job fails. On the job board,
+`engine.status(name)`, the job is `failed`, with the step and the error.
 
 `pipeline_data["metadata"]` holds:
 
@@ -177,8 +177,9 @@ Two things to know:
 
 - Each worker has its own `state`. With `max_workers: 2`, each of the two
   copies loads its own model.
-- A worker that sits idle longer than the engine's `idle_timeout` is
-  stopped. The next job then starts with an empty `state`.
+- A worker keeps its `state` until its recipe is deregistered (and no
+  other recipe needs the worker) or the engine shuts down. The next job
+  after that starts with an empty `state`.
 
 ## A step that waits for a scope
 

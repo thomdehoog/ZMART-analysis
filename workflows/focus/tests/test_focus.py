@@ -404,10 +404,11 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
     pipeline = Path(__file__).resolve().parents[1] / "pipelines" / "focus.yaml"
     with engine_factory() as engine:
         engine.register("focus", str(pipeline))
-        engine.submit("focus", {"image_path": str(path), "z_um": z_um})
+        engine.submit(pipeline="focus", data={"image_path": str(path), "z_um": z_um})
         results = wait_for_results(engine, "focus", 1)
+        board = engine.status("focus")
 
-    assert len(results) == 1, engine.status("focus")
+    assert len(results) == 1, board
     found = results[0]["score_focus"]
     assert found["metric"] == "brenner"
     assert found["n_planes"] == 9
