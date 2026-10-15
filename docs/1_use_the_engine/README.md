@@ -16,10 +16,13 @@ Three words come back throughout:
 - A **worker** is a Python process that runs a step, in the conda
   environment the step asks for.
 
-```
-your script ──► Engine ──► worker (conda env A) ──► step 1
-                       ──► worker (conda env B) ──► step 2
-            ◄── job board ◄──
+```mermaid
+flowchart LR
+    script["Your script"] -- submit --> engine["Engine"]
+    engine --> workerA["Worker<br/>conda env A"] --> step1["Step 1"]
+    engine --> workerB["Worker<br/>conda env B"] --> step2["Step 2"]
+    engine --> board[("Job board")]
+    script -. status .-> board
 ```
 
 The engine never runs a step itself. It hands each job to a worker. A
