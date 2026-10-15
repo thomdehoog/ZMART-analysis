@@ -10,7 +10,7 @@
 <td width="170"><img src="docs/zmart-analysis-icon.png" width="150" alt="ZMART Analysis"></td>
 <td valign="middle">
 
-**ZMART Analysis** provides an image analysis engine built for smart microscopy. It allows you to trigger and scale image analysis when the data comes in, and handles dependencies, documentation and reproducibility.
+**ZMART Analysis** provides an image analysis engine built for smart microscopy. It allows you to trigger and scale image analysis when the data comes in, and handles conflicting dependencies, documentation and reproducibility.
 
 It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's Microscopy-Agnostic Research Toolkit), the tools we use for smart microscopy at the Center for Microscopy and Image Analysis (ZMB), University of Zurich.
 
@@ -24,9 +24,9 @@ When building smart microscopy workflows, you are likely to run into the
 following four problems.
 
 1. **Analysis over scopes.**<br>
-   Depending on the experiment, analysis during smart microscopy needs to be
+   Depending on the experiment, analysis needs to be
    done over single images, a group of images, a compartment, a carrier, or a
-   whole experiment. However, the data does not come in all at once. A step
+   whole experiment. However, the data does not come in all at once during smart microscopy. A step
    over a scope larger than a single image can only start once the right set
    of images is in. Keeping track of all these analysis requirements calls
    for a more sophisticated degree of workflow orchestration.
@@ -38,8 +38,8 @@ following four problems.
 
 3. **Dependency conflicts.**<br>
    Analysis pipelines consist of multiple steps. Each step needs specific
-   dependencies. These dependencies can often not be installed together in
-   the same virtual environment. This creates a real barrier for getting your
+   dependencies. These dependencies often conflict in
+   the same environment they are executed in. This creates a real barrier for changing and getting your
    analysis up and running quickly.
 
 4. **Time.**<br>
