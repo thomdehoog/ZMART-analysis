@@ -32,6 +32,16 @@ print(engine.status("my_pipeline"))
  3: {'step': 'segment', 'scope': {}, 'state': 'queued',  'output': None}}
 ```
 
+When you are done:
+
+```python
+# Remove the recipe; its jobs finish first, then its workers stop
+engine.deregister("my_pipeline")
+
+# Or stop everything: every recipe and every worker
+engine.shutdown()
+```
+
 You make an engine, register a recipe, submit images and read their output
 from the job board. The rest of this page explains each of these calls.
 
