@@ -56,8 +56,8 @@ possible.
 1. **Analysis steps declare a scope.**<br>
    Each step declares over which scope its analysis needs to run: a single
    image, a group, a compartment, a carrier, or the experiment. An analysis
-   step is triggered automatically as soon as the data over the given scope
-   is completely available.
+   step is triggered automatically as soon as the acquisition over the given scope
+   is finished.
 
 2. **Analysis pipelines are declared in YAML files.**<br>
    A YAML file defines which steps are run, in which order, and with which
