@@ -23,24 +23,23 @@ It is part of [**ZMART**](https://github.com/thomdehoog/ZMART-microscopy) (ZMB's
 When building smart microscopy workflows, you are likely to run into the
 following four problems.
 
-1. **Analysis over scopes.**
-   Depending on the experiment, analysis needs to
+1. **Analysis over scopes.** <br>Depending on the experiment, analysis needs to
    be done over single images, a group of images, a compartment, a carrier,
    or a whole experiment. However, the data does not come in all at once. A
    step over a larger scope can only start once the right set of images is
    in. Keeping track of all these analysis requirements calls for more
    sophisticated degree of workflow orchestration.
 
-3. **Reproducibility.** The complexity in workflow orchestration need to be
+3. **Reproducibility.** <br>The complexity in workflow orchestration need to be
    documented and reproducible. This is already a challenge in post-acquisition
    workflows, and is more tricky for smart microscopy workflows.
 
-4. **Dependency conflicts.** Analysis pipelines consist of multiple steps.
+4. **Dependency conflicts.** <br>Analysis pipelines consist of multiple steps.
    Each step needs often need specific decencies. However, these decencies
    can often not be installed together in the same virtual environment. This creates real
    barrier for getting your analysis up and running quickly  
 
-5. **Time.** The microscope waits for feedback to move one, therefore analysis
+5. **Time.** <br>The microscope waits for feedback to move one, therefore analysis
    needs to be finished as soon as possible. Even though computational resources
    are often limited.
 
@@ -49,22 +48,22 @@ following four problems.
 
 I am not aware of a current tool that takes these 4 barriers away. Therefore, I created
 the ZMART Analysis pipeline engine. It address these barriers in the following way, 
-while aiming the minimize as much friction as possible.
+while aiming the minimize input, configuration as much friction as possible.
 
-1. **Analysis steps declare a scope.** Each step says over which scope its analysis
+1. **Analysis steps declare a scope.** <br>Each step says over which scope its analysis
    needs to run: a single image, a group, a compartment, a carrier, or the experiment.
    An analysis step automatically is triggered as soon as the data over the
    given scope is completely acquired.
 
-2. **Analysis pipelines are declared in YAML files.** A YAML file defines
+2. **Analysis pipelines are declared in YAML files.** <br>A YAML file defines
    which steps are run, in which order, and with which settings. You can reuse theme
    as templates, so it is easy to adjust and provide documentation that makes you analysis.
    
-3. **Steps can be isolated and executed by different workers** Each step names
+3. **Steps can be isolated and executed by different workers** <br>Each step names
    the conda environment it needs. Steps can share an environment or use separate
    ones, so dependency conflicts are avoided.
    
-4. **Workers stay active and can run steps concurrently.** Multiple workers
+4. **Workers stay active and can run steps concurrently.** <br>Multiple workers
    can be initialized. They stay active and accept tasks as soon as they are
    free.
 
