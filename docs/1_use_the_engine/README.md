@@ -18,19 +18,27 @@ engine = Engine()
 # Register a recipe under a name
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 
-# Submit images; each submit returns a job id
-job_1 = engine.submit("my_pipeline", {"image_path": "image1.tif"})
-job_2 = engine.submit("my_pipeline", {"image_path": "image2.tif"})
-job_3 = engine.submit("my_pipeline", {"image_path": "image3.tif"})
+# Submit images of group 1; each submit returns a job id
+job_1 = engine.submit("my_pipeline", {"image_path": "image1.tif"}, scope={"group": 1})
+job_2 = engine.submit("my_pipeline", {"image_path": "image2.tif"}, scope={"group": 1})
+
+# The last image of the group says the group is complete
+job_3 = engine.submit("my_pipeline", {"image_path": "image3.tif"}, scope={"group": 1},
+                      complete="group")
 
 # Look at the job board
 print(engine.status("my_pipeline"))
 ```
 ```
-{1: {'step': 'segment', 'scope': {}, 'state': 'done',    'output': {...}},
- 2: {'step': 'segment', 'scope': {}, 'state': 'running', 'output': None},
- 3: {'step': 'segment', 'scope': {}, 'state': 'queued',  'output': None}}
+{1: {'step': 'segment',   'scope': {'group': 1}, 'state': 'done',    'output': {...}},
+ 2: {'step': 'segment',   'scope': {'group': 1}, 'state': 'running', 'output': None},
+ 3: {'step': 'segment',   'scope': {'group': 1}, 'state': 'queued',  'output': None},
+ 4: {'step': 'summarise', 'scope': {'group': 1}, 'state': 'waiting', 'output': None}}
 ```
+
+Jobs 1 to 3 run `segment` on each image. Job 4 is the group step: the
+recipe runs `summarise` once per group. It waits until the three images are
+done, then runs on their outputs.
 
 When you are done:
 
