@@ -12,13 +12,18 @@ a guided first run, open the [tutorial notebook](tutorial.ipynb).
 ```python
 from zmart_analysis import Engine
 
+# Start the engine
 engine = Engine()
+
+# Register a recipe under a name
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 
+# Submit images; each submit returns a job id
 job_1 = engine.submit("my_pipeline", {"image_path": "image1.tif"})
 job_2 = engine.submit("my_pipeline", {"image_path": "image2.tif"})
 job_3 = engine.submit("my_pipeline", {"image_path": "image3.tif"})
 
+# Look at the job board
 print(engine.status("my_pipeline"))
 ```
 ```
