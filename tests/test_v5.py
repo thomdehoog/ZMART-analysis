@@ -25,6 +25,8 @@ from helpers import _write_step as write_step
 from helpers import _write_yaml as write_yaml
 from helpers import fresh_output
 
+from zmart_analysis import Engine
+
 MAKE_ARRAY = """
     import numpy as np
 
@@ -351,6 +353,15 @@ def test_deregister_returns_a_readable_board_and_cleans_up(engine_factory):
     assert not list((Path(output) / "analysis" / "p" / ".handover").iterdir())
     last = lines(Path(output) / "analysis" / "p" / "run.jsonl")[-1]
     assert last["event"] == "deregister" and last["done"] == 1 and last["failed"] == 0
+
+
+def test_an_output_taken_from_the_board_is_readable_after_shutdown():
+    with Engine() as engine:
+        engine.register("p", write_yaml("wf:\n  - make_array:"), fresh_output())
+        entry = wait_for(engine, "p", engine.submit(pipeline="p", data={"k": 2}))
+
+    assert entry["output"]["make_array"]["image"].sum() == 132
+    assert entry["output"]["input"] == {"k": 2}
 
 
 def test_the_same_name_again_adds_to_the_record(engine_factory):

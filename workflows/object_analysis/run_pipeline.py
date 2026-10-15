@@ -127,8 +127,8 @@ def main():
             if entry["state"] == "failed":
                 raise RuntimeError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.2)
-        tile = entry["output"]["object_analysis"]
 
+    tile = entry["output"]["object_analysis"]
     print(f"Objects detected: {tile['objects']['n_objects']}")
 
 

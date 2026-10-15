@@ -84,7 +84,7 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
         while time.monotonic() < deadline:
             entry = engine.status(name)[job]
             if entry["state"] == "done":
-                return dict(entry["output"])
+                return entry["output"]
             if entry["state"] == "failed":
                 raise AssertionError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.1)
@@ -136,7 +136,7 @@ def test_the_scoped_pipeline_end_to_end_with_the_fast_detector(tmp_path, monkeyp
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             board = engine.status("scoped")
-            results = [dict(e["output"]) for e in board.values() if e["state"] == "done"]
+            results = [e["output"] for e in board.values() if e["state"] == "done"]
             if sum(r["metadata"].get("phase", 0) == 2 for r in results) == 2:
                 break
             time.sleep(0.1)

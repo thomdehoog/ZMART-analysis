@@ -80,6 +80,7 @@ from __future__ import annotations
 import logging
 import shutil
 import threading
+import weakref
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -268,6 +269,8 @@ class PipelineState:
         #: The files handed from step to step, one folder per registration.
         self.handover = self.folder / ".handover" / registration
         self.record = RunRecord(self.folder / "run.jsonl", registration)
+        #: The board outputs handed out and still held by someone, by id.
+        self.handed = weakref.WeakValueDictionary()
 
         self._lock = threading.Lock()
         # The job board: id -> {step, scope, state, output[, error]}.
@@ -325,7 +328,15 @@ class PipelineState:
         )
 
     def close(self):
-        """Delete the hand-over files and end the record with a count."""
+        """Delete the hand-over files and end the record with a count.
+
+        Every output still held from the board is read first, so it stays
+        readable after its files are gone.
+        """
+        with self._lock:
+            held = list(self.handed.values())
+        for output in held:
+            output.loaded()
         counts = {"done": 0, "failed": 0, "cancelled": 0}
         for entry in self.board().values():
             if entry["state"] in counts:
@@ -434,9 +445,10 @@ class PipelineState:
         when it is first looked into."""
         with self._lock:
             entries = {job: dict(entry) for job, entry in self._jobs.items()}
-        for entry in entries.values():
-            if entry["output"] is not None:
-                entry["output"] = Output(entry["output"])
+            for entry in entries.values():
+                if entry["output"] is not None:
+                    entry["output"] = Output(entry["output"])
+                    self.handed[id(entry["output"])] = entry["output"]
         return entries
 
     def final_board(self):

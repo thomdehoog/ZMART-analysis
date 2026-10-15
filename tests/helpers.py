@@ -96,9 +96,8 @@ FINISHED = ("done", "failed", "cancelled")
 
 
 def outputs(board):
-    """The outputs of the done jobs on a board, in job order, read now, so a
-    test can look at them after the engine has shut down."""
-    return [dict(board[job]["output"]) for job in sorted(board) if board[job]["state"] == "done"]
+    """The outputs of the done jobs on a board, in job order."""
+    return [board[job]["output"] for job in sorted(board) if board[job]["state"] == "done"]
 
 
 def phase_of(output):
@@ -130,21 +129,12 @@ def _wait_for_results(engine, name, expected, timeout=30):
     return outputs(engine.status(name))
 
 
-def read_board(board):
-    """A board with every output read now, so a test can look at it after
-    the engine has shut down."""
-    for entry in board.values():
-        if entry["output"] is not None:
-            entry["output"] = dict(entry["output"])
-    return board
-
-
 def _wait_for_status(engine, name, expected_total, timeout=30):
     """Poll the board until *expected_total* jobs have finished; return it."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
         board = engine.status(name)
         if sum(entry["state"] in FINISHED for entry in board.values()) >= expected_total:
-            return read_board(board)
+            return board
         time.sleep(0.05)
-    return read_board(engine.status(name))
+    return engine.status(name)

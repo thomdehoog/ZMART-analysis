@@ -216,8 +216,7 @@ The states:
 name. Each pipeline counts its own ids, so two pipelines can both have a job 1.
 
 The board keeps every job and its output until you deregister the pipeline or
-shut the engine down. Look into an output before that: its data is read from
-disk when you do. `deregister` hands you the final board, already read.
+shut the engine down. `deregister` hands you the final board.
 
 ### The output
 

@@ -29,7 +29,6 @@ from helpers import (
     fresh_output,
     outputs,
     phase_of,
-    read_board,
     tally,
 )
 from helpers import _write_step as _temp_step
@@ -426,7 +425,7 @@ def test_completing_a_carrier_completes_its_open_compartments_and_groups(pipelin
             complete="carrier",
         )
         results = scoped(e, 4 + 2 + 1)
-        board = read_board(e.status("p"))
+        board = e.status("p")
 
     assert scope_jobs(board) == [
         ("group", {"carrier": 1, "compartment": 1, "group": 1}),
@@ -453,7 +452,7 @@ def test_completing_a_carrier_leaves_the_other_carriers_open(pipeline):
         submit_tiles(e, [10], {"carrier": 2, "compartment": 1})
         e.submit("p", {"value": 3}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         scoped(e, 3)
-        board = read_board(e.status("p"))
+        board = e.status("p")
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
@@ -474,7 +473,7 @@ def test_completing_the_experiment_completes_every_carrier_and_what_is_in_it(pip
             "p", {"value": 1000}, scope={"carrier": 2, "compartment": 2}, complete="experiment"
         )
         results = scoped(e, 4 + 2 + 1)
-        board = read_board(e.status("p"))
+        board = e.status("p")
 
     assert [level for level, _ in scope_jobs(board)] == (
         ["compartment"] * 4 + ["carrier"] * 2 + ["experiment"]
@@ -491,7 +490,7 @@ def test_a_unit_already_completed_is_not_completed_again(pipeline):
         submit_tiles(e, [10], {"carrier": 1, "compartment": 2})
         e.submit("p", {"value": 20}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         results = scoped(e, 3)
-        board = read_board(e.status("p"))
+        board = e.status("p")
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
@@ -525,7 +524,7 @@ def test_a_tile_after_its_compartment_closed_opens_it_again(pipeline):
         e.submit("p", {"value": 10}, scope={"carrier": 1, "compartment": 1})
         e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         results = scoped(e, 4)
-        board = read_board(e.status("p"))
+        board = e.status("p")
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
