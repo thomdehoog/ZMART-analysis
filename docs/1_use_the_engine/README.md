@@ -189,9 +189,15 @@ starts; the jobs after it do not.
 engine.status("my_pipeline")
 ```
 ```
-{1: {'step': 'score_focus', 'scope': {'group': 2}, 'state': 'done', 'output': {...}},
- 2: {'step': 'segment', 'scope': {'group': 2}, 'state': 'running', 'output': None},
- 3: {'step': 'population_plots', 'scope': {'carrier': 1}, 'state': 'waiting', 'output': None}}
+{1: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 2, 'group': 2, 'position': 1},
+     'state': 'done', 'output': {...}},
+ 2: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 2, 'group': 2, 'position': 2},
+     'state': 'running', 'output': None},
+ 3: {'step': 'population_plots',
+     'scope': {'carrier': 1},
+     'state': 'waiting', 'output': None}}
 ```
 
 `status(name)` is the job board of a recipe: every job it has had, by id.
@@ -280,9 +286,17 @@ Every image says which units it belongs to. The last image of a unit says
 that the unit is complete:
 
 ```python
-engine.submit("analysis", image, scope={"carrier": 1, "compartment": 3})
-engine.submit("analysis", last_image, scope={"carrier": 1, "compartment": 3},
-              complete="compartment")
+engine.submit(
+    "analysis",
+    image,
+    scope={"carrier": 1, "compartment": 3, "group": 1, "position": 1},
+)
+engine.submit(
+    "analysis",
+    last_image,
+    scope={"carrier": 1, "compartment": 3, "group": 1, "position": 2},
+    complete="compartment",
+)
 ```
 
 The engine never guesses when a unit is done. Your acquisition has to say
