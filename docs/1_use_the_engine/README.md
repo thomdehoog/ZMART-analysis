@@ -23,11 +23,13 @@ job_1 = engine.submit(
     pipeline="my_pipeline",
     data={"image_path": "image1.tif"},
     scope={"carrier": 1, "compartment": 1, "group": 1, "position": 1},
+    complete=None,
 )
 job_2 = engine.submit(
     pipeline="my_pipeline",
     data={"image_path": "image2.tif"},
     scope={"carrier": 1, "compartment": 1, "group": 1, "position": 2},
+    complete=None,
 )
 
 # The last position of the group says the group is complete
@@ -291,6 +293,7 @@ engine.submit(
     pipeline="analysis",
     data=image,
     scope={"carrier": 1, "compartment": 3, "group": 1, "position": 1},
+    complete=None,
 )
 engine.submit(
     pipeline="analysis",
