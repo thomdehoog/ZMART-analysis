@@ -20,20 +20,20 @@ engine.register("my_pipeline", "path/to/my_pipeline.yaml")
 
 # Submit three positions of group 1; each submit returns a job id
 job_1 = engine.submit(
-    "my_pipeline",
-    {"image_path": "image1.tif"},
+    pipeline="my_pipeline",
+    data={"image_path": "image1.tif"},
     scope={"carrier": 1, "compartment": 1, "group": 1, "position": 1},
 )
 job_2 = engine.submit(
-    "my_pipeline",
-    {"image_path": "image2.tif"},
+    pipeline="my_pipeline",
+    data={"image_path": "image2.tif"},
     scope={"carrier": 1, "compartment": 1, "group": 1, "position": 2},
 )
 
 # The last position of the group says the group is complete
 job_3 = engine.submit(
-    "my_pipeline",
-    {"image_path": "image3.tif"},
+    pipeline="my_pipeline",
+    data={"image_path": "image3.tif"},
     scope={"carrier": 1, "compartment": 1, "group": 1, "position": 3},
     complete="group",
 )
@@ -164,15 +164,16 @@ A recipe cannot choose a step's conda environment. The step file does that
 ## Submit images
 
 ```python
-job = engine.submit("my_pipeline", {"image_path": "image.tif"})
+job = engine.submit(pipeline="my_pipeline", data={"image_path": "image.tif"})
 ```
 
-`submit(name, data, scope=None, priority=None, complete=None)` hands one
+`submit(pipeline, data, scope=None, priority=None, complete=None)` hands one
 job to a recipe. It returns the job's id at once; the work happens in the
 background. Ids are whole numbers, counted per recipe from 1.
 
 | Argument | Meaning |
 |---|---|
+| `pipeline` | The name you registered the recipe under. |
 | `data` | A dictionary with the input for this job. The recipe decides what belongs in it; the comment at the top of a shipped recipe says what to submit. |
 | `priority` | A whole number. Higher runs first. Jobs with the same priority run in the order they were submitted. Default `0`. |
 | `scope`, `complete` | Only for recipes with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
@@ -287,13 +288,13 @@ that the unit is complete:
 
 ```python
 engine.submit(
-    "analysis",
-    image,
+    pipeline="analysis",
+    data=image,
     scope={"carrier": 1, "compartment": 3, "group": 1, "position": 1},
 )
 engine.submit(
-    "analysis",
-    last_image,
+    pipeline="analysis",
+    data=last_image,
     scope={"carrier": 1, "compartment": 3, "group": 1, "position": 2},
     complete="compartment",
 )
