@@ -377,63 +377,152 @@ def test_bad_levels_are_refused_at_register(recipe):
             e.register("p", recipe("compartment", levels=["carrier", "carrier"]))
 
 
-# -- What a narrower level never closed --------------------------------
+# -- A wider level completes the narrower ones -------------------------
+#
+# Once a carrier is complete nothing more can arrive inside it, so its
+# compartments and groups are complete too. Completing a level first closes
+# every narrower unit of it that is still open, narrowest first. The
+# experiment is the widest level: completing it closes everything.
+
+EXPERIMENT = ["experiment", "carrier", "compartment", "group"]
 
 
-def test_a_carrier_reports_a_compartment_not_closed_and_keeps_its_tiles(recipe):
-    """The carrier is told, in its lineage, which tiles of compartment 2
-    were never closed; the tiles are kept for the compartment's late close,
-    and that compartment's result is kept for the carrier's next close."""
+def scope_jobs(board):
+    """The scope jobs of a board, in job order, as (step level, scope)."""
+    return [
+        (entry["output"]["level"], entry["scope"])
+        for job, entry in sorted(board.items())
+        if entry["state"] == "done" and phase_of(entry["output"]) > 0
+    ]
+
+
+def test_completing_a_carrier_completes_its_open_compartments_and_groups(recipe):
     with Engine() as e:
-        e.register("p", recipe("compartment", "carrier"))
-        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")  # 1-3
-        submit_tiles(e, [10, 20], {"carrier": 1, "compartment": 2})  # 4, 5: not closed
-        submit_tiles(
-            e, [3], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
-        )  # 6-8
-        results = scoped(e, 3)
-
-        (first,) = [r for r in results if r.get("level") == "carrier"]
-        assert first["n_inputs"] == 2  # compartment 1, closed twice
-        assert first["n_failures"] == 2  # compartment 2's two tiles
-        assert first["lineage"]["submissions"] == [1, 2, 6]
-        assert first["lineage"]["failed"] == [
-            {
-                "scope": {"carrier": 1, "compartment": 2},
-                "step": "engine",
-                "error": "compartment not closed",
-                "phase": 0,
-                "submission_idx": job,
-            }
-            for job in (4, 5)
-        ]
-
+        e.register("p", recipe("group", "compartment", "carrier", levels=EXPERIMENT))
+        for compartment in (1, 2):
+            for group in (1, 2):
+                value = 100 * compartment + 10 * group
+                submit_tiles(
+                    e,
+                    [value, value + 1],
+                    {"carrier": 1, "compartment": compartment, "group": group},
+                )
         e.submit(
-            "p", {"value": 30}, scope={"carrier": 1, "compartment": 2}, complete="compartment"
-        )  # 9, 10
-        results = scoped(e, 4)
-        late = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 2))]
-        assert late["total"] == 60
+            "p",
+            {"value": 0},
+            scope={"carrier": 1, "compartment": 2, "group": 2},
+            complete="carrier",
+        )
+        results = scoped(e, 4 + 2 + 1)
+        board = e.status("p")
 
-        # The late compartment's result waited for carrier 1 to close again.
-        e.submit("p", {"value": 0}, scope={"carrier": 1}, complete="carrier")  # 11, 12
-        results = scoped(e, 5)
+    assert scope_jobs(board) == [
+        ("group", {"carrier": 1, "compartment": 1, "group": 1}),
+        ("group", {"carrier": 1, "compartment": 1, "group": 2}),
+        ("group", {"carrier": 1, "compartment": 2, "group": 1}),
+        ("group", {"carrier": 1, "compartment": 2, "group": 2}),
+        ("compartment", {"carrier": 1, "compartment": 1}),
+        ("compartment", {"carrier": 1, "compartment": 2}),
+        ("carrier", {"carrier": 1}),
+    ]
+    groups = by_unit(results, "group")
+    assert groups[(("carrier", 1), ("compartment", 2), ("group", 2))]["total"] == 220 + 221 + 0
+    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
+    every_tile = [100 * m + 10 * g + d for m in (1, 2) for g in (1, 2) for d in (0, 1)]
+    assert carrier["total"] == sum(every_tile)
+    assert carrier["n_inputs"] == 2
+    assert carrier["n_failures"] == 0
 
-    first, second = [r for r in results if r.get("level") == "carrier"]
-    assert second["n_inputs"] == 1
-    assert second["total"] == 60
-    assert second["lineage"]["submissions"] == [4, 5, 9]
+
+def test_completing_a_carrier_leaves_the_other_carriers_open(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment", "carrier", levels=EXPERIMENT))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1})
+        submit_tiles(e, [10], {"carrier": 2, "compartment": 1})
+        e.submit("p", {"value": 3}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
+        scoped(e, 3)
+        board = e.status("p")
+
+    assert scope_jobs(board) == [
+        ("compartment", {"carrier": 1, "compartment": 1}),
+        ("compartment", {"carrier": 1, "compartment": 2}),
+        ("carrier", {"carrier": 1}),
+    ]
 
 
-def test_a_held_failure_is_reported_to_the_carrier_too(recipe):
+def test_completing_the_experiment_completes_every_carrier_and_what_is_in_it(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment", "carrier", "experiment", levels=EXPERIMENT))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1})
+        submit_tiles(e, [10], {"carrier": 1, "compartment": 2})
+        submit_tiles(e, [100], {"carrier": 2, "compartment": 1})
+        e.submit(
+            "p", {"value": 1000}, scope={"carrier": 2, "compartment": 2}, complete="experiment"
+        )
+        results = scoped(e, 4 + 2 + 1)
+        board = e.status("p")
+
+    assert [level for level, _ in scope_jobs(board)] == (
+        ["compartment"] * 4 + ["carrier"] * 2 + ["experiment"]
+    )
+    (experiment,) = [r for r in results if r.get("level") == "experiment"]
+    assert experiment["total"] == 1 + 2 + 10 + 100 + 1000
+    assert experiment["n_inputs"] == 2
+
+
+def test_a_unit_already_completed_is_not_completed_again(recipe):
+    with Engine() as e:
+        e.register("p", recipe("compartment", "carrier", levels=EXPERIMENT))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
+        submit_tiles(e, [10], {"carrier": 1, "compartment": 2})
+        e.submit("p", {"value": 20}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
+        results = scoped(e, 3)
+        board = e.status("p")
+
+    assert scope_jobs(board) == [
+        ("compartment", {"carrier": 1, "compartment": 1}),
+        ("compartment", {"carrier": 1, "compartment": 2}),
+        ("carrier", {"carrier": 1}),
+    ]
+    assert by_unit(results, "carrier")[(("carrier", 1),)]["total"] == 33
+
+
+def test_a_failed_tile_of_a_compartment_left_open_reaches_that_compartment(recipe):
     with Engine() as e:
         e.register("p", recipe("compartment", "carrier"))
         e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 2})
-        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"])
-        results = scoped(e, 2)
+        submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="carrier")
+        results = scoped(e, 3)
 
+    compartments = by_unit(results, "compartment")
+    assert compartments[(("carrier", 1), ("compartment", 2))]["n_failures"] == 1
+    assert compartments[(("carrier", 1), ("compartment", 1))]["total"] == 1
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    assert carrier["n_failures"] == 1
+    assert carrier["n_inputs"] == 2 and carrier["n_failures"] == 0
+
+
+def test_a_tile_after_its_compartment_closed_opens_it_again(recipe):
+    """A late tile opens its compartment again, so completing the carrier
+    closes that compartment a second time, on the late tile alone."""
+    with Engine() as e:
+        e.register("p", recipe("compartment", "carrier"))
+        submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
+        scoped(e, 1)
+        e.submit("p", {"value": 10}, scope={"carrier": 1, "compartment": 1})
+        e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
+        results = scoped(e, 4)
+        board = e.status("p")
+
+    assert scope_jobs(board) == [
+        ("compartment", {"carrier": 1, "compartment": 1}),
+        ("compartment", {"carrier": 1, "compartment": 1}),
+        ("compartment", {"carrier": 1, "compartment": 2}),
+        ("carrier", {"carrier": 1}),
+    ]
+    totals = [r["total"] for r in results if r.get("level") == "compartment"]
+    assert totals == [3, 10, 0]
+    carrier = by_unit(results, "carrier")[(("carrier", 1),)]
+    assert carrier["n_inputs"] == 3 and carrier["total"] == 13 and carrier["n_failures"] == 0
 
 
 # -- Signals out of the ordinary ---------------------------------------
@@ -875,12 +964,15 @@ class TestEngineScopes:
             e.submit(
                 "test", {"value": 0}, scope={"carrier": 2, "compartment": 2}, complete="carrier"
             )
-            results = _wait_for_results(e, "test", 16 + 2 + 4 + 2, timeout=60)
+            # Each carrier's closing tile lands in its compartment 2 after
+            # that compartment closed, so it opens it again; completing the
+            # carrier closes it a second time, on that tile alone.
+            results = _wait_for_results(e, "test", 18 + 4 + 2 + 2, timeout=60)
         carriers = {r["carrier"]: r for r in results if "carrier_sum" in r}
         assert carriers[1]["carrier_sum"] == 3 * 1 + 3 * 2
         assert carriers[2]["carrier_sum"] == 3 * 100 + 3 * 200
-        assert carriers[1]["compartments"] == [1, 2]
-        assert carriers[2]["compartments"] == [1, 2]
+        assert carriers[1]["compartments"] == [1, 2, 2]
+        assert carriers[2]["compartments"] == [1, 2, 2]
 
     def test_scope_collects_results(self):
         """Scoped step receives accumulated results from all jobs."""

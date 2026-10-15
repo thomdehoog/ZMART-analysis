@@ -222,6 +222,7 @@ class Engine:
             )
             state.check_complete(complete_levels, scope)
             job = state.new_image_job(scope)
+            state.note_open(scope)
 
             # Submit Phase 0 to thread pool
             future = self._executor.submit(
@@ -236,23 +237,30 @@ class Engine:
 
             # Handle scope completion signals
             if complete_levels:
-                # Each level is marked as running here, synchronously, so a
+                # Completing a level also closes the narrower units of it
+                # still open, narrowest first.
+                signals = state.close_signals(complete_levels, scope)
+                # Each close is marked as running here, synchronously, so a
                 # later signal for a wider scope (a carrier) cannot overtake
                 # a narrower one (a compartment) submitted before it.
-                phases = [state.get_triggered_phase_idx(level) for level in complete_levels]
-                tokens = [state.begin_scoped(k, scope, job) for k in phases]
-                # One scope job per level the recipe has a step for.
-                scope_jobs = [
-                    None if k is None else state.new_scope_job(k, state.scope_key(level, scope))
-                    for k, level in zip(phases, complete_levels, strict=True)
+                phases = [state.get_triggered_phase_idx(level) for level, _ in signals]
+                tokens = [
+                    state.begin_scoped(k, unit_scope, job)
+                    for k, (_, unit_scope) in zip(phases, signals, strict=True)
                 ]
-                # Process levels sequentially in one thread so that
+                # One scope job per close the recipe has a step for.
+                scope_jobs = [
+                    None
+                    if k is None
+                    else state.new_scope_job(k, state.scope_key(level, unit_scope))
+                    for k, (level, unit_scope) in zip(phases, signals, strict=True)
+                ]
+                # Process the closes sequentially in one thread so that
                 # chained scopes (e.g., ["group", "all"]) execute in order.
                 chain = self._scope_executor.submit(
                     self._handle_scope_complete_chain,
                     state,
-                    complete_levels,
-                    scope,
+                    signals,
                     tokens,
                     scope_jobs,
                     job,
@@ -374,15 +382,15 @@ class Engine:
 
     # -- Internal: scope completion chain --------------------------------
 
-    def _handle_scope_complete_chain(self, state, levels, scope, tokens, jobs, submission_idx):
-        """Process multiple scope completion levels sequentially.
+    def _handle_scope_complete_chain(self, state, signals, tokens, jobs, submission_idx):
+        """Process a submit's closes sequentially, each ``(level, scope)``.
 
-        Each level must complete before the next starts, so chained
+        Each close must complete before the next starts, so chained
         scopes like ["group", "all"] execute in the correct order. Every
-        level's running mark is cleared when it finishes, whatever happens,
+        close's running mark is cleared when it finishes, whatever happens,
         and its scope job is never left waiting.
         """
-        for level, token, job in zip(levels, tokens, jobs, strict=True):
+        for (level, scope), token, job in zip(signals, tokens, jobs, strict=True):
             try:
                 self._handle_scope_complete(state, level, scope, submission_idx, job)
             except Exception as e:

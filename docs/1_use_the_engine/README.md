@@ -3,75 +3,10 @@
 This page shows how to run an analysis with the ZMART Analysis engine. For
 a guided first run, open the [tutorial notebook](tutorial.ipynb).
 
-## A complete run
-
-```python
-from zmart_analysis import Engine
-
-# Start the engine
-engine = Engine()
-
-# Register a recipe under a name
-engine.register("my_pipeline", "path/to/my_pipeline.yaml")
-
-# Submit three positions of group 1; each submit returns a job id
-job_1 = engine.submit(
-    pipeline="my_pipeline",
-    data={"image_path": "image1.tif"},
-    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 1},
-    complete=None,
-)
-
-job_2 = engine.submit(
-    pipeline="my_pipeline",
-    data={"image_path": "image2.tif"},
-    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 2},
-    complete=None,
-)
-
-# The last position of the group says the group is complete
-job_3 = engine.submit(
-    pipeline="my_pipeline",
-    data={"image_path": "image3.tif"},
-    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 3},
-    complete="group",
-)
-
-# Look at the job board
-print(engine.status("my_pipeline"))
-```
-```
-{1: {'step': 'segment',
-     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 1},
-     'state': 'done', 'output': {...}},
- 2: {'step': 'segment',
-     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 2},
-     'state': 'running', 'output': None},
- 3: {'step': 'segment',
-     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 3},
-     'state': 'queued', 'output': None},
- 4: {'step': 'summarise',
-     'scope': {'carrier': 1, 'compartment': 1, 'group': 1},
-     'state': 'waiting', 'output': None}}
-```
-
-Each image names its carrier, compartment, group and position. Jobs 1 to 3
-run `segment` on each image. Job 4 is the group step: the recipe runs
-`summarise` once per group, so its scope stops at the group. It waits until
-the three positions are done, then runs on their outputs.
-
-When you are done:
-
-```python
-# Remove the recipe; its jobs finish first, then its workers stop
-engine.deregister("my_pipeline")
-
-# Or stop everything: every recipe and every worker
-engine.shutdown()
-```
+## How it works
 
 You make an engine, register a recipe, submit images and read their output
-from the job board. The rest of this page explains each of these calls.
+from the job board. Each section below is one of these steps, in that order.
 
 Three words come back throughout:
 
@@ -163,12 +98,36 @@ A recipe cannot choose a step's conda environment. The step file does that
 ## Submit images
 
 ```python
-job = engine.submit(pipeline="my_pipeline", data={"image_path": "image.tif"})
+# Submit three positions of group 1; each submit returns a job id
+job_1 = engine.submit(
+    pipeline="my_pipeline",
+    data={"image_path": "image1.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 1},
+    complete=None,
+)
+
+job_2 = engine.submit(
+    pipeline="my_pipeline",
+    data={"image_path": "image2.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 2},
+    complete=None,
+)
+
+# The last position of the group says the group is complete
+job_3 = engine.submit(
+    pipeline="my_pipeline",
+    data={"image_path": "image3.tif"},
+    scope={"carrier": 1, "compartment": 1, "group": 1, "position": 3},
+    complete="group",
+)
 ```
 
 `submit(pipeline, data, scope=None, priority=None, complete=None)` hands one
-job to a recipe. It returns the job's id at once; the work happens in the
+image to a recipe. It returns the job's id at once; the work happens in the
 background. Ids are whole numbers, counted per recipe from 1.
+
+Each image names its carrier, compartment, group and position. The last
+image of the group says that the group is complete.
 
 | Argument | Meaning |
 |---|---|
@@ -186,22 +145,29 @@ starts; the jobs after it do not.
 ## The job board
 
 ```python
-engine.status("my_pipeline")
+print(engine.status("my_pipeline"))
 ```
 ```
 {1: {'step': 'segment',
-     'scope': {'carrier': 1, 'compartment': 2, 'group': 2, 'position': 1},
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 1},
      'state': 'done', 'output': {...}},
  2: {'step': 'segment',
-     'scope': {'carrier': 1, 'compartment': 2, 'group': 2, 'position': 2},
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 2},
      'state': 'running', 'output': None},
- 3: {'step': 'population_plots',
-     'scope': {'carrier': 1},
+ 3: {'step': 'segment',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1, 'position': 3},
+     'state': 'queued', 'output': None},
+ 4: {'step': 'summarise',
+     'scope': {'carrier': 1, 'compartment': 1, 'group': 1},
      'state': 'waiting', 'output': None}}
 ```
 
 `status(name)` is the job board of a recipe: every job it has had, by id.
 You poll it to see how far your jobs are and to read their output.
+
+Jobs 1 to 3 run `segment` on each image. Job 4 is the group step: the
+recipe runs `summarise` once per group, so its scope stops at the group. It
+waits until the three positions are done, then runs on their outputs.
 
 | Key | What it is |
 |---|---|
@@ -251,16 +217,17 @@ Two more words:
   You choose the names.
 - A **unit** is one such group, such as compartment 3 of carrier 1.
 
-The shipped recipes use three levels. A *carrier* is a plate or a slide. A
-*compartment* is a well, a region of a slide, or part of a cleared sample.
-A *group* is a set of images within a compartment.
+The shipped recipes use four levels, widest first. The *experiment* holds
+everything. A *carrier* is a plate or a slide. A *compartment* is a well, a
+region of a slide, or part of a cleared sample. A *group* is a set of
+images within a compartment. Each image is one *position*.
 
 ### In the recipe
 
 ```yaml
 metadata:
   functions_dir: "../steps"
-  levels: [carrier, compartment, group]   # widest first
+  levels: [experiment, carrier, compartment, group]   # widest first
 
 object_analysis:
   - detect_objects:               # every image, as soon as it arrives
@@ -303,13 +270,19 @@ engine.submit(
 The engine never guesses when a unit is done. Your acquisition has to say
 so.
 
-One image can complete several levels. With
-`complete=["compartment", "carrier"]` the compartment step runs first, then
-the carrier step.
+Completing a level also completes everything inside it that is still
+open. Nothing more can arrive in a carrier that is complete, so
+`complete="carrier"` first closes the open groups of that carrier, then its
+open compartments, then the carrier. You only name the widest level that
+is complete.
 
-To run a step once over everything, use a level that no image names in its
-`scope`, such as `all`. Put `scope: all` in the recipe and send
-`complete="all"` with the last image.
+`complete="experiment"` closes everything that is still open: every group,
+compartment and carrier, then the experiment. The images do not need to name
+the experiment in their `scope`.
+
+A unit is open from its first image until it is completed. An image that
+arrives after its unit was completed opens it again, and the next complete
+of a wider level closes it again, on the new images only.
 
 ### What the engine guarantees
 
@@ -319,14 +292,11 @@ To run a step once over everything, use a level that no image names in its
   of its own.
 - **A scoped step waits for its images.** After `complete`, the step waits
   until every image of the unit that was submitted so far has finished.
-- **A wider unit waits for its narrower ones.** A carrier waits for a
-  compartment that is still being summarised. For this to work, send a
-  compartment's `complete` before its carrier's.
-- **Nothing is dropped silently.** A carrier step is told which
-  compartments failed, and which images belong to a compartment that was
-  never completed. Those images are kept until their compartment is
-  completed. An image that arrives after its unit was completed is kept in
-  the same way.
+- **A wider unit waits for its narrower ones.** A carrier waits for its
+  compartments that are still being summarised.
+- **Nothing is dropped silently.** A carrier step is told which of its
+  compartments failed. A compartment step is told which of its images
+  failed.
 
 ### Scoped jobs on the board
 

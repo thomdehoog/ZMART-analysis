@@ -17,6 +17,13 @@
 - **No idle timeout.** `Engine(idle_timeout=...)` is gone, and so is the
   reaper. A worker lives while a recipe that needs it is registered.
 - The submission index in `metadata` and `lineage` is the image job's id.
+- **Completing a level completes everything inside it.** `complete="carrier"`
+  first closes that carrier's groups and compartments that are still open,
+  narrowest first, then the carrier; `complete="experiment"` closes
+  everything. An image that arrives after its unit closed opens it again.
+  Which level is narrower comes from the recipe's `levels`, or else from the
+  order of its scoped steps. The scoped object analysis recipe lists
+  `experiment` as its widest level.
 - The package is `zmart_analysis`: `from zmart_analysis import Engine`.
   The old name, `engine`, still imports.
 - A step runs in the worker as a real module, registered under its file

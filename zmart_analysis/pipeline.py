@@ -56,6 +56,16 @@ and failures of its unit submitted up to and including itself, and waits
 for the ones still running. It does not wait for a signal sent after it:
 the signal threads could otherwise all wait on each other.
 
+A wider level completes the narrower ones
+-----------------------------------------
+Once a unit is complete nothing more can arrive inside it, so completing
+a level first closes every narrower unit of it that is still open,
+narrowest first: completing carrier 1 closes its open groups, then its
+open compartments, then the carrier. A unit is open from the first image
+submitted into it until it is closed; a later image opens it again. Which
+levels are narrower comes from the recipe's ``levels`` (widest first, the
+experiment above all), or else from the order of its scoped steps.
+
 Up the levels
 -------------
 A scoped step receives the previous phase's failures of its unit, and what
@@ -278,6 +288,9 @@ class PipelineState:
         # drains them. The board keeps its own record of every failed job.
         self._failures = []
 
+        # The units still open, per scoped level: unit key -> unit.
+        self._open = defaultdict(dict)
+
     @property
     def environments(self):
         """The environments this recipe's steps run in."""
@@ -415,6 +428,59 @@ class PipelineState:
         key = {w: scope[w] for w in self.wider_levels(level) if w in scope}
         key[level] = scope[level]
         return key
+
+    def scoped_levels(self):
+        """The levels this recipe has a step for, narrowest first."""
+        return [phase.scope for phase in self.phases if phase.scope]
+
+    def narrower_levels(self, level):
+        """The scoped levels narrower than *level*, narrowest first.
+
+        From the recipe's ``levels`` when *level* is one of them, else from
+        the order of the scoped steps. A level known to neither has none.
+        """
+        scoped = self.scoped_levels()
+        if self.levels is not None and level in self.levels:
+            below = self.levels[self.levels.index(level) + 1 :]
+            return [s for s in scoped if s in below]
+        if level in scoped:
+            return scoped[: scoped.index(level)]
+        return []
+
+    def note_open(self, scope):
+        """An image was submitted: every unit it belongs to is open."""
+        with self._lock:
+            for level in self.scoped_levels():
+                unit = self.scope_key(level, scope)
+                if unit is not None:
+                    self._open[level][tuple(unit.items())] = unit
+
+    def close_signals(self, levels, scope):
+        """What a submit's ``complete`` closes, in the order to close it.
+
+        Each level first closes the narrower units of it still open,
+        narrowest first, then itself. Returns ``(level, scope)`` pairs: the
+        submit's own scope for a level it names, the unit for one it closes
+        on the way. A unit is closed once per submit.
+        """
+        signals, closed = [], set()
+        with self._lock:
+            for level in levels:
+                unit = self.scope_key(level, scope)
+                for narrower in self.narrower_levels(level):
+                    for key, inner in list(self._open[narrower].items()):
+                        if _matches(inner, unit):
+                            del self._open[narrower][key]
+                            closed.add((narrower, key))
+                            signals.append((narrower, dict(inner)))
+                key = None if unit is None else tuple(unit.items())
+                if key is not None and (level, key) in closed:
+                    continue
+                if key is not None:
+                    self._open[level].pop(key, None)
+                    closed.add((level, key))
+                signals.append((level, dict(scope)))
+        return signals
 
     def get_triggered_phase_idx(self, level):
         """Find the phase index triggered by a scope level."""

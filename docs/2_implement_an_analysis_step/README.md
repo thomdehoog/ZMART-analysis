@@ -200,8 +200,10 @@ A scoped step receives a different `pipeline_data`. There is no `input`:
 | `metadata["n_accumulated"]`, `metadata["n_failures"]` | How many results and how many failures. |
 
 A failure with `"step": "engine"` did not come from a step. It is the
-engine's own note: an image whose narrower unit was never completed, or a
-job cancelled by `shutdown(wait=False)`.
+engine's own note: an image of a narrower unit that was never completed.
+Completing a level completes the narrower units inside it, so this happens
+only when the recipe cannot tell that a level is narrower: list your levels
+under `levels`.
 
 **Return a new dictionary with your output.** Do not copy the per-image
 results into it; that only uses memory. The engine adds `metadata` and

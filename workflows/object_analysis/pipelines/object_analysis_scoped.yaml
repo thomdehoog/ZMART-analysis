@@ -23,8 +23,9 @@
 # summarise_population `scope: group` and compare_populations
 # `scope: compartment`; the groups still keep their compartment apart.
 #
-# A carrier step is told about a compartment that failed, and about the
-# tiles of a compartment that was not closed when the carrier was. Every
+# Completing a carrier first completes its compartments that are still
+# open, and completing the experiment completes everything. A carrier step
+# is told about a compartment that failed. Every
 # scoped result carries its `lineage`: the tiles it was built from and where
 # every step below it ran.
 #
@@ -37,7 +38,7 @@ metadata:
   version: "1.0"
   verbose: 1
   functions_dir: "../steps"
-  levels: [carrier, compartment, group]
+  levels: [experiment, carrier, compartment, group]
 
 object_analysis:
   - detect_objects:
