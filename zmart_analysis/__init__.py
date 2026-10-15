@@ -10,7 +10,8 @@ API
     from zmart_analysis import Engine
 
     engine = Engine()
-    engine.register("analysis", "workflows/object_analysis/pipelines/object_analysis_scoped.yaml")
+    engine.register("analysis", "workflows/object_analysis/pipelines/object_analysis_scoped.yaml",
+                    "path/to/run")      # writes into path/to/run/analysis/analysis/
     job = engine.submit(pipeline="analysis", data=image,
                         scope={"carrier": 1, "compartment": 3})
     engine.submit(pipeline="analysis", data=last_image,
@@ -27,7 +28,10 @@ Architecture
     priority_pool.py  the thread pool that starts the most urgent job first
     workers.py        the worker processes that run the steps, and their errors
     worker_script.py  runs inside a step's conda environment; imports nothing
-                      from the engine, so it works in any environment
+                      from the engine but handover.py, so it works in any
+                      environment
+    handover.py       how one step's output reaches the next, through a folder
+    record.py         the run record, run.jsonl
     conda.py          finds conda and the environments it knows
     environments.py   creates or removes a workflow's environments, for its
                       setup_env.py and clean_env.py
@@ -43,7 +47,7 @@ from .workers import (
     WorkerTimeoutError,
 )
 
-__version__ = "1.0.0rc1"
+__version__ = "5.0.0rc1"
 __all__ = [
     "Engine",
     "WorkerError",

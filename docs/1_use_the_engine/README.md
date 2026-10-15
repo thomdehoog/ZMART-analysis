@@ -56,13 +56,30 @@ deregister the last pipeline that needs it, or shut the engine down.
 ## Register a pipeline
 
 ```python
-engine.register("my_pipeline", "path/to/my_pipeline.yaml")
+engine.register("my_pipeline", "path/to/my_pipeline.yaml", "path/to/run")
 ```
 
-`register(name, yaml_path)` reads the pipeline and checks that every step
-file exists. No step code runs yet and no worker starts. You choose the
-`name`, and every later call uses it. Registering the same name twice raises
-`ValueError`; deregister it first.
+`register(name, yaml_path, output)` reads the pipeline and checks that every
+step file exists and names its environment. No step code runs yet and no
+worker starts. You choose the `name`, and every later call uses it.
+Registering the same name twice raises `ValueError`; deregister it first.
+
+The pipeline writes everything into `<output>/analysis/<name>/`:
+
+```
+analysis/
+    my_pipeline/
+        pipeline.yaml     a copy of the pipeline you registered
+        run.jsonl         the run record
+        ...               the files the steps keep
+```
+
+The run record has one line per event: the registration, every submit
+(with the data, so the files that were processed), the end of every job
+(with where and with which packages each step ran, and the error if it
+failed), and the deregistration. Each line is written the moment it
+happens, so you can read the record during the run, and it survives a
+crash. Registering the same name again adds to the same record.
 
 A pipeline looks like this:
 
@@ -99,7 +116,7 @@ the engine reads itself:
 | `scope` | Run this step once per group of images, not once per image. |
 | `max_workers` | How many copies of this step may run at once. This overrides the value in the step file. |
 
-A pipeline cannot choose a step's conda environment. The step file does that
+A pipeline cannot choose a step's conda environment. The step file must name it
 ([part 2](../2_implement_an_analysis_step/README.md#metadata)).
 
 ## Submit images
@@ -199,7 +216,8 @@ The states:
 name. Each pipeline counts its own ids, so two pipelines can both have a job 1.
 
 The board keeps every job and its output until you deregister the pipeline or
-shut the engine down. `deregister` hands you the final board.
+shut the engine down. Look into an output before that: its data is read from
+disk when you do. `deregister` hands you the final board, already read.
 
 ### The output
 
@@ -396,7 +414,8 @@ queued jobs finish first. `shutdown(wait=False)` stops at once, like
 
 - It does not decide what to image next. Your acquisition reads the board
   and decides.
-- It does not store outputs. A step that needs a file writes it.
+- It does not keep outputs after the pipeline ends. A step that wants a file
+  kept writes it into `pipeline_data["metadata"]["output"]`.
 - It runs on one computer. It is not a cluster scheduler.
 - It does not check step files. They run as they are, with your rights, so
   only run steps you trust.

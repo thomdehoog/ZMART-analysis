@@ -7,8 +7,8 @@ authors:
     given-names: Thom
     affiliation: "Center for Microscopy and Image Analysis (ZMB), University of Zurich"
 repository-code: "https://github.com/thomdehoog/ZMART-analysis"
-version: 1.0.0rc1
-date-released: 2026-10-07
+version: 5.0.0rc1
+date-released: 2026-10-16
 license: MIT
 keywords:
   - microscopy

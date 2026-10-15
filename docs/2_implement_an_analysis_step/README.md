@@ -10,11 +10,34 @@ A step is one Python file with one function, `run`. This is
 `steps/double_it.py`:
 
 ```python
+"""double_it -- twice the number it is given."""
+
+import numpy as np
+
+METADATA = {
+    "description": "Double a number",
+    "version": "1.0",
+    "environment": "ZMART--hello--main",
+}
+
+
 def run(pipeline_data, state, **params):
     n = pipeline_data["input"]["n"]
-    pipeline_data["double_it"] = {"value": n * 2}
+    pipeline_data["double_it"] = {"value": _twice(n)}
     return pipeline_data
+
+
+def _twice(n):
+    return float(np.multiply(n, 2))
 ```
+
+Every step file has the same order: a docstring that says what the step
+does, the imports, `METADATA`, `run`, and then the step's own helpers. A
+helper's name starts with `_`: only this step uses it. Code that several
+steps use goes into `workflows/shared/` or the workflow's `parts/`.
+
+The imports can stay at the top. The file only ever runs in the step's own
+environment, never in the engine's.
 
 A pipeline that uses it, `pipelines/hello.yaml`:
 
@@ -45,6 +68,11 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 `pipeline_data`.** The next step receives it. A step that returns anything
 other than a dictionary fails its job.
 
+**Return plain Python and NumPy arrays.** Numbers, strings, lists,
+dictionaries and arrays reach the next step in any environment, also one
+with another NumPy version. Other objects, such as a pandas table, still
+work, but only between environments with the same version of that library.
+
 The last step of a workflow may use the workflow's name as its key instead,
 when that is the result everyone will ask for. `build_object_table` puts
 the object table under `object_analysis`.
@@ -60,13 +88,14 @@ If your step raises an error, only its own job fails. On the job board,
 | `yaml_filename` | The pipeline's file name. |
 | `steps` | The names of the steps that run with this one, in order. |
 | `scope` | The `scope` given at submit, for example `{"carrier": 1, "compartment": 3}`. |
-| `submission_idx` | The job's number in submission order, counted from zero. |
+| `submission_idx` | The job's id on the board, counted from 1. |
+| `output` | The pipeline's folder, `<output>/analysis/<name>/`. A step that keeps a file writes it here. |
 | `datetime` | When the job started, as `YYYYMMDD-HHMMSS`. |
 | `verbose` | The pipeline's `verbose` setting. Print progress when it is above `0`, and nothing when it is `0`. |
 
 ## METADATA
 
-A step file may hold a `METADATA` dictionary. It tells the engine how to
+Every step file has a `METADATA` dictionary. It tells the engine how to
 run the step:
 
 ```python
@@ -80,7 +109,7 @@ METADATA = {
 
 | Key | What it does | Default |
 |---|---|---|
-| `environment` | The conda environment the step runs in. | The environment the engine itself runs in. |
+| `environment` | The conda environment the step runs in. Required: the engine refuses a step without it. | |
 | `max_workers` | How many copies of the step may run at once. | `1` |
 | `description`, `version` | Notes for the reader. Every shipped step has them. | |
 

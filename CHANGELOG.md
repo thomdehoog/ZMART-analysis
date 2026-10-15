@@ -1,7 +1,30 @@
 # Changelog
 
-## Unreleased
+## 5.0.0rc1 (2026-10-16) -- engine v5
 
+To update a call: `engine.register(name, yaml)` becomes
+`engine.register(name, yaml, output)`, and every step's `METADATA` names its
+`environment`. Read a job's output on the board before deregistering.
+
+- **Every step names its environment.** `register` refuses a step whose
+  `METADATA` has no `environment`. `build_object_table` names the classical
+  one.
+- **`register(name, yaml, output)`.** A pipeline writes into
+  `<output>/analysis/<name>/`: a copy of its YAML (`pipeline.yaml`), the run
+  record (`run.jsonl`: one line per register, submit, job end and
+  deregister, each on disk before the next), and the files its steps keep
+  (`metadata["output"]`).
+- **Data between steps goes through files.** A step's output is written to
+  a folder, arrays as `.npy`, and the next step reads it back. The engine
+  needs no NumPy, and steps in different NumPy versions can hand arrays to
+  each other. What waits for a scope is a folder, and a scoped step reads
+  its results one at a time, so the engine's memory stays flat however
+  large the scope.
+- A done job's `output` on the board is read from its folder when it is
+  looked into; `deregister` returns the board read in full and then removes
+  the hand-over files.
+- `summarise_population` and `compare_populations` write their tables into
+  `metadata["output"]`; their `output_dir` parameter is gone.
 - **The job board (breaking).** `submit(pipeline, data, ...)` returns the
   job's id; ids count per pipeline from 1. `status(name)` is the board: every
   job with its `step`, `scope`, `state` (`queued`, `running`, `waiting`,

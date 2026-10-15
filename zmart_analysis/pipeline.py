@@ -318,7 +318,7 @@ class PipelineState:
             "register",
             pipeline=self.name,
             workflow=self.workflow_name,
-            yaml=str(self.yaml_path),
+            yaml=str(self.yaml_path.resolve()),
             yaml_text=yaml_text,
             steps=step_hashes,
             engine=engine_version,
