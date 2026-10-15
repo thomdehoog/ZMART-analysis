@@ -7,6 +7,7 @@ import time
 from unittest.mock import patch
 
 import pytest
+from helpers import fresh_output
 
 import zmart_analysis.engine as engine_module
 from zmart_analysis import Engine
@@ -46,7 +47,7 @@ def test_many_concurrent_duplicate_registrations_have_one_winner(tmp_path):
     def register():
         barrier.wait(timeout=10)
         try:
-            engine.register("shared", yaml_path)
+            engine.register("shared", yaml_path, fresh_output())
         except BaseException as exc:
             outcome = exc
         else:
@@ -99,7 +100,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
 
     def register(index):
         try:
-            engine.register(f"pipeline-{index}", yaml_path)
+            engine.register(f"pipeline-{index}", yaml_path, fresh_output())
         except BaseException as exc:
             with errors_lock:
                 errors.append(exc)
@@ -134,8 +135,8 @@ def test_repeated_parse_failure_never_leaks_name_reservations(tmp_path, attempts
     for index in range(attempts):
         name = f"retry-{index}"
         with pytest.raises(Exception):
-            engine.register(name, invalid_yaml)
-        engine.register(name, valid_yaml)
+            engine.register(name, invalid_yaml, fresh_output())
+        engine.register(name, valid_yaml, fresh_output())
 
     assert len(engine.status()) == attempts
     assert engine._registering == set()

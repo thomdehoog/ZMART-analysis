@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import tifffile
+from helpers import fresh_output
 from score_focus import run
 
 SHARP_AT = 4
@@ -403,7 +404,7 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
 
     pipeline = Path(__file__).resolve().parents[1] / "pipelines" / "focus.yaml"
     with engine_factory() as engine:
-        engine.register("focus", str(pipeline))
+        engine.register("focus", str(pipeline), fresh_output())
         engine.submit(pipeline="focus", data={"image_path": str(path), "z_um": z_um})
         results = wait_for_results(engine, "focus", 1)
         board = engine.status("focus")

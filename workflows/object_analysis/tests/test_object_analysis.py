@@ -7,6 +7,7 @@ import detect_objects
 import extract_classical_features
 import numpy as np
 import pytest
+from helpers import fresh_output
 from object_analysis.parts.contract import to_builtin, validate_tile_detection
 from object_analysis.parts.settings import (
     area_filter_params,
@@ -77,13 +78,13 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
     from zmart_analysis import Engine
 
     with Engine() as engine:
-        engine.register(name, str(yaml_path))
+        engine.register(name, str(yaml_path), fresh_output())
         job = engine.submit(pipeline=name, data=payload)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             entry = engine.status(name)[job]
             if entry["state"] == "done":
-                return entry["output"]
+                return dict(entry["output"])
             if entry["state"] == "failed":
                 raise AssertionError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.1)
@@ -119,7 +120,7 @@ def test_the_scoped_pipeline_end_to_end_with_the_fast_detector(tmp_path, monkeyp
     image_path = _write_synthetic_tile(tmp_path)
 
     with Engine(max_concurrent=4) as engine:
-        engine.register("scoped", str(pipeline_path))
+        engine.register("scoped", str(pipeline_path), fresh_output())
         for carrier in (1, 2):
             for compartment in (1, 2):
                 scope = {"carrier": carrier, "compartment": compartment}
@@ -135,7 +136,7 @@ def test_the_scoped_pipeline_end_to_end_with_the_fast_detector(tmp_path, monkeyp
         deadline = time.monotonic() + 240
         while time.monotonic() < deadline:
             board = engine.status("scoped")
-            results = [e["output"] for e in board.values() if e["state"] == "done"]
+            results = [dict(e["output"]) for e in board.values() if e["state"] == "done"]
             if sum(r["metadata"].get("phase", 0) == 2 for r in results) == 2:
                 break
             time.sleep(0.1)
@@ -227,9 +228,9 @@ def test_the_pipelines_register(tmp_path):
 
     engine = Engine()
     try:
-        engine.register("classical", str(CLASSICAL_YAML))
-        engine.register("detection", str(DETECTION_YAML))
-        engine.register("fast", str(FAST_YAML))
+        engine.register("classical", str(CLASSICAL_YAML), fresh_output())
+        engine.register("detection", str(DETECTION_YAML), fresh_output())
+        engine.register("fast", str(FAST_YAML), fresh_output())
         placed = {
             "classical": engine._pipelines["classical"].step_settings["detect_objects"][
                 "environment"

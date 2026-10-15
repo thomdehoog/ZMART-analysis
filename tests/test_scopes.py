@@ -21,7 +21,17 @@ import textwrap
 import time
 
 import pytest
-from helpers import _wait_for_results, _wait_for_status, failures, outputs, phase_of, tally
+from helpers import (
+    ENGINE_METADATA,
+    _wait_for_results,
+    _wait_for_status,
+    failures,
+    fresh_output,
+    outputs,
+    phase_of,
+    read_board,
+    tally,
+)
 from helpers import _write_step as _temp_step
 from helpers import _write_yaml as _temp_yaml
 
@@ -71,7 +81,7 @@ DOUBLE = """
 def steps_dir(tmp_path_factory):
     folder = tmp_path_factory.mktemp("scope_steps")
     for name, code in {"tile": TILE, "unit": UNIT, "double": DOUBLE}.items():
-        (folder / f"{name}.py").write_text(textwrap.dedent(code))
+        (folder / f"{name}.py").write_text(textwrap.dedent(code) + ENGINE_METADATA)
     return folder
 
 
@@ -144,7 +154,7 @@ def submit_tiles(e, values, scope, complete=None):
 def test_three_levels_each_add_up_their_own_units(pipeline):
     """tile -> group -> compartment -> carrier, two of each."""
     with Engine() as e:
-        e.register("p", pipeline("group", "compartment", "carrier"))
+        e.register("p", pipeline("group", "compartment", "carrier"), fresh_output())
         for carrier in (1, 2):
             for compartment in (1, 2):
                 for group in (1, 2):
@@ -181,7 +191,7 @@ def test_three_levels_each_add_up_their_own_units(pipeline):
 def test_two_carriers_interleaved_keep_their_compartments_apart(pipeline):
     """Both carriers have a compartment 1; tiles of the two arrive mixed."""
     with Engine(max_concurrent=4) as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         for _ in range(3):
             e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1})
             e.submit("p", {"value": 100}, scope={"carrier": 2, "compartment": 1})
@@ -207,7 +217,7 @@ def test_two_carriers_interleaved_keep_their_compartments_apart(pipeline):
 def test_a_wider_level_closed_by_a_later_submit_waits_for_the_narrower(pipeline):
     """The carrier is closed by its own submit, after slow compartments."""
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         for compartment in (1, 2, 3):
             submit_tiles(
                 e,
@@ -225,7 +235,7 @@ def test_a_wider_level_closed_by_a_later_submit_waits_for_the_narrower(pipeline)
 
 def test_all_after_carriers_collects_every_carrier(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier", "all"))
+        e.register("p", pipeline("compartment", "carrier", "all"), fresh_output())
         submit_tiles(
             e, [1, 2], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
         )
@@ -246,7 +256,7 @@ def test_all_after_carriers_collects_every_carrier(pipeline):
 def test_a_compartment_closed_without_its_carrier_collects_it_on_every_carrier(pipeline):
     """Documented: a scope that does not name the carrier matches all carriers."""
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 3})
         e.submit("p", {"value": 10}, scope={"carrier": 2, "compartment": 3})
         e.submit("p", {"value": 100}, scope={"carrier": 2, "compartment": 4})
@@ -273,7 +283,7 @@ def test_the_same_tiles_summarised_at_another_level(
 ):
     """Moving a step to another scope changes only how the tiles are grouped."""
     with Engine() as e:
-        e.register("p", pipeline(summary_level, comparison_level))
+        e.register("p", pipeline(summary_level, comparison_level), fresh_output())
         for compartment in (1, 2):
             for group in (1, 2):
                 closes = [
@@ -302,7 +312,7 @@ def test_the_same_tiles_summarised_at_another_level(
 def test_several_steps_share_one_scope(pipeline):
     """A step with no scope after a scoped one runs in the same phase."""
     with Engine() as e:
-        e.register("p", pipeline("compartment", then_double=True))
+        e.register("p", pipeline("compartment", then_double=True), fresh_output())
         submit_tiles(e, [1, 2, 3], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
@@ -337,7 +347,7 @@ def interleaved_groups(e, complete):
 
 def test_a_pipeline_that_skips_a_level_keeps_units_apart_when_it_declares_its_levels(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("group", "carrier", levels=SAMPLE))
+        e.register("p", pipeline("group", "carrier", levels=SAMPLE), fresh_output())
         interleaved_groups(e, complete="group")
         results = scoped(e, 2)
 
@@ -349,7 +359,7 @@ def test_a_pipeline_that_skips_a_level_keeps_units_apart_when_it_declares_its_le
 def test_without_declared_levels_a_skipped_level_is_not_part_of_the_unit(pipeline):
     """Documented: the unit is then the closed level plus the wider phases."""
     with Engine() as e:
-        e.register("p", pipeline("group", "carrier"))
+        e.register("p", pipeline("group", "carrier"), fresh_output())
         interleaved_groups(e, complete="group")
         results = scoped(e, 2)
 
@@ -359,7 +369,7 @@ def test_without_declared_levels_a_skipped_level_is_not_part_of_the_unit(pipelin
 
 def test_the_unit_is_widest_first_and_empty_for_all(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "all", levels=SAMPLE))
+        e.register("p", pipeline("compartment", "all", levels=SAMPLE), fresh_output())
         submit_tiles(
             e, [1], {"carrier": 2, "compartment": 3, "group": 4}, complete=["compartment", "all"]
         )
@@ -374,7 +384,7 @@ def test_the_unit_is_widest_first_and_empty_for_all(pipeline):
 def test_bad_levels_are_refused_at_register(pipeline):
     with Engine() as e:
         with pytest.raises(ValueError, match="levels"):
-            e.register("p", pipeline("compartment", levels=["carrier", "carrier"]))
+            e.register("p", pipeline("compartment", levels=["carrier", "carrier"]), fresh_output())
 
 
 # -- A wider level completes the narrower ones -------------------------
@@ -398,7 +408,9 @@ def scope_jobs(board):
 
 def test_completing_a_carrier_completes_its_open_compartments_and_groups(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("group", "compartment", "carrier", levels=EXPERIMENT))
+        e.register(
+            "p", pipeline("group", "compartment", "carrier", levels=EXPERIMENT), fresh_output()
+        )
         for compartment in (1, 2):
             for group in (1, 2):
                 value = 100 * compartment + 10 * group
@@ -414,7 +426,7 @@ def test_completing_a_carrier_completes_its_open_compartments_and_groups(pipelin
             complete="carrier",
         )
         results = scoped(e, 4 + 2 + 1)
-        board = e.status("p")
+        board = read_board(e.status("p"))
 
     assert scope_jobs(board) == [
         ("group", {"carrier": 1, "compartment": 1, "group": 1}),
@@ -436,12 +448,12 @@ def test_completing_a_carrier_completes_its_open_compartments_and_groups(pipelin
 
 def test_completing_a_carrier_leaves_the_other_carriers_open(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier", levels=EXPERIMENT))
+        e.register("p", pipeline("compartment", "carrier", levels=EXPERIMENT), fresh_output())
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1})
         submit_tiles(e, [10], {"carrier": 2, "compartment": 1})
         e.submit("p", {"value": 3}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         scoped(e, 3)
-        board = e.status("p")
+        board = read_board(e.status("p"))
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
@@ -452,7 +464,9 @@ def test_completing_a_carrier_leaves_the_other_carriers_open(pipeline):
 
 def test_completing_the_experiment_completes_every_carrier_and_what_is_in_it(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier", "experiment", levels=EXPERIMENT))
+        e.register(
+            "p", pipeline("compartment", "carrier", "experiment", levels=EXPERIMENT), fresh_output()
+        )
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1})
         submit_tiles(e, [10], {"carrier": 1, "compartment": 2})
         submit_tiles(e, [100], {"carrier": 2, "compartment": 1})
@@ -460,7 +474,7 @@ def test_completing_the_experiment_completes_every_carrier_and_what_is_in_it(pip
             "p", {"value": 1000}, scope={"carrier": 2, "compartment": 2}, complete="experiment"
         )
         results = scoped(e, 4 + 2 + 1)
-        board = e.status("p")
+        board = read_board(e.status("p"))
 
     assert [level for level, _ in scope_jobs(board)] == (
         ["compartment"] * 4 + ["carrier"] * 2 + ["experiment"]
@@ -472,12 +486,12 @@ def test_completing_the_experiment_completes_every_carrier_and_what_is_in_it(pip
 
 def test_a_unit_already_completed_is_not_completed_again(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier", levels=EXPERIMENT))
+        e.register("p", pipeline("compartment", "carrier", levels=EXPERIMENT), fresh_output())
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
         submit_tiles(e, [10], {"carrier": 1, "compartment": 2})
         e.submit("p", {"value": 20}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         results = scoped(e, 3)
-        board = e.status("p")
+        board = read_board(e.status("p"))
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
@@ -489,7 +503,7 @@ def test_a_unit_already_completed_is_not_completed_again(pipeline):
 
 def test_a_failed_tile_of_a_compartment_left_open_reaches_that_compartment(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 2})
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="carrier")
         results = scoped(e, 3)
@@ -505,13 +519,13 @@ def test_a_tile_after_its_compartment_closed_opens_it_again(pipeline):
     """A late tile opens its compartment again, so completing the carrier
     closes that compartment a second time, on the late tile alone."""
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
         scoped(e, 1)
         e.submit("p", {"value": 10}, scope={"carrier": 1, "compartment": 1})
         e.submit("p", {"value": 0}, scope={"carrier": 1, "compartment": 2}, complete="carrier")
         results = scoped(e, 4)
-        board = e.status("p")
+        board = read_board(e.status("p"))
 
     assert scope_jobs(board) == [
         ("compartment", {"carrier": 1, "compartment": 1}),
@@ -530,7 +544,7 @@ def test_a_tile_after_its_compartment_closed_opens_it_again(pipeline):
 
 def test_closing_a_level_the_pipeline_does_not_have_runs_nothing(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="carrier")
         submit_tiles(e, [3], {"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
@@ -546,7 +560,7 @@ def test_a_close_whose_scope_leaves_out_the_level_is_refused(pipeline):
     """{"carrier": 1} with complete="compartment" would close every
     compartment of every carrier. Refused, and the tile is not run."""
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
         with pytest.raises(ScopeError, match="compartment"):
             e.submit("p", {"value": 5}, scope={"carrier": 1}, complete="compartment")
@@ -563,7 +577,7 @@ def test_a_close_whose_scope_leaves_out_the_level_is_refused(pipeline):
 
 def test_all_and_a_level_the_pipeline_lacks_are_still_accepted(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "all"))
+        e.register("p", pipeline("compartment", "all"), fresh_output())
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
         e.submit("p", {"value": 2}, scope={"carrier": 1}, complete=["carrier", "all"])
         results = scoped(e, 2)
@@ -574,7 +588,7 @@ def test_all_and_a_level_the_pipeline_lacks_are_still_accepted(pipeline):
 
 def test_a_unit_closed_again_runs_again_on_its_new_tiles(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="compartment")
         scoped(e, 1)
         e.submit("p", {"value": 5}, scope={"compartment": 2}, complete="compartment")
@@ -601,6 +615,7 @@ def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(
             pd["value"] = pd["input"]["value"]
             return pd
     """)
+        + ENGINE_METADATA
     )
     yaml = steps_dir / "pipeline_slow.yaml"
     yaml.write_text(
@@ -616,7 +631,7 @@ def test_a_carrier_signalled_before_its_last_compartment_does_not_wait_for_it(
     """)
     )
     with Engine(max_concurrent=1) as e:
-        e.register("p", str(yaml))
+        e.register("p", str(yaml), fresh_output())
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
         e.submit("p", {"value": 0}, scope={"carrier": 1}, complete="carrier")
         submit_tiles(e, [10], {"carrier": 1, "compartment": 2}, complete="compartment")
@@ -639,6 +654,7 @@ def test_a_shutdown_now_releases_a_waiting_carrier(pipeline, steps_dir, tmp_path
             time.sleep(60)
             return pd
     """)
+        + ENGINE_METADATA
     )
     yaml = steps_dir / "pipeline_stuck.yaml"
     yaml.write_text(
@@ -654,7 +670,7 @@ def test_a_shutdown_now_releases_a_waiting_carrier(pipeline, steps_dir, tmp_path
     """)
     )
     e = Engine(max_concurrent=1)
-    e.register("p", str(yaml))
+    e.register("p", str(yaml), fresh_output())
     e.submit("p", {"value": 1}, scope={"carrier": 1, "compartment": 1}, complete="compartment")
     e.submit(
         "p",
@@ -671,7 +687,7 @@ def test_a_shutdown_now_releases_a_waiting_carrier(pipeline, steps_dir, tmp_path
 def test_many_units_with_few_threads_do_not_deadlock(pipeline):
     """More open carriers than engine threads, each waiting on its compartments."""
     with Engine(max_concurrent=2) as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         for carrier in range(1, 7):
             for compartment in (1, 2):
                 closes = ["compartment", "carrier"] if compartment == 2 else "compartment"
@@ -694,7 +710,7 @@ def test_a_failed_tile_reaches_its_compartment_and_no_other(pipeline):
     """Compartment 2's failed tile is not handed to compartment 1; it is
     still there for compartment 2 when that closes."""
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         e.submit("p", {"fail": True}, scope={"compartment": 1})
         e.submit("p", {"fail": True}, scope={"compartment": 2})
         submit_tiles(e, [1, 2], {"compartment": 1}, complete="compartment")
@@ -717,7 +733,7 @@ def test_a_failed_tile_reaches_its_compartment_and_no_other(pipeline):
 def test_a_compartment_of_failed_tiles_still_runs(pipeline):
     """The step is told its tiles failed, rather than being skipped."""
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         e.submit("p", {"fail": True}, scope={"compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
@@ -728,7 +744,7 @@ def test_a_compartment_of_failed_tiles_still_runs(pipeline):
 
 def test_a_failed_compartment_reaches_its_carrier(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         submit_tiles(e, [1], {"carrier": 1, "compartment": 1}, complete="compartment")
         submit_tiles(
             e, [666], {"carrier": 1, "compartment": 2}, complete=["compartment", "carrier"]
@@ -750,7 +766,7 @@ def test_a_failed_compartment_reaches_its_carrier(pipeline):
 
 def test_a_carrier_of_failed_compartments_still_runs(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         submit_tiles(
             e, [666], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
         )
@@ -766,7 +782,7 @@ def test_a_failure_names_its_step_job_and_scope(pipeline):
     scope job of the unit it closed. Phase and submission are what the
     lineage records add, see test_lineage_lists_a_failed_tile_and_a_failed_compartment."""
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         e.submit("p", {"fail": True}, scope={"compartment": 1})  # job 1
         e.submit(
             "p", {"value": 666}, scope={"compartment": 2}, complete="compartment"
@@ -783,7 +799,7 @@ def test_a_failure_names_its_step_job_and_scope(pipeline):
 
 def test_a_failed_compartment_step_is_not_handed_to_the_next_close_as_a_tile(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment"))
+        e.register("p", pipeline("compartment"), fresh_output())
         submit_tiles(e, [666], {"compartment": 1}, complete="compartment")
         status_when(e, lambda b: len(failures(b)) == 1)
         submit_tiles(e, [1], {"compartment": 1}, complete="compartment")
@@ -798,7 +814,7 @@ def test_a_failed_compartment_step_is_not_handed_to_the_next_close_as_a_tile(pip
 
 def test_all_gets_only_the_failures_of_the_phase_before_it(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "all"))
+        e.register("p", pipeline("compartment", "all"), fresh_output())
         e.submit("p", {"fail": True}, scope={"compartment": 1})
         submit_tiles(e, [1], {"compartment": 1}, complete="compartment")
         submit_tiles(e, [666], {"compartment": 2}, complete=["compartment", "all"])
@@ -814,7 +830,7 @@ def test_all_gets_only_the_failures_of_the_phase_before_it(pipeline):
 
 def test_every_level_records_its_own_step_and_scope(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         submit_tiles(
             e, [1, 2], {"carrier": 1, "compartment": 1}, complete=["compartment", "carrier"]
         )
@@ -837,7 +853,9 @@ def test_a_carrier_can_be_traced_back_to_its_tiles(pipeline):
     """Lineage: which tiles a unit was built from, and where every step
     below it ran, through three levels."""
     with Engine() as e:
-        e.register("p", pipeline("group", "compartment", "carrier", then_double=True))
+        e.register(
+            "p", pipeline("group", "compartment", "carrier", then_double=True), fresh_output()
+        )
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1, "group": 1}, complete="group")
         submit_tiles(
             e,
@@ -865,7 +883,7 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
     """``unit`` returns a new dict without metadata; the result and the
     next step in the phase still carry the phase's metadata."""
     with Engine() as e:
-        e.register("p", pipeline("compartment", then_double=True))
+        e.register("p", pipeline("compartment", then_double=True), fresh_output())
         submit_tiles(e, [1, 2], {"carrier": 1, "compartment": 1}, complete="compartment")
         results = scoped(e, 1)
 
@@ -879,7 +897,7 @@ def test_a_scoped_result_keeps_the_phase_metadata_when_the_step_returns_a_new_di
 
 def test_lineage_lists_a_failed_tile_and_a_failed_compartment(pipeline):
     with Engine() as e:
-        e.register("p", pipeline("compartment", "carrier"))
+        e.register("p", pipeline("compartment", "carrier"), fresh_output())
         e.submit("p", {"fail": True}, scope={"carrier": 1, "compartment": 1})  # job 1
         submit_tiles(
             e, [1], {"carrier": 1, "compartment": 1}, complete="compartment"
@@ -943,7 +961,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=8) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             layout = [(1, 1, 1), (2, 1, 100), (1, 2, 2), (2, 2, 200)]
             for carrier, compartment, value in layout:
                 for _ in range(3):
@@ -1002,7 +1020,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(3):
                 complete = "group" if i == 2 else None
                 e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
@@ -1043,7 +1061,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(5):
                 complete = "group" if i == 4 else None
                 e.submit("test", {"val": i}, scope={"group": "G1"}, complete=complete)
@@ -1080,7 +1098,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             # Group A: values 10, 20
             e.submit("test", {"val": 10}, scope={"group": "A"})
             e.submit("test", {"val": 20}, scope={"group": "A"}, complete="group")
@@ -1133,7 +1151,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"v": 1}, scope={"group": "G1"})
             e.submit("test", {"v": 2}, scope={"group": "G1"}, complete=["group", "all"])
             results = _wait_for_results(e, "test", 4, timeout=20)
@@ -1168,7 +1186,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"v": 10}, scope={"group": "A"})
             e.submit("test", {"v": 20}, scope={"group": "B"})
             e.submit("test", {"v": 30}, scope={"group": "C"}, complete="all")
@@ -1211,7 +1229,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"v": 1}, scope={"group": "G"})
             e.submit("test", {"v": 99}, scope={"group": "G"})
             e.submit("test", {"v": 2}, scope={"group": "G"}, complete="group")
@@ -1255,7 +1273,7 @@ class TestEngineScopes:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"group": "A", "fail": True}, scope={"group": "A"})
             e.submit("test", {"group": "B", "fail": True}, scope={"group": "B"})
             _wait_for_status(e, "test", expected_total=2, timeout=15)

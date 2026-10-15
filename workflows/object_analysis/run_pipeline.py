@@ -114,8 +114,10 @@ def main():
     if args.output_dir:
         payload["output_dir"] = args.output_dir
 
+    # The pipeline's record and files go beside the image, or into --output-dir.
+    output = args.output_dir or str(image_path.parent)
     with Engine() as engine:
-        engine.register("object_analysis", str(CLASSICAL_YAML))
+        engine.register("object_analysis", str(CLASSICAL_YAML), output)
         job = engine.submit(pipeline="object_analysis", data=payload)
 
         while True:
@@ -125,8 +127,8 @@ def main():
             if entry["state"] == "failed":
                 raise RuntimeError(f"{entry['step']}: {entry['error']}")
             time.sleep(0.2)
+        tile = entry["output"]["object_analysis"]
 
-    tile = entry["output"]["object_analysis"]
     print(f"Objects detected: {tile['objects']['n_objects']}")
 
 

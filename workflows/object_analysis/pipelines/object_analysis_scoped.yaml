@@ -70,9 +70,7 @@ object_analysis:
       enough_objects: 10      # fewer objects than this: summary, but no PCA
       components: 10
       seed: 0
-      output_dir: null        # a folder for carrier<k>_compartment<m>_objects.csv
 
   - compare_populations:
       scope: carrier
       outlier_z: 3            # a compartment this many spreads from the median one is flagged
-      output_dir: null        # a folder for carrier<k>_compartment_profiles.csv

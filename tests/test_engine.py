@@ -48,6 +48,7 @@ from helpers import (
     _wait_for_results,
     _wait_for_status,
     failures,
+    fresh_output,
     phase_of,
     tally,
 )
@@ -113,9 +114,10 @@ class TestErrors:
 
 
 class TestLoader:
-    def test_defaults_no_metadata(self):
-        path = _temp_step("def run(pd, state, **p): return pd")
-        s = get_step_settings(Path(path))
+    def test_defaults_no_metadata(self, tmp_path):
+        path = tmp_path / "bare.py"
+        path.write_text("def run(pd, state, **p): return pd")
+        s = get_step_settings(path)
         assert s["environment"] is None
         assert s["max_workers"] == 1
 
@@ -731,7 +733,7 @@ class TestEngineRegister:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
 
     def test_register_duplicate_raises(self):
         _temp_step("def run(pd, state, **p): return pd", name="reg_b")
@@ -739,9 +741,9 @@ class TestEngineRegister:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             with pytest.raises(ValueError):
-                e.register("test", yaml)
+                e.register("test", yaml, fresh_output())
 
     def test_register_bad_yaml(self):
         path = Path(_TEMP_DIR) / f"bad_{_next_id()}.yaml"
@@ -750,7 +752,7 @@ class TestEngineRegister:
 
         with Engine() as e:
             with pytest.raises(ValueError):
-                e.register("bad", str(path))
+                e.register("bad", str(path), fresh_output())
 
     def test_concurrent_register_same_name_raises_once(self):
         # The duplicate check and the insert must be atomic: with the check
@@ -768,7 +770,7 @@ class TestEngineRegister:
             def worker():
                 start.wait()
                 try:
-                    e.register("dup", yaml)
+                    e.register("dup", yaml, fresh_output())
                 except ValueError:
                     with lock:
                         errors.append(1)
@@ -799,7 +801,7 @@ class TestEngineRegister:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", _temp_yaml("wf:\n  - reg_provenance:"))
+            e.register("test", _temp_yaml("wf:\n  - reg_provenance:"), fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=30)
         record = results[0]["provenance"]["reg_provenance"]
@@ -825,7 +827,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert len(results) > 0
@@ -852,7 +854,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert results[0]["s1"] == 1
@@ -879,7 +881,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert results[0]["saw"] == "hello"
@@ -890,7 +892,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"key": "val"})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert results[0]["input"]["key"] == "val"
@@ -908,7 +910,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert results[0]["x"] == 42
@@ -926,7 +928,7 @@ class TestEngineSubmit:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(5):
                 e.submit("test", {"job": i})
             results = _wait_for_results(e, "test", 5, timeout=15)
@@ -945,7 +947,7 @@ class TestEngineConcurrency:
 
         with Engine() as e:
             with pytest.raises(ValueError):
-                e.register("test", yaml)
+                e.register("test", yaml, fresh_output())
 
     def test_a_yaml_max_workers_reaches_the_step_settings(self):
         _temp_step("def run(pd, state, **p): return pd", name="wide")
@@ -953,7 +955,7 @@ class TestEngineConcurrency:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             assert e._pipelines["test"].step_settings["wide"]["max_workers"] == 3
 
     def test_many_concurrent_jobs(self):
@@ -969,7 +971,7 @@ class TestEngineConcurrency:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=8) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(20):
                 e.submit("test", {"idx": i})
             results = _wait_for_results(e, "test", 20, timeout=30)
@@ -997,7 +999,7 @@ class TestEngineErrors:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {"fail": True})
             e.submit("test", {"fail": False})
             e.submit("test", {"fail": False})
@@ -1018,7 +1020,7 @@ class TestEngineErrors:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             board = _wait_for_status(e, "test", 1, timeout=10)
         assert tally(board)["failed"] == 1
@@ -1038,7 +1040,7 @@ class TestEngineErrors:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             board = _wait_for_status(e, "test", 1, timeout=10)
         assert tally(board)["failed"] == 1
@@ -1055,7 +1057,7 @@ class TestEngineLifecycle:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             results = _wait_for_results(e, "test", 1, timeout=10)
         assert len(results) == 1
@@ -1069,7 +1071,7 @@ class TestEngineLifecycle:
         e = Engine()
         e.shutdown()
         with pytest.raises(RuntimeError):
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
 
     def test_concurrent_registration_reserves_pipeline_name(self):
         """Only one parser may build a given pipeline name at a time."""
@@ -1092,12 +1094,14 @@ class TestEngineLifecycle:
         e = Engine()
         with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
-                target=lambda: _capture_exception(errors, lambda: e.register("test", yaml))
+                target=lambda: _capture_exception(
+                    errors, lambda: e.register("test", yaml, fresh_output())
+                )
             )
             thread.start()
             assert parse_started.wait(timeout=5)
             with pytest.raises(ValueError, match="already registered"):
-                e.register("test", yaml)
+                e.register("test", yaml, fresh_output())
             release_parse.set()
             thread.join(timeout=5)
 
@@ -1127,7 +1131,9 @@ class TestEngineLifecycle:
         e = Engine()
         with patch("zmart_analysis.engine.parse_yaml", blocked_parse_yaml):
             thread = threading.Thread(
-                target=lambda: _capture_exception(errors, lambda: e.register("late", yaml))
+                target=lambda: _capture_exception(
+                    errors, lambda: e.register("late", yaml, fresh_output())
+                )
             )
             thread.start()
             assert parse_started.wait(timeout=5)
@@ -1149,8 +1155,8 @@ class TestEngineLifecycle:
         valid_yaml = _temp_yaml("wf:\n  - reg_retry:")
         e = Engine()
         with pytest.raises(Exception):
-            e.register("retry", invalid_yaml)
-        e.register("retry", valid_yaml)
+            e.register("retry", invalid_yaml, fresh_output())
+        e.register("retry", valid_yaml, fresh_output())
         assert "retry" in e.status()
         e.shutdown()
 
@@ -1161,7 +1167,7 @@ class TestEngineLifecycle:
         from zmart_analysis import Engine
 
         e = Engine()
-        e.register("test", yaml)
+        e.register("test", yaml, fresh_output())
         e.shutdown()
         with pytest.raises(RuntimeError):
             e.submit("test", {})
@@ -1191,7 +1197,7 @@ class TestEngineLifecycle:
         from zmart_analysis import Engine
 
         e = Engine(max_concurrent=1)
-        e.register("test", yaml)
+        e.register("test", yaml, fresh_output())
         for i in range(12):
             e.submit("test", {"i": i})
 
@@ -1222,7 +1228,7 @@ class TestEngineStatus:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             board = _wait_for_status(e, "test", 1, timeout=10)
         assert list(board) == [1]
@@ -1237,8 +1243,8 @@ class TestEngineStatus:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("a", yaml)
-            e.register("b", yaml)
+            e.register("a", yaml, fresh_output())
+            e.register("b", yaml, fresh_output())
             boards = e.status()
         assert boards == {"a": {}, "b": {}}
 
@@ -1280,7 +1286,7 @@ class TestEngineStatus:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(3):
                 complete = "group" if i == 2 else None
                 e.submit("test", {"tile": i}, scope={"group": "R1"}, complete=complete)
@@ -1312,7 +1318,7 @@ class TestEngineStatus:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit("test", {})
             e.submit("test", {})
 
@@ -1353,8 +1359,8 @@ class TestEngineMultiPipeline:
         from zmart_analysis import Engine
 
         with Engine() as e:
-            e.register("a", yaml_a)
-            e.register("b", yaml_b)
+            e.register("a", yaml_a, fresh_output())
+            e.register("b", yaml_b, fresh_output())
             e.submit("a", {})
             e.submit("b", {})
             ra = _wait_for_results(e, "a", 1, timeout=10)
@@ -1393,7 +1399,7 @@ class TestEnginePriority:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             # First submit grabs the only worker thread immediately.
             e.submit("test", {"mark": "blocker"})
             time.sleep(0.05)
@@ -1435,7 +1441,7 @@ class TestEnginePriority:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             for i in range(5):
                 e.submit("test", {"i": i})
             results = _wait_for_results(e, "test", 5, timeout=10)
@@ -1470,7 +1476,7 @@ class TestEnginePriority:
         from zmart_analysis import Engine
 
         with Engine(max_concurrent=1) as e:
-            e.register("test", yaml)
+            e.register("test", yaml, fresh_output())
             e.submit(
                 "test",
                 {"value": 7},
@@ -1646,7 +1652,7 @@ class TestTheBrake:
         )
         yaml = _temp_yaml("wf:\n  - brake_step:")
         e = Engine(execution_timeout=None)
-        e.register("brake", yaml)
+        e.register("brake", yaml, fresh_output())
         e.submit("brake", {})
         pid = _wait_for_file(pid_file)
         t0 = time.monotonic()

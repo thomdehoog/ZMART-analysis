@@ -10,6 +10,11 @@ pipeline.py.
 A worker lives for as long as a registered pipeline needs it: deregister a
 pipeline and the workers no other pipeline needs are stopped.
 
+Every pipeline writes into ``<output>/analysis/<name>/``: a copy of its
+YAML, the run record (record.py), and the folders one step's output is
+handed to the next through (handover.py). Data never passes through the
+engine, only the names of those folders.
+
 Thread safety: ``_lock`` guards the registered pipelines and the accepting
 flag; each PipelineState has its own lock. ``submit`` and ``status`` may
 be called from different threads.
@@ -19,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
@@ -30,6 +36,7 @@ from pathlib import Path
 
 from .pipeline import PipelineState, parse_yaml, split_phases
 from .priority_pool import PriorityThreadPool
+from .record import described
 from .workers import WorkerPool
 
 logger = logging.getLogger(__name__)
@@ -76,14 +83,14 @@ class Engine:
 
     # -- Public API ----------------------------------------------------
 
-    def register(self, name, yaml_path):
+    def register(self, name, yaml_path, output):
         """
         Register a pipeline by name.
 
         Parses the YAML, resolves functions_dir, reads METADATA from all
-        step files via AST, and builds the internal phase structure. A step
-        runs in the environment its file names; one that is the
-        orchestrator's own becomes None, the orchestrator's interpreter.
+        step files via AST, and builds the internal phase structure. Every
+        step must name the environment it runs in; one that names the
+        orchestrator's own runs on the orchestrator's interpreter.
 
         Parameters
         ----------
@@ -91,6 +98,8 @@ class Engine:
             Short name for the pipeline. Used in all subsequent calls.
         yaml_path : str or Path
             Path to the pipeline YAML file.
+        output : str or Path
+            Where the pipeline writes: ``<output>/analysis/<name>/``.
         """
         with self._lock:
             if not self._accepting:
@@ -120,11 +129,17 @@ class Engine:
                 )
 
             # Read METADATA from all step files
-            step_settings = {}
+            step_settings, step_hashes = {}, {}
             for phase in phases:
                 for step in phase.steps:
                     if step.name not in step_settings:
                         step_path = functions_dir / f"{step.name}.py"
+                        if "environment" not in (_extract_metadata(step_path) or {}):
+                            raise ValueError(
+                                f"Step '{step.name}' ({step_path}) names no environment: "
+                                'add "environment" to its METADATA'
+                            )
+                        step_hashes[step.name] = hashlib.sha256(step_path.read_bytes()).hexdigest()
                         settings = get_step_settings(step_path)
                         # A step naming the engine's own environment runs
                         # on the engine's Python: None, like a step that
@@ -155,7 +170,12 @@ class Engine:
                 verbose=verbose,
                 levels=levels,
                 workflow_name=workflow_name,
+                output=output,
+                registration=datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
             )
+            from . import __version__
+
+            state.open(yaml_path.read_text(encoding="utf-8"), step_hashes, __version__)
 
             with self._lock:
                 if not self._accepting:
@@ -223,6 +243,9 @@ class Engine:
             state.check_complete(complete_levels, scope)
             job = state.new_image_job(scope)
             state.note_open(scope)
+            state.record.write(
+                "submit", job=job, scope=scope, complete=complete, data=described(data)
+            )
 
             # Submit Phase 0 to thread pool
             future = self._executor.submit(
@@ -311,11 +334,17 @@ class Engine:
         environment no other registered pipeline uses are stopped, and the
         name can be registered again.
 
+        The hand-over files go; the board returned is read before they do.
+
         Returns
         -------
         dict
             The pipeline's final board.
         """
+        return self._end_pipeline(name, wait, keep_board=True)
+
+    def _end_pipeline(self, name, wait, keep_board):
+        """Deregister *name*; return its final board when *keep_board*."""
         with self._lock:
             if name not in self._pipelines:
                 raise KeyError(f"Pipeline '{name}' is not registered")
@@ -328,7 +357,8 @@ class Engine:
                 future.cancel()
             self._pool.kill_owner(state)
         concurrent.futures.wait(list(state.futures))
-        board = state.board()
+        board = state.final_board() if keep_board else None
+        state.close()
 
         # Taken under the lock, so a pipeline registered meanwhile that needs
         # one of these environments gets fresh workers, not these.
@@ -362,7 +392,7 @@ class Engine:
             names = list(self._pipelines)
         for name in names:
             try:
-                self.deregister(name, wait=wait)
+                self._end_pipeline(name, wait, keep_board=False)
             except KeyError:
                 pass  # deregistered by another thread meanwhile
         self._executor.shutdown(wait=wait)
@@ -416,30 +446,35 @@ class Engine:
                 "verbose": state.verbose,
                 "scope": scope,
                 "submission_idx": submission_idx,
+                "output": str(state.folder),
             },
             "input": input_data,
         }
 
-        step_name = "unknown"
+        # The first step gets the data as sent; each next one reads the
+        # folder the step before wrote.
+        step_name, folder, steps = "unknown", None, []
         try:
-            for step in phase.steps:
+            for index, step in enumerate(phase.steps):
                 step_name = step.name
-                pipeline_data = self._execute_step(state, step, pipeline_data, submission_idx)
-
-                if not isinstance(pipeline_data, dict):
-                    raise TypeError(
-                        f"Step '{step.name}' returned {type(pipeline_data).__name__}, expected dict"
-                    )
+                files = {
+                    "load": folder,
+                    "save": state.step_folder(submission_idx, index, step.name),
+                }
+                summary = self._execute_step(
+                    state, step, None if folder else pipeline_data, submission_idx, files, steps
+                )
+                folder = files["save"]
 
             # Store result for scope collection if next phase is scoped
             if len(state.phases) > 1 and state.phases[1].scope is not None:
-                state.store_phase0_result(submission_idx, scope, pipeline_data)
+                state.store_phase0_result(submission_idx, scope, (folder, summary))
 
-            state.job_done(submission_idx, dict(pipeline_data))
+            state.job_done(submission_idx, folder, steps)
 
         except Exception as e:
             state.record_failure(scope, step_name, str(e), 0, submission_idx)
-            state.job_failed(submission_idx, str(e), step_name)
+            state.job_failed(submission_idx, str(e), step_name, steps)
             logger.error(
                 "Phase 0 failed in '%s' (submission %d, step %s): %s",
                 state.name,
@@ -526,28 +561,28 @@ class Engine:
         # Clean up consumed job entries
         state.cleanup_consumed_entries(unit, submission_idx)
 
-        # Execute the scoped phase. The lineage is attached after the step
-        # returns, so a step that builds a new dict cannot drop it; the
-        # same for the phase's metadata.
-        lineage = self._lineage(results, failures)
+        # Execute the scoped phase. Each result is a (folder, summary) pair;
+        # the lineage comes from the summaries, and the worker adds it to
+        # the phase's last output, so a step that builds a new dict cannot
+        # drop it.
+        lineage = self._lineage([summary for _, summary in results], failures)
+        steps = []
         try:
-            result, metadata = self._execute_scoped_phase(
-                state, phase_idx, results, failures, scope, level, unit or {}, job
+            folder, summary = self._execute_scoped_phase(
+                state, phase_idx, results, failures, scope, level, unit or {}, job, lineage, steps
             )
-            result.setdefault("metadata", metadata)
-            result["lineage"] = lineage
 
             # Store for next phase if there is one
             next_phase = phase_idx + 1
             if next_phase < len(state.phases):
-                state.store_phase_result(phase_idx, result, scope, submission_idx)
+                state.store_phase_result(phase_idx, (folder, summary), scope, submission_idx)
 
-            state.job_done(job, dict(result))
+            state.job_done(job, folder, steps, jobs=lineage["submissions"])
 
         except Exception as e:
             step_name = getattr(e, "step", None)
             state.record_failure(scope, step_name, str(e), phase_idx, submission_idx)
-            state.job_failed(job, str(e), step_name)
+            state.job_failed(job, str(e), step_name, steps)
             logger.error(
                 "Phase %d failed in '%s' (submission %d, step %s): %s",
                 phase_idx,
@@ -558,12 +593,22 @@ class Engine:
             )
 
     def _execute_scoped_phase(
-        self, state, phase_idx, accumulated_results, failures, scope, scope_level, unit, job
+        self,
+        state,
+        phase_idx,
+        accumulated_results,
+        failures,
+        scope,
+        scope_level,
+        unit,
+        job,
+        lineage,
+        steps,
     ):
-        """Execute a scoped phase with accumulated results. ``unit`` is the
-        unit being closed, widest level first, ``{}`` for everything. An
-        exception from a step carries the step's name as ``.step``.
-        Returns the last step's result and the phase's metadata."""
+        """Execute a scoped phase over the folders of its unit's results.
+        ``unit`` is the unit being closed, widest level first, ``{}`` for
+        everything. An exception from a step carries the step's name as
+        ``.step``. Returns the last step's folder and summary."""
         phase = state.phases[phase_idx]
 
         metadata = {
@@ -578,36 +623,41 @@ class Engine:
             "n_accumulated": len(accumulated_results),
             "n_failures": len(failures),
             "verbose": state.verbose,
+            "output": str(state.folder),
         }
-        pipeline_data = {
-            "results": accumulated_results,
-            "failures": failures,
-            "metadata": metadata,
-        }
+        pipeline_data = {"results": None, "failures": failures, "metadata": metadata}
 
-        for step in phase.steps:
+        # The first step reads the results from their folders; each next one
+        # reads the folder the step before wrote. Every output keeps the
+        # phase's metadata, and the last one gets the lineage.
+        folder = None
+        for index, step in enumerate(phase.steps):
+            files = {
+                "load": folder,
+                "results": None if folder else [path for path, _ in accumulated_results],
+                "save": state.step_folder(job, index, step.name),
+                "metadata": metadata,
+                "lineage": lineage if index == len(phase.steps) - 1 else None,
+            }
             try:
-                pipeline_data = self._execute_step(state, step, pipeline_data, job)
-                if not isinstance(pipeline_data, dict):
-                    raise TypeError(
-                        f"Step '{step.name}' returned {type(pipeline_data).__name__}, expected dict"
-                    )
+                summary = self._execute_step(
+                    state, step, None if folder else pipeline_data, job, files, steps
+                )
             except Exception as e:
                 e.step = step.name
                 raise
-            # A step that built a new dict still hands the next one the
-            # phase's metadata.
-            pipeline_data.setdefault("metadata", metadata)
+            folder = files["save"]
 
-        return pipeline_data, metadata
+        return folder, summary
 
     # -- Internal: step execution --------------------------------------
 
-    def _execute_step(self, state, step_config, pipeline_data, job):
+    def _execute_step(self, state, step_config, pipeline_data, job, files, steps):
         """Execute a single step of *job* via the worker pool.
 
         The board shows the job at this step from here on. A pipeline being
-        cancelled starts no further step.
+        cancelled starts no further step. The step's times and provenance
+        are added to *steps*, for the record. Returns the output's summary.
         """
         if state.cancelling:
             raise RuntimeError("cancelled by deregister")
@@ -615,7 +665,8 @@ class Engine:
         settings = state.step_settings[step_config.name]
         func_path = state.functions_dir / f"{step_config.name}.py"
 
-        return self._pool.execute(
+        start = datetime.now().isoformat(timespec="milliseconds")
+        summary = self._pool.execute(
             environment=settings["environment"],
             step_path=str(func_path),
             pipeline_data=pipeline_data,
@@ -623,7 +674,12 @@ class Engine:
             max_workers=settings["max_workers"],
             timeout=self.execution_timeout,
             owner=state,
+            files=files,
         )
+        end = datetime.now().isoformat(timespec="milliseconds")
+        where = summary["provenance"].get(step_config.name, {})
+        steps.append({"step": step_config.name, "start": start, "end": end, **where})
+        return summary
 
     # -- Internal: helpers ---------------------------------------------
 

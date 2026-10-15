@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 import pytest
-from helpers import _SESSION_TEMP, _next_id
+from helpers import _SESSION_TEMP, _next_id, fresh_output
 from helpers import _write_step as write_step
 from helpers import _write_yaml as write_yaml
 
@@ -137,8 +137,8 @@ def alive(pid):
 def test_submit_returns_ids_counted_per_pipeline(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:")
     engine = engine_factory()
-    engine.register("first", pipeline)
-    engine.register("second", pipeline)
+    engine.register("first", pipeline, fresh_output())
+    engine.register("second", pipeline, fresh_output())
 
     ids = [engine.submit(pipeline="first", data={}) for _ in range(3)]
     other = engine.submit(pipeline="second", data={})
@@ -153,7 +153,7 @@ def test_submit_returns_ids_counted_per_pipeline(engine_factory):
 def test_a_job_on_the_board_has_step_scope_state_and_output(engine_factory):
     pipeline = write_yaml("wf:\n  - double:\n  - add_one:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
 
     job = engine.submit(pipeline="wf", data={"value": 20})
     entry = wait_for_state(engine, "wf", job, {"done"})
@@ -170,7 +170,7 @@ def test_a_job_on_the_board_has_step_scope_state_and_output(engine_factory):
 def test_a_job_is_queued_then_running_at_its_step_then_done(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:\n  - board_pass:")
     engine = engine_factory(max_concurrent=1)
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     started, gate = a_file(), a_file()
 
     first = engine.submit(pipeline="wf", data={"started": started, "gate": gate})
@@ -192,7 +192,7 @@ def test_a_job_is_queued_then_running_at_its_step_then_done(engine_factory):
 def test_a_failing_step_fails_its_job_with_the_error(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:\n  - board_break:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
 
     job = engine.submit(pipeline="wf", data={})
     entry = wait_for_state(engine, "wf", job, {"failed"})
@@ -205,8 +205,8 @@ def test_a_failing_step_fails_its_job_with_the_error(engine_factory):
 def test_status_without_a_name_gives_one_board_per_pipeline(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:")
     engine = engine_factory()
-    engine.register("first", pipeline)
-    engine.register("second", pipeline)
+    engine.register("first", pipeline, fresh_output())
+    engine.register("second", pipeline, fresh_output())
     job = engine.submit(pipeline="first", data={})
     wait_for_state(engine, "first", job, {"done"})
 
@@ -244,7 +244,7 @@ def test_completing_a_unit_adds_a_waiting_scope_job_that_runs_on_its_images(engi
               scope: group
     """)
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     gate = a_file()
 
     def image(value, position, complete=None):
@@ -281,7 +281,7 @@ def test_completing_a_unit_adds_a_waiting_scope_job_that_runs_on_its_images(engi
 def test_deregister_finishes_the_jobs_and_returns_the_final_board(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     gate = a_file()
     job = engine.submit(pipeline="wf", data={"gate": gate})
 
@@ -297,7 +297,7 @@ def test_deregister_finishes_the_jobs_and_returns_the_final_board(engine_factory
 def test_deregister_stops_a_worker_no_other_pipeline_needs(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     started = a_file()
     job = engine.submit(pipeline="wf", data={"started": started})
     pid = wait_for_file(started)
@@ -312,8 +312,8 @@ def test_deregister_stops_a_worker_no_other_pipeline_needs(engine_factory):
 def test_deregister_keeps_a_worker_another_pipeline_needs(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:")
     engine = engine_factory()
-    engine.register("leaving", pipeline)
-    engine.register("staying", pipeline)
+    engine.register("leaving", pipeline, fresh_output())
+    engine.register("staying", pipeline, fresh_output())
     started = a_file()
     job = engine.submit(pipeline="leaving", data={"started": started})
     pid = wait_for_file(started)
@@ -330,7 +330,7 @@ def test_deregister_keeps_a_worker_another_pipeline_needs(engine_factory):
 def test_deregister_without_waiting_cancels_running_and_queued_jobs(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:")
     engine = engine_factory(max_concurrent=1)
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     started, gate = a_file(), a_file()
     running = engine.submit(pipeline="wf", data={"started": started, "gate": gate})
     queued = engine.submit(pipeline="wf", data={})
@@ -354,7 +354,7 @@ def test_deregister_without_waiting_cancels_a_waiting_scope_job(engine_factory):
               scope: group
     """)
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     gate = a_file()
     engine.submit(pipeline="wf", data={"value": 1, "gate": gate}, scope={"group": 1})
     engine.submit(
@@ -370,11 +370,11 @@ def test_deregister_without_waiting_cancels_a_waiting_scope_job(engine_factory):
 def test_a_name_can_be_registered_again_and_counts_from_one(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     engine.submit(pipeline="wf", data={})
     engine.deregister("wf")
 
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
 
     assert engine.submit(pipeline="wf", data={}) == 1
 
@@ -390,7 +390,7 @@ def test_the_engine_has_no_idle_timeout():
 def test_a_worker_is_still_the_same_after_a_pause(engine_factory):
     pipeline = write_yaml("wf:\n  - gated:")
     engine = engine_factory()
-    engine.register("wf", pipeline)
+    engine.register("wf", pipeline, fresh_output())
     first = engine.submit(pipeline="wf", data={})
     pid = wait_for_state(engine, "wf", first, {"done"})["output"]["gated"]["pid"]
 
@@ -403,8 +403,8 @@ def test_a_worker_is_still_the_same_after_a_pause(engine_factory):
 def test_shutdown_deregisters_every_pipeline(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:")
     engine = engine_factory()
-    engine.register("first", pipeline)
-    engine.register("second", pipeline)
+    engine.register("first", pipeline, fresh_output())
+    engine.register("second", pipeline, fresh_output())
 
     engine.shutdown()
 

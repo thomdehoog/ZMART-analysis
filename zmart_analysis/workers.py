@@ -319,7 +319,7 @@ class Worker:
         self._cleanup()
         raise WorkerCrashedError(f"Worker for '{_label(self.environment)}' was killed")
 
-    def execute(self, step_path, pipeline_data, params, timeout=300.0):
+    def execute(self, step_path, pipeline_data, params, timeout=300.0, files=None):
         """
         Send work to the worker and block until result.
 
@@ -333,6 +333,8 @@ class Worker:
             Keyword arguments from the YAML config.
         timeout : float
             Seconds to wait for the step to complete.
+        files : dict, optional
+            The folders the data goes through (see worker_script.py).
 
         Raises
         ------
@@ -349,7 +351,7 @@ class Worker:
         self._current_step = step_name
         t0 = time.monotonic()
 
-        message = (str(step_path), pipeline_data, params)
+        message = (str(step_path), pipeline_data, params, files or {})
         try:
             data = pickle.dumps(message, protocol=PICKLE_PROTOCOL)
             logger.debug(
@@ -630,6 +632,7 @@ class WorkerPool:
         max_workers=1,
         timeout=300.0,
         owner=None,
+        files=None,
     ):
         """
         Execute a step in a worker subprocess.
@@ -653,6 +656,8 @@ class WorkerPool:
             Seconds to wait for step completion.
         owner : object, optional
             Who the step runs for; :meth:`kill_owner` stops its steps.
+        files : dict, optional
+            The folders the data goes through (see worker_script.py).
         """
         sem = self._get_semaphore(step_path, max_workers)
         sem.acquire()
@@ -676,7 +681,9 @@ class WorkerPool:
                     refused = owner is not None and owner in self._killed
                 if refused:
                     raise WorkerCrashedError("Step not started: its pipeline was cancelled")
-                return worker.execute(step_path, pipeline_data, params, timeout=timeout)
+                return worker.execute(
+                    step_path, pipeline_data, params, timeout=timeout, files=files
+                )
             finally:
                 pool.release(worker)
         finally:

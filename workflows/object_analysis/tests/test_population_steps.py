@@ -36,7 +36,7 @@ def _tile(rng, n, area_mean, tile):
     return {"object_analysis": {"objects": {"properties": props, "n_objects": n}}}
 
 
-def _compartment(carrier, compartment, area_mean, seed, **params):
+def _compartment(carrier, compartment, area_mean, seed, output=None):
     rng = np.random.default_rng(seed)
     tiles = [_tile(rng, 30, area_mean, f"M{compartment}_P{t}") for t in range(3)]
     data = {
@@ -48,12 +48,13 @@ def _compartment(carrier, compartment, area_mean, seed, **params):
             # the engine names the unit itself, widest level first.
             "scope": {"carrier": carrier, "compartment": compartment, "group": 7},
             "unit": {"carrier": carrier, "compartment": compartment},
+            "output": output,
         },
     }
-    return summarise_run(data, {}, **params)
+    return summarise_run(data, {})
 
 
-def _carrier(results, carrier=1, failures=(), **params):
+def _carrier(results, carrier=1, failures=(), output=None):
     data = {
         "results": results,
         "failures": list(failures),
@@ -61,9 +62,10 @@ def _carrier(results, carrier=1, failures=(), **params):
             "scope_level": "carrier",
             "scope": {"carrier": carrier, "compartment": 6},
             "unit": {"carrier": carrier},
+            "output": output,
         },
     }
-    return compare_run(data, {}, **params)["comparison"]
+    return compare_run(data, {})["comparison"]
 
 
 def test_a_compartment_joins_its_tiles_into_one_population():
@@ -151,11 +153,11 @@ def test_the_carrier_counts_failed_compartments_apart_from_tiles_not_closed():
 
 
 def test_both_steps_write_their_tables_when_asked(tmp_path):
-    one = _compartment(1, 3, 100.0, 0, output_dir=str(tmp_path))
+    one = _compartment(1, 3, 100.0, 0, output=str(tmp_path))
     written = one["population"]["written"]
     assert Path(written["objects"]).name == "carrier1_compartment3_objects.csv"
     assert Path(written["pca"]).exists()
-    got = _carrier([one, _compartment(1, 4, 100.0, 1)], output_dir=str(tmp_path))
+    got = _carrier([one, _compartment(1, 4, 100.0, 1)], output=str(tmp_path))
     assert Path(got["written"]["profiles"]).name == "carrier1_compartment_profiles.csv"
 
 

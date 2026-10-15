@@ -1,7 +1,8 @@
 """
 Worker subprocess script -- runs inside the target conda environment.
 
-Self-contained: imports nothing from the engine package. It may run in a
+Self-contained: imports nothing from the engine package but handover.py,
+which sits beside it and needs only the standard library. It may run in a
 completely different conda environment with different packages and even a
 different Python version than the orchestrator.
 
@@ -10,11 +11,19 @@ Protocol
 1. Parent spawns this script with --port, --authkey
 2. Script connects to parent on localhost:port with authkey
 3. Message loop:
-   - Receive (step_path, pipeline_data, params)
+   - Receive (step_path, pipeline_data, params[, files])
    - Load module at step_path (cached)
    - Call module.run(pipeline_data, state, **params)
    - Send ("ok", result) or ("error", {"message": ..., "traceback": ...})
 4. Receive None sentinel -> clean exit
+
+Files
+-----
+With ``files`` the data goes through folders (see handover.py):
+``load`` names the folder of the step before, ``results`` the folders a
+scoped step works over, and ``save`` the folder to write the output to.
+The reply is then a short summary instead of the output. ``metadata`` is
+added to an output that has none, and ``lineage`` is set on it.
 
 State management
 ----------------
@@ -58,6 +67,13 @@ import sys
 import traceback
 from importlib import metadata
 from multiprocessing.connection import Client
+
+# Run as a script in a step's environment, handover.py is beside it; imported
+# as part of the package (by a test), it is a sibling module.
+if __package__:
+    from .handover import StoredResults, read_folder, summary_of, write_folder
+else:
+    from handover import StoredResults, read_folder, summary_of, write_folder
 
 #: How the messages on the socket are encoded. Protocol 5 is what every
 #: Python from 3.8 on reads, and it carries a large image in one piece
@@ -138,6 +154,32 @@ def _stamp(result, step_name, env_record, module_to_dists):
         record["packages"] = _loaded_package_versions(module_to_dists)
         result.setdefault("provenance", {})[step_name] = record
     return result
+
+
+def run_step(module, pipeline_data, state, params, files):
+    """Run the step on its input: as sent, or read from the folders named."""
+    if files.get("load"):
+        pipeline_data = read_folder(files["load"])
+    if files.get("results") is not None:
+        pipeline_data["results"] = StoredResults(files["results"])
+    return module.run(pipeline_data, state, **params)
+
+
+def finish(result, step_name, files):
+    """Check and complete the output; write it to its folder when asked."""
+    if not files:
+        return result
+    if not isinstance(result, dict):
+        name = os.path.splitext(step_name)[0]
+        raise TypeError(f"Step '{name}' returned {type(result).__name__}, expected dict")
+    if files.get("metadata") is not None:
+        result.setdefault("metadata", files["metadata"])
+    if files.get("lineage") is not None:
+        result["lineage"] = files["lineage"]
+    if not files.get("save"):
+        return result
+    write_folder(result, files["save"])
+    return summary_of(result)
 
 
 def _parent_alive(parent_pid):
@@ -241,7 +283,8 @@ def main():
                 logger.info("Received shutdown sentinel")
                 break
 
-            step_path, pipeline_data, params = message
+            step_path, pipeline_data, params, *rest = message
+            files = rest[0] if rest else {}
             step_name = os.path.basename(step_path)
             request_count += 1
             logger.info("Request #%d: step=%s (%d bytes)", request_count, step_name, len(raw))
@@ -258,9 +301,9 @@ def main():
             state = state_dicts[step_path]
 
             try:
-                result = module.run(pipeline_data, state, **params)
+                result = run_step(module, pipeline_data, state, params, files)
                 result = _stamp(result, os.path.splitext(step_name)[0], env_record, module_to_dists)
-                response = ("ok", result)
+                response = ("ok", finish(result, step_name, files))
                 logger.info("Request #%d completed", request_count)
             except Exception:
                 tb = traceback.format_exc()
@@ -274,6 +317,8 @@ def main():
                 )
 
             conn.send_bytes(pickle.dumps(response, protocol=PICKLE_PROTOCOL))
+            # Nothing of this job stays in memory until the next one.
+            raw = message = pipeline_data = result = response = None
     finally:
         conn.close()
         logger.info("Worker exiting: pid=%d, requests=%d", os.getpid(), request_count)

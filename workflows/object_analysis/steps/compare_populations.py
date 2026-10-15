@@ -17,8 +17,9 @@ These are the usual aggregation and normalisation of image-based profiling
 done here with pandas and numpy.
 
 Takes ``pipeline_data["results"]``, one ``summarise_population`` result per
-unit. Publishes ``pipeline_data["comparison"]`` and, when ``output_dir`` is
-given, writes the profiles and the z-scores as CSV files.
+unit. Publishes ``pipeline_data["comparison"]`` and writes the profiles and
+the z-scores as CSV files into the pipeline's output folder
+(``metadata["output"]``).
 """
 
 from __future__ import annotations
@@ -77,7 +78,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
     flagged = {unit: found for unit, found in flagged.items() if found}
 
     written = {}
-    output_dir = params.get("output_dir")
+    output_dir = meta.get("output")
     if output_dir and len(profiles):
         folder = Path(output_dir)
         folder.mkdir(parents=True, exist_ok=True)

@@ -10,7 +10,9 @@ pytest's and cannot be imported from a test under two folders at once).
 from __future__ import annotations
 
 import atexit
+import os
 import shutil
+import sys
 import tempfile
 import textwrap
 import time
@@ -35,12 +37,35 @@ def _next_id():
 # --------------------------------------------------------------------------
 
 
+#: The engine's own environment, as the engine names it. A test step runs there.
+ENGINE_ENVIRONMENT = os.environ.get("CONDA_DEFAULT_ENV") or Path(sys.prefix).name
+#: A METADATA that names it, to end a test step's code with.
+ENGINE_METADATA = f'\nMETADATA = {{"environment": "{ENGINE_ENVIRONMENT}"}}\n'
+
+
 def _write_step(code, name=None):
-    """Write a step .py file to the session temp dir; return absolute path."""
+    """Write a step .py file to the session temp dir; return absolute path.
+
+    A step must name its environment, so one that does not gets the
+    engine's own, in the METADATA it has or in a new one at the end.
+    """
     fname = f"{name}.py" if name else f"step_{_next_id()}.py"
     path = _SESSION_TEMP / fname
-    path.write_text(textwrap.dedent(code))
+    code = textwrap.dedent(code)
+    if '"environment"' not in code:
+        if "METADATA = {" in code:
+            code = code.replace(
+                "METADATA = {", f'METADATA = {{"environment": "{ENGINE_ENVIRONMENT}", ', 1
+            )
+        else:
+            code += ENGINE_METADATA
+    path.write_text(code)
     return str(path)
+
+
+def fresh_output():
+    """A new, empty output place for one registration."""
+    return str(_SESSION_TEMP / f"output_{_next_id()}")
 
 
 def _write_yaml(content):
@@ -71,8 +96,9 @@ FINISHED = ("done", "failed", "cancelled")
 
 
 def outputs(board):
-    """The outputs of the done jobs on a board, in job order."""
-    return [board[job]["output"] for job in sorted(board) if board[job]["state"] == "done"]
+    """The outputs of the done jobs on a board, in job order, read now, so a
+    test can look at them after the engine has shut down."""
+    return [dict(board[job]["output"]) for job in sorted(board) if board[job]["state"] == "done"]
 
 
 def phase_of(output):
@@ -104,12 +130,21 @@ def _wait_for_results(engine, name, expected, timeout=30):
     return outputs(engine.status(name))
 
 
+def read_board(board):
+    """A board with every output read now, so a test can look at it after
+    the engine has shut down."""
+    for entry in board.values():
+        if entry["output"] is not None:
+            entry["output"] = dict(entry["output"])
+    return board
+
+
 def _wait_for_status(engine, name, expected_total, timeout=30):
     """Poll the board until *expected_total* jobs have finished; return it."""
     t0 = time.monotonic()
     while time.monotonic() - t0 < timeout:
         board = engine.status(name)
         if sum(entry["state"] in FINISHED for entry in board.values()) >= expected_total:
-            return board
+            return read_board(board)
         time.sleep(0.05)
-    return engine.status(name)
+    return read_board(engine.status(name))

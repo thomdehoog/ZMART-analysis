@@ -30,6 +30,7 @@ METADATA = {
     "description": "Build the public object_analysis table",
     "version": "1.0",
     "max_workers": 1,
+    "environment": "ZMART--object_analysis--classical",
 }
 
 #: The feature columns renamed for the table, from what scikit-image calls

@@ -20,10 +20,10 @@ The conditioning and the PCA are those of ``workflows/shared/population.py``, th
 same the on-demand population plots use.
 
 Takes ``pipeline_data["results"]``, one tile result each, as the engine hands
-a scoped step. Publishes ``pipeline_data["population"]`` and, when
-``output_dir`` is given, writes the joined object table and its principal
-components as CSV files named after the unit, for example
-``carrier1_compartment3_objects.csv``.
+a scoped step. Publishes ``pipeline_data["population"]`` and writes the
+joined object table and its principal components into the pipeline's output
+folder (``metadata["output"]``), as CSV files named after the unit, for
+example ``carrier1_compartment3_objects.csv``.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         pca = {"explained_variance_ratio": explained, "loadings": loadings}
 
     written = {}
-    output_dir = params.get("output_dir")
+    output_dir = meta.get("output")
     if output_dir and len(population):
         written = _write(Path(output_dir), scope, population, components)
 

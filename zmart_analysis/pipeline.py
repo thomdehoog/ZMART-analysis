@@ -78,12 +78,16 @@ leaves out the level it closes.
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from .handover import Output, read_folder
+from .record import RunRecord
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +249,8 @@ class PipelineState:
         verbose,
         levels=None,
         workflow_name=None,
+        output=None,
+        registration=None,
     ):
         self.name = name
         self.yaml_path = Path(yaml_path)
@@ -257,6 +263,11 @@ class PipelineState:
         self.verbose = verbose
         #: The pipeline's top-level key, for the results' metadata.
         self.workflow_name = workflow_name or name
+        #: Where everything of this pipeline is written: analysis/<name>/.
+        self.folder = Path(output) / "analysis" / name
+        #: The files handed from step to step, one folder per registration.
+        self.handover = self.folder / ".handover" / registration
+        self.record = RunRecord(self.folder / "run.jsonl", registration)
 
         self._lock = threading.Lock()
         # The job board: id -> {step, scope, state, output[, error]}.
@@ -290,6 +301,37 @@ class PipelineState:
 
         # The units still open, per scoped level: unit key -> unit.
         self._open = defaultdict(dict)
+
+    def open(self, yaml_text, step_hashes, engine_version):
+        """Make the pipeline's folder, keep its YAML, and start the record.
+
+        Hand-over files a crash left behind are cleared first.
+        """
+        self.folder.mkdir(parents=True, exist_ok=True)
+        old = self.handover.parent
+        if old.exists():
+            for leftover in old.iterdir():
+                shutil.rmtree(leftover, ignore_errors=True)
+        self.handover.mkdir(parents=True, exist_ok=True)
+        (self.folder / "pipeline.yaml").write_text(yaml_text, encoding="utf-8")
+        self.record.write(
+            "register",
+            pipeline=self.name,
+            workflow=self.workflow_name,
+            yaml=str(self.yaml_path),
+            yaml_text=yaml_text,
+            steps=step_hashes,
+            engine=engine_version,
+        )
+
+    def close(self):
+        """Delete the hand-over files and end the record with a count."""
+        counts = {"done": 0, "failed": 0, "cancelled": 0}
+        for entry in self.board().values():
+            if entry["state"] in counts:
+                counts[entry["state"]] += 1
+        shutil.rmtree(self.handover, ignore_errors=True)
+        self.record.write("deregister", **counts)
 
     @property
     def environments(self):
@@ -342,32 +384,85 @@ class PipelineState:
         with self._lock:
             self._jobs[job].update(step=step, state="running")
 
-    def job_done(self, job, output):
+    def job_done(self, job, folder, steps, jobs=None):
+        """The job is done; *folder* holds its output. Its other step folders go."""
+        self.write_end(job, "done", steps, jobs=jobs)
         with self._lock:
-            self._jobs[job].update(state="done", output=output)
+            self._jobs[job].update(state="done", output=folder)
+        self.clear_job(job, keep=folder)
 
-    def job_failed(self, job, error, step=None):
+    def job_failed(self, job, error, step=None, steps=()):
         """The job failed; a job stopped by deregister is cancelled instead."""
         if self.cancelling:
-            self.job_cancelled(job)
+            self.job_cancelled(job, steps)
             return
         with self._lock:
             entry = self._jobs[job]
-            entry.update(state="failed", error=error)
             if step:
                 entry["step"] = step
+        self.write_end(job, "failed", steps, error=error)
+        with self._lock:
+            entry.update(state="failed", error=error)
+        self.clear_job(job)
 
-    def job_cancelled(self, job):
+    def job_cancelled(self, job, steps=()):
         """Cancel the job, unless it already finished."""
         with self._lock:
-            entry = self._jobs[job]
-            if entry["state"] not in ("done", "failed"):
-                entry["state"] = "cancelled"
+            if self._jobs[job]["state"] in ("done", "failed", "cancelled"):
+                return
+            self._jobs[job]["state"] = "cancelled"
+        self.write_end(job, "cancelled", steps)
+        self.clear_job(job)
+
+    def write_end(self, job, state, steps, error=None, jobs=None):
+        """The record's line for a job that ended."""
+        with self._lock:
+            entry = dict(self._jobs[job])
+        self.record.write(
+            "end",
+            job=job,
+            state=state,
+            step=entry["step"],
+            scope=entry["scope"],
+            steps=list(steps),
+            error=error,
+            jobs=jobs,
+        )
 
     def board(self):
-        """A copy of the board: the entries are new dicts, the outputs shared."""
+        """A copy of the board. A done job's output is read from its folder
+        when it is first looked into."""
         with self._lock:
-            return {job: dict(entry) for job, entry in self._jobs.items()}
+            entries = {job: dict(entry) for job, entry in self._jobs.items()}
+        for entry in entries.values():
+            if entry["output"] is not None:
+                entry["output"] = Output(entry["output"])
+        return entries
+
+    def final_board(self):
+        """The board with every output read now, to keep after the files go."""
+        board = self.board()
+        for entry in board.values():
+            if entry["output"] is not None:
+                entry["output"] = read_folder(entry["output"].folder)
+        return board
+
+    # -- Hand-over folders ---------------------------------------------------
+
+    def step_folder(self, job, index, step):
+        """Where step number *index* of *job* writes its output."""
+        return str(self.handover / str(job) / f"{index}-{step}")
+
+    def clear_job(self, job, keep=None):
+        """Delete a job's hand-over folders, all but *keep*."""
+        folder = self.handover / str(job)
+        if not folder.exists():
+            return
+        for child in folder.iterdir():
+            if str(child) != keep:
+                shutil.rmtree(child, ignore_errors=True)
+        if keep is None:
+            shutil.rmtree(folder, ignore_errors=True)
 
     # -- Futures and failures --------------------------------------------
 
