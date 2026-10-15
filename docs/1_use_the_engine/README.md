@@ -10,18 +10,21 @@ a guided first run, open the [tutorial notebook](tutorial.ipynb).
 ## A complete run
 
 ```python
-import time
 from zmart_analysis import Engine
 
 engine = Engine()
 engine.register("my_pipeline", "path/to/my_pipeline.yaml")
-job = engine.submit("my_pipeline", {"image_path": "image.tif"})
 
-while engine.status("my_pipeline")[job]["state"] not in ("done", "failed"):
-    time.sleep(0.1)
-print(engine.status("my_pipeline")[job]["output"])
+job_1 = engine.submit("my_pipeline", {"image_path": "image1.tif"})
+job_2 = engine.submit("my_pipeline", {"image_path": "image2.tif"})
+job_3 = engine.submit("my_pipeline", {"image_path": "image3.tif"})
 
-engine.shutdown()
+print(engine.status("my_pipeline"))
+```
+```
+{1: {'step': 'segment', 'scope': {}, 'state': 'done',    'output': {...}},
+ 2: {'step': 'segment', 'scope': {}, 'state': 'running', 'output': None},
+ 3: {'step': 'segment', 'scope': {}, 'state': 'queued',  'output': None}}
 ```
 
 You make an engine, register a recipe, submit images and read their output
