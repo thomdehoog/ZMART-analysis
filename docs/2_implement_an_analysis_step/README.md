@@ -12,7 +12,7 @@ A step is one Python file with one function, `run`. This is
 ```python
 """double_it -- twice the number it is given."""
 
-import numpy as np
+import math
 
 METADATA = {
     "description": "Double a number",
@@ -28,7 +28,7 @@ def run(pipeline_data, state, **params):
 
 
 def _twice(n):
-    return float(np.multiply(n, 2))
+    return math.fsum([n, n])
 ```
 
 Every step file has the same order: a docstring that says what the step
@@ -36,8 +36,8 @@ does, the imports, `METADATA`, `run`, and then the step's own helpers. A
 helper's name starts with `_`: only this step uses it. Code that several
 steps use goes into `workflows/shared/` or the workflow's `parts/`.
 
-The imports can stay at the top. The file only ever runs in the step's own
-environment, never in the engine's.
+The imports can stay at the top. The engine reads `METADATA` as text and never
+imports the file; only the worker in the step's environment does.
 
 A pipeline that uses it, `pipelines/hello.yaml`:
 
@@ -221,7 +221,7 @@ A scoped step receives a different `pipeline_data`. There is no `input`:
 
 | Key | What it is |
 |---|---|
-| `results` | One entry per image of the unit, in submission order. Each entry is what the per-image steps returned. For a wider scope, there is one entry per narrower unit instead: a carrier step receives one result per compartment. |
+| `results` | One entry per image of the unit, in submission order. Each entry is what the per-image steps returned. For a wider scope, there is one entry per narrower unit instead: a carrier step receives one result per compartment. Each entry is read from disk when the step reaches it, so a large unit never sits in memory at once; loop over it, or make a `list(...)` of it to use it twice. |
 | `failures` | What failed in this unit. Each failure has `scope`, `step`, `error`, `phase` and `submission_idx`. |
 | `metadata["unit"]` | Which unit this is, widest level first, for example `{"carrier": 1, "compartment": 3}`. It is `{}` for a step over everything. |
 | `metadata["scope_level"]` | The level, for example `"compartment"`. |

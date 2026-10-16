@@ -4,7 +4,7 @@
 
 To update a call: `engine.register(name, yaml)` becomes
 `engine.register(name, yaml, output)`, and every step's `METADATA` names its
-`environment`. Read a job's output on the board before deregistering.
+`environment`.
 
 - **Every step names its environment.** `register` refuses a step whose
   `METADATA` has no `environment`. `build_object_table` names the classical

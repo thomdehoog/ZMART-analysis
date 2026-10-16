@@ -78,6 +78,7 @@ leaves out the level it closes.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import threading
 import weakref
@@ -89,6 +90,27 @@ import yaml
 
 from .handover import Output, read_folder
 from .record import RunRecord
+from .worker_script import _parent_alive
+
+#: The registrations open in this process, by name of their hand-over folder.
+LIVE = set()
+
+
+def leftover(registration):
+    """Whether a hand-over folder belongs to no registration that still runs.
+
+    Its name ends in the id of the process that made it: a folder of this
+    process that is no longer open, or of a process that is gone, is left
+    over from a crash.
+    """
+    try:
+        pid = int(registration.rsplit("-", 1)[1])
+    except (IndexError, ValueError):
+        return True
+    if pid == os.getpid():
+        return registration not in LIVE
+    return not _parent_alive(pid)
+
 
 logger = logging.getLogger(__name__)
 
@@ -250,8 +272,9 @@ class PipelineState:
         verbose,
         levels=None,
         workflow_name=None,
-        output=None,
-        registration=None,
+        *,
+        output,
+        registration,
     ):
         self.name = name
         self.yaml_path = Path(yaml_path)
@@ -271,6 +294,8 @@ class PipelineState:
         self.record = RunRecord(self.folder / "run.jsonl", registration)
         #: The board outputs handed out and still held by someone, by id.
         self.handed = weakref.WeakValueDictionary()
+        #: Set by close(): the hand-over files are gone.
+        self.closed = False
 
         self._lock = threading.Lock()
         # The job board: id -> {step, scope, state, output[, error]}.
@@ -308,14 +333,16 @@ class PipelineState:
     def open(self, yaml_text, step_hashes, engine_version):
         """Make the pipeline's folder, keep its YAML, and start the record.
 
-        Hand-over files a crash left behind are cleared first.
+        Hand-over files a crash left behind are cleared first; those of a
+        registration that still runs are left alone.
         """
         self.folder.mkdir(parents=True, exist_ok=True)
-        old = self.handover.parent
-        if old.exists():
-            for leftover in old.iterdir():
-                shutil.rmtree(leftover, ignore_errors=True)
+        if self.handover.parent.exists():
+            for old in self.handover.parent.iterdir():
+                if leftover(old.name):
+                    shutil.rmtree(old, ignore_errors=True)
         self.handover.mkdir(parents=True, exist_ok=True)
+        LIVE.add(self.handover.name)
         (self.folder / "pipeline.yaml").write_text(yaml_text, encoding="utf-8")
         self.record.write(
             "register",
@@ -331,18 +358,22 @@ class PipelineState:
         """Delete the hand-over files and end the record with a count.
 
         Every output still held from the board is read first, so it stays
-        readable after its files are gone.
+        readable after its files are gone. One that cannot be read is left.
         """
         with self._lock:
+            self.closed = True
             held = list(self.handed.values())
+            states = [entry["state"] for entry in self._jobs.values()]
         for output in held:
-            output.loaded()
-        counts = {"done": 0, "failed": 0, "cancelled": 0}
-        for entry in self.board().values():
-            if entry["state"] in counts:
-                counts[entry["state"]] += 1
+            try:
+                output.loaded()
+            except Exception as error:  # noqa: BLE001 -- an unreadable output stays unread
+                logger.warning("Output %s not read: %s", output.folder, error)
         shutil.rmtree(self.handover, ignore_errors=True)
-        self.record.write("deregister", **counts)
+        LIVE.discard(self.handover.name)
+        self.record.write(
+            "deregister", **{s: states.count(s) for s in ("done", "failed", "cancelled")}
+        )
 
     @property
     def environments(self):
@@ -444,6 +475,8 @@ class PipelineState:
         """A copy of the board. A done job's output is read from its folder
         when it is first looked into."""
         with self._lock:
+            if self.closed:
+                raise KeyError(f"Pipeline '{self.name}' is not registered")
             entries = {job: dict(entry) for job, entry in self._jobs.items()}
             for entry in entries.values():
                 if entry["output"] is not None:
@@ -452,11 +485,19 @@ class PipelineState:
         return entries
 
     def final_board(self):
-        """The board with every output read now, to keep after the files go."""
-        board = self.board()
+        """The board with every output read now, to keep after the files go.
+
+        An output that cannot be read here is ``None``, with the reason as
+        the entry's ``error``.
+        """
+        with self._lock:
+            board = {job: dict(entry) for job, entry in self._jobs.items()}
         for entry in board.values():
             if entry["output"] is not None:
-                entry["output"] = read_folder(entry["output"].folder)
+                try:
+                    entry["output"] = read_folder(entry["output"], lists=True)
+                except Exception as error:  # noqa: BLE001 -- reported on the board
+                    entry.update(output=None, error=f"output could not be read: {error!r}")
         return board
 
     # -- Hand-over folders ---------------------------------------------------

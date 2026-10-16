@@ -75,7 +75,7 @@ analysis/
 ```
 
 The run record has one line per event: the registration, every submit
-(with the data, so the files that were processed), the end of every job
+(with what was submitted, such as the image path), the end of every job
 (with where and with which packages each step ran, and the error if it
 failed), and the deregistration. Each line is written the moment it
 happens, so you can read the record during the run, and it survives a

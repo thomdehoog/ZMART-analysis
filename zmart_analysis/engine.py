@@ -12,8 +12,8 @@ pipeline and the workers no other pipeline needs are stopped.
 
 Every pipeline writes into ``<output>/analysis/<name>/``: a copy of its
 YAML, the run record (record.py), and the folders one step's output is
-handed to the next through (handover.py). Data never passes through the
-engine, only the names of those folders.
+handed to the next through (handover.py). Between steps, data goes through
+these folders, not through the engine.
 
 Thread safety: ``_lock`` guards the registered pipelines and the accepting
 flag; each PipelineState has its own lock. ``submit`` and ``status`` may
@@ -171,8 +171,9 @@ class Engine:
                 levels=levels,
                 workflow_name=workflow_name,
                 output=output,
-                registration=datetime.now().strftime("%Y%m%d-%H%M%S-%f"),
+                registration=f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}",
             )
+            # Imported here: the package sets its version after importing this module.
             from . import __version__
 
             state.open(yaml_path.read_text(encoding="utf-8"), step_hashes, __version__)
@@ -357,8 +358,10 @@ class Engine:
                 future.cancel()
             self._pool.kill_owner(state)
         concurrent.futures.wait(list(state.futures))
-        board = state.final_board() if keep_board else None
-        state.close()
+        try:
+            board = state.final_board() if keep_board else None
+        finally:
+            state.close()
 
         # Taken under the lock, so a pipeline registered meanwhile that needs
         # one of these environments gets fresh workers, not these.

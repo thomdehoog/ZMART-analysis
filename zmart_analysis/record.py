@@ -7,9 +7,12 @@ the pipeline runs and keeps everything up to a crash.
 """
 
 import json
+import logging
 import os
 import threading
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 class RunRecord:
@@ -28,10 +31,14 @@ class RunRecord:
             **fields,
         }
         text = json.dumps(line, default=repr) + "\n"
-        with self.lock, open(self.path, "a", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            os.fsync(f.fileno())
+        # A record that cannot be written is reported, and the jobs go on.
+        try:
+            with self.lock, open(self.path, "a", encoding="utf-8") as f:
+                f.write(text)
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError as error:
+            logger.warning("Run record %s not written: %s", self.path, error)
 
 
 def described(value):

@@ -167,8 +167,6 @@ def run_step(module, pipeline_data, state, params, files):
 
 def finish(result, step_name, files):
     """Check and complete the output; write it to its folder when asked."""
-    if not files:
-        return result
     if not isinstance(result, dict):
         name = os.path.splitext(step_name)[0]
         raise TypeError(f"Step '{name}' returned {type(result).__name__}, expected dict")
@@ -283,8 +281,7 @@ def main():
                 logger.info("Received shutdown sentinel")
                 break
 
-            step_path, pipeline_data, params, *rest = message
-            files = rest[0] if rest else {}
+            step_path, pipeline_data, params, files = message
             step_name = os.path.basename(step_path)
             request_count += 1
             logger.info("Request #%d: step=%s (%d bytes)", request_count, step_name, len(raw))

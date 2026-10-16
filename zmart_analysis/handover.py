@@ -34,7 +34,7 @@ def write_folder(data, folder):
 
     def strip(value):
         nonlocal count
-        if np is not None and isinstance(value, np.ndarray) and value.dtype != object:
+        if np is not None and type(value) is np.ndarray and value.dtype != object:
             name = f"array_{count}.npy"
             count += 1
             np.save(os.path.join(folder, name), value, allow_pickle=False)
@@ -55,8 +55,12 @@ def write_folder(data, folder):
         pickle.dump(strip(data), f, protocol=PICKLE_PROTOCOL)
 
 
-def read_folder(folder):
-    """Read what :func:`write_folder` wrote, arrays loaded back in."""
+def read_folder(folder, lists=False):
+    """Read what :func:`write_folder` wrote, arrays loaded back in.
+
+    A scoped step's results stay folders, read one at a time; with *lists*
+    they are read now, into a list.
+    """
     with open(os.path.join(folder, "data.pickle"), "rb") as f:
         data = pickle.load(f)
 
@@ -67,6 +71,8 @@ def read_folder(folder):
 
                 return numpy.load(os.path.join(folder, value[ARRAY]), allow_pickle=False)
             if len(value) == 1 and RESULTS in value:
+                if lists:
+                    return [read_folder(path, lists=True) for path in value[RESULTS]]
                 return StoredResults(value[RESULTS])
             return {key: restore(item) for key, item in value.items()}
         if type(value) is list:
@@ -119,7 +125,7 @@ class Output(Mapping):
 
     def loaded(self):
         if self.data is None:
-            self.data = read_folder(self.folder)
+            self.data = read_folder(self.folder, lists=True)
         return self.data
 
     def __getitem__(self, key):
