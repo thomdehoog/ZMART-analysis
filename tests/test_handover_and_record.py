@@ -61,13 +61,13 @@ FAIL = """
         raise ValueError("broken on purpose")
 """
 
-# Per image: a small array whose sum is the image's number times 1000.
+# Per image: an 80 kB array whose sum is the image's number times 10,000.
 TILE = """
     import numpy as np
 
     def run(pd, state, **p):
         n = pd["input"]["n"]
-        pd["tile"] = {"n": n, "pixels": np.full(1000, n, dtype=np.float64)}
+        pd["tile"] = {"n": n, "pixels": np.full(10_000, n, dtype=np.float64)}
         return pd
 """
 
@@ -272,7 +272,8 @@ def test_a_plain_step_never_imports_numpy_in_its_worker(engine_factory):
 
 
 def test_a_large_scope_keeps_the_engine_memory_flat(engine_factory):
-    """1,000 images of 8 kB arrays, about 8 MB in total if the engine held them."""
+    """1,000 images of 80 kB arrays: 80 MB if the engine held them. What it
+    does keep per job (the board, a summary, a folder name) stays far below."""
     engine = engine_factory()
     engine.register(
         "p", write_yaml("wf:\n  - v5_tile:\n  - v5_count:\n      scope: group"), fresh_output()
@@ -289,8 +290,8 @@ def test_a_large_scope_keeps_the_engine_memory_flat(engine_factory):
 
     assert entry["state"] == "done", entry
     assert entry["output"]["n"] == list(range(1000))
-    assert entry["output"]["sums"] == [1000.0 * n for n in range(1000)]
-    assert grown < 4_000_000, f"the engine grew {grown} bytes"
+    assert entry["output"]["sums"] == [10_000.0 * n for n in range(1000)]
+    assert grown < 20_000_000, f"the engine grew {grown} bytes"
 
 
 def test_a_scoped_step_sees_the_output_folder(engine_factory):
@@ -501,7 +502,7 @@ def test_results_handed_on_by_a_scoped_step_stay_readable(engine_factory):
     engine.deregister("p")
 
     results = entry["output"]["results"]
-    assert isinstance(results, list) and results[0]["tile"]["pixels"].sum() == 4000
+    assert isinstance(results, list) and results[0]["tile"]["pixels"].sum() == 40_000
 
 
 def test_a_masked_array_reaches_the_board_as_it_was(engine_factory):
