@@ -11,7 +11,7 @@ Protocol
 1. Parent spawns this script with --port, --authkey
 2. Script connects to parent on localhost:port with authkey
 3. Message loop:
-   - Receive (step_path, pipeline_data, params[, files])
+   - Receive (step_path, pipeline_data, params, files)
    - Load module at step_path (cached)
    - Call module.run(pipeline_data, state, **params)
    - Send ("ok", result) or ("error", {"message": ..., "traceback": ...})
@@ -19,11 +19,12 @@ Protocol
 
 Files
 -----
-With ``files`` the data goes through folders (see handover.py):
+``files`` says how the data goes through folders (see handover.py):
 ``load`` names the folder of the step before, ``results`` the folders a
-scoped step works over, and ``save`` the folder to write the output to.
-The reply is then a short summary instead of the output. ``metadata`` is
-added to an output that has none, and ``lineage`` is set on it.
+scoped step works over, and ``save`` the folder to write the output to;
+with ``save`` the reply is a short summary instead of the output.
+``metadata`` is added to an output that has none, and ``lineage`` is set
+on it.
 
 State management
 ----------------
@@ -180,7 +181,7 @@ def finish(result, step_name, files):
     return summary_of(result)
 
 
-def _parent_alive(parent_pid):
+def process_alive(parent_pid):
     """Check if the parent process is still running.
 
     On Unix, os.kill(pid, 0) tests existence without sending a signal.
@@ -267,7 +268,7 @@ def main():
 
     try:
         while True:
-            if not _parent_alive(parent_pid):
+            if not process_alive(parent_pid):
                 logger.warning("Parent %d died, shutting down", parent_pid)
                 break
 

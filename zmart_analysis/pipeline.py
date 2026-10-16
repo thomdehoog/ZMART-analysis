@@ -80,6 +80,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import socket
 import threading
 import weakref
 from collections import defaultdict
@@ -90,7 +91,7 @@ import yaml
 
 from .handover import Output, read_folder
 from .record import RunRecord
-from .worker_script import _parent_alive
+from .worker_script import process_alive
 
 #: The registrations open in this process, by name of their hand-over folder.
 LIVE = set()
@@ -99,17 +100,21 @@ LIVE = set()
 def leftover(registration):
     """Whether a hand-over folder belongs to no registration that still runs.
 
-    Its name ends in the id of the process that made it: a folder of this
-    process that is no longer open, or of a process that is gone, is left
-    over from a crash.
+    Its name ends in the process and the computer that made it, as
+    ``<time>-<pid>@<computer>``: a folder of this process that is no longer
+    open, or of a process on this computer that is gone, is left over from
+    a crash. Another computer's is left alone.
     """
     try:
-        pid = int(registration.rsplit("-", 1)[1])
+        rest, host = registration.rsplit("@", 1)
+        pid = int(rest.rsplit("-", 1)[1])
     except (IndexError, ValueError):
         return True
+    if host != socket.gethostname():
+        return False
     if pid == os.getpid():
         return registration not in LIVE
-    return not _parent_alive(pid)
+    return not process_alive(pid)
 
 
 logger = logging.getLogger(__name__)
@@ -336,13 +341,13 @@ class PipelineState:
         Hand-over files a crash left behind are cleared first; those of a
         registration that still runs are left alone.
         """
+        LIVE.add(self.handover.name)
         self.folder.mkdir(parents=True, exist_ok=True)
         if self.handover.parent.exists():
             for old in self.handover.parent.iterdir():
                 if leftover(old.name):
                     shutil.rmtree(old, ignore_errors=True)
         self.handover.mkdir(parents=True, exist_ok=True)
-        LIVE.add(self.handover.name)
         (self.folder / "pipeline.yaml").write_text(yaml_text, encoding="utf-8")
         self.record.write(
             "register",
@@ -353,6 +358,11 @@ class PipelineState:
             steps=step_hashes,
             engine=engine_version,
         )
+
+    def abandon(self):
+        """Undo :meth:`open` for a registration that did not complete."""
+        shutil.rmtree(self.handover, ignore_errors=True)
+        LIVE.discard(self.handover.name)
 
     def close(self):
         """Delete the hand-over files and end the record with a count.
@@ -492,10 +502,11 @@ class PipelineState:
         """
         with self._lock:
             board = {job: dict(entry) for job, entry in self._jobs.items()}
+        read = {}
         for entry in board.values():
             if entry["output"] is not None:
                 try:
-                    entry["output"] = read_folder(entry["output"], lists=True)
+                    entry["output"] = read_folder(entry["output"], True, read)
                 except Exception as error:  # noqa: BLE001 -- reported on the board
                     entry.update(output=None, error=f"output could not be read: {error!r}")
         return board

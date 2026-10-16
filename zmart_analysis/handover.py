@@ -55,12 +55,15 @@ def write_folder(data, folder):
         pickle.dump(strip(data), f, protocol=PICKLE_PROTOCOL)
 
 
-def read_folder(folder, lists=False):
+def read_folder(folder, lists=False, read=None):
     """Read what :func:`write_folder` wrote, arrays loaded back in.
 
     A scoped step's results stay folders, read one at a time; with *lists*
-    they are read now, into a list.
+    they are read now, into a list. *read* keeps what was read by folder,
+    so a folder that several outputs hold is read once.
     """
+    if read is not None and folder in read:
+        return read[folder]
     with open(os.path.join(folder, "data.pickle"), "rb") as f:
         data = pickle.load(f)
 
@@ -72,7 +75,7 @@ def read_folder(folder, lists=False):
                 return numpy.load(os.path.join(folder, value[ARRAY]), allow_pickle=False)
             if len(value) == 1 and RESULTS in value:
                 if lists:
-                    return [read_folder(path, lists=True) for path in value[RESULTS]]
+                    return [read_folder(path, True, read) for path in value[RESULTS]]
                 return StoredResults(value[RESULTS])
             return {key: restore(item) for key, item in value.items()}
         if type(value) is list:
@@ -81,7 +84,10 @@ def read_folder(folder, lists=False):
             return tuple(restore(item) for item in value)
         return value
 
-    return restore(data)
+    data = restore(data)
+    if read is not None:
+        read[folder] = data
+    return data
 
 
 def summary_of(result):

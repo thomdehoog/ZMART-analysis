@@ -15,6 +15,7 @@ Usage
 import hashlib
 import json
 import platform
+import socket
 import subprocess
 import sys
 import textwrap
@@ -453,10 +454,26 @@ def test_a_second_registration_of_a_name_leaves_a_live_one_alone(engine_factory)
 
 def test_a_leftover_of_a_dead_registration_is_cleared(engine_factory):
     output = fresh_output()
-    leftover = Path(output) / "analysis" / "p" / ".handover" / "20200101-000000-000000-999999"
-    (leftover / "1").mkdir(parents=True)
+    handover = Path(output) / "analysis" / "p" / ".handover"
+    dead = handover / f"20200101-000000-000000-999999@{socket.gethostname()}"
+    elsewhere = handover / "20200101-000000-000000-999999@ANOTHER-PC"
+    (dead / "1").mkdir(parents=True)
+    (elsewhere / "1").mkdir(parents=True)
     engine_factory().register("p", write_yaml("wf:\n  - v5_plain:"), output)
-    assert not leftover.exists()
+    assert not dead.exists()
+    assert elsewhere.exists()  # another computer's registration may still run
+
+
+def test_a_registration_that_fails_leaves_nothing_behind(engine_factory):
+    from zmart_analysis.pipeline import LIVE
+
+    output = fresh_output()
+    (Path(output) / "analysis" / "p" / "pipeline.yaml").mkdir(parents=True)  # cannot be written
+    live = set(LIVE)
+    with pytest.raises(OSError):
+        engine_factory().register("p", write_yaml("wf:\n  - v5_plain:"), output)
+    assert LIVE == live
+    assert not list((Path(output) / "analysis" / "p" / ".handover").iterdir())
 
 
 def test_an_output_the_engine_cannot_read_does_not_break_deregister(engine_factory):
@@ -530,3 +547,24 @@ def test_status_and_deregister_at_the_same_time(engine_factory):
     for board in seen:
         for job, entry in board.items():
             assert entry["output"]["make_array"]["image"].sum() == 66 * (job - 1)
+
+
+def test_status_of_every_pipeline_while_one_is_closing(engine_factory):
+    engine = engine_factory()
+    engine.register("a", write_yaml("wf:\n  - make_array:"), fresh_output())
+    engine.register("b", write_yaml("wf:\n  - v5_plain:"), fresh_output())
+    wait_for(engine, "a", engine.submit(pipeline="a", data={"k": 1}))
+    errors = []
+
+    def poll():
+        for _ in range(300):
+            try:
+                assert "b" in engine.status()
+            except Exception as error:  # noqa: BLE001 -- collected for the assert below
+                errors.append(error)
+
+    poller = threading.Thread(target=poll)
+    poller.start()
+    engine.deregister("a")
+    poller.join()
+    assert errors == []

@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import socket
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -171,17 +172,20 @@ class Engine:
                 levels=levels,
                 workflow_name=workflow_name,
                 output=output,
-                registration=f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}",
+                registration=f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}@{socket.gethostname()}",
             )
             # Imported here: the package sets its version after importing this module.
             from . import __version__
 
-            state.open(yaml_path.read_text(encoding="utf-8"), step_hashes, __version__)
-
-            with self._lock:
-                if not self._accepting:
-                    raise RuntimeError("Engine has been shut down")
-                self._pipelines[name] = state
+            try:
+                state.open(yaml_path.read_text(encoding="utf-8"), step_hashes, __version__)
+                with self._lock:
+                    if not self._accepting:
+                        raise RuntimeError("Engine has been shut down")
+                    self._pipelines[name] = state
+            except BaseException:
+                state.abandon()
+                raise
         finally:
             with self._lock:
                 self._registering.discard(name)
@@ -323,7 +327,13 @@ class Engine:
 
         with self._lock:
             states = dict(self._pipelines)
-        return {n: s.board() for n, s in states.items()}
+        boards = {}
+        for n, s in states.items():
+            try:
+                boards[n] = s.board()
+            except KeyError:
+                pass  # deregistered meanwhile
+        return boards
 
     def deregister(self, name, wait=True):
         """

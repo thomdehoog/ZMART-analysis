@@ -334,7 +334,7 @@ class Worker:
         timeout : float
             Seconds to wait for the step to complete.
         files : dict, optional
-            The folders the data goes through (see worker_script.py).
+            How the data goes through folders (see worker_script.py).
 
         Raises
         ------
@@ -657,7 +657,7 @@ class WorkerPool:
         owner : object, optional
             Who the step runs for; :meth:`kill_owner` stops its steps.
         files : dict, optional
-            The folders the data goes through (see worker_script.py).
+            How the data goes through folders (see worker_script.py).
         """
         sem = self._get_semaphore(step_path, max_workers)
         sem.acquire()
