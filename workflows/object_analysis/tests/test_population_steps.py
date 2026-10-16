@@ -167,7 +167,7 @@ def test_the_scoped_pipeline_registers_with_its_two_scopes():
 
     _, steps, metadata = parse_yaml(pipeline)
     phases = split_phases(steps)
-    assert metadata["levels"] == ["carrier", "compartment", "group"]
+    assert metadata["levels"] == ["experiment", "carrier", "compartment", "group"]
     assert [p.scope for p in phases] == [None, "compartment", "carrier"]
     assert [s.name for s in phases[1].steps] == ["summarise_population"]
     assert [s.name for s in phases[2].steps] == ["compare_populations"]
