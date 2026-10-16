@@ -138,3 +138,27 @@ def _wait_for_status(engine, name, expected_total, timeout=30):
             return board
         time.sleep(0.05)
     return engine.status(name)
+
+
+def load_step(workflow, name):
+    """One step file of a workflow, loaded by its path under a name of its own.
+
+    Both workflows have a step called ``read_images``, so a plain ``import``
+    would find whichever comes first on the search path. The module goes
+    into ``sys.modules`` under that name before it runs, as the engine's
+    worker does, because a dataclass looks its module up there while it
+    is built.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "workflows" / workflow / "steps" / f"{name}.py"
+    module_name = f"{workflow}_{name}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(module_name, None)
+        raise
+    return module

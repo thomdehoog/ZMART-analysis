@@ -3,22 +3,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import build_object_table
-import detect_objects
-import extract_classical_features
+import measure_objects
 import numpy as np
 import pytest
-from helpers import fresh_output
-from object_analysis.parts.contract import to_builtin, validate_tile_detection
-from object_analysis.parts.settings import (
-    area_filter_params,
-    segmentation_params_hash,
-)
+import segment_cellpose
+import segment_watershed
+from helpers import fresh_output, load_step
+from segment_cellpose import to_builtin
+
+read_images = load_step("object_analysis", "read_images")
+validate_tile_detection = build_object_table._validated
 
 WORKFLOW = Path(__file__).resolve().parents[1]
-STEPS_DIR = WORKFLOW / "steps"
-CLASSICAL_YAML = WORKFLOW / "pipelines" / "object_analysis.yaml"
-DETECTION_YAML = WORKFLOW / "pipelines" / "object_detection.yaml"
-FAST_YAML = WORKFLOW / "pipelines" / "object_analysis_fast.yaml"
+CELLPOSE_YAML = WORKFLOW / "pipelines" / "object_analysis_cellpose.yaml"
+WATERSHED_YAML = WORKFLOW / "pipelines" / "object_analysis_watershed.yaml"
 
 
 def _write_synthetic_tile(tmp_path):
@@ -67,8 +65,9 @@ def _run_classical(tmp_path, **payload_extra):
         "metadata": {"verbose": 0},
     }
     state = {"model": _StubCellposeModel()}
-    pipeline_data = detect_objects.run(pipeline_data, state)
-    pipeline_data = extract_classical_features.run(pipeline_data, {})
+    pipeline_data = read_images.run(pipeline_data, {})
+    pipeline_data = segment_cellpose.run(pipeline_data, state)
+    pipeline_data = measure_objects.run(pipeline_data, {})
     return build_object_table.run(pipeline_data, {})
 
 
@@ -91,83 +90,6 @@ def _run_engine_workflow(name: str, yaml_path: Path, payload: dict, timeout=180)
     raise AssertionError(f"Timed out waiting for {name}")
 
 
-SCOPED_YAML = WORKFLOW / "pipelines" / "object_analysis_scoped.yaml"
-
-
-def test_the_scoped_pipeline_end_to_end_with_the_fast_detector(tmp_path, monkeypatch):
-    """Two carriers, two compartments each, one failed tile. The fast
-    detector stands in for Cellpose so this runs in CI. Every step names
-    the classical environment; naming the engine's own after it makes the
-    steps run on this interpreter, which has their packages."""
-    import time
-
-    import yaml
-
-    from zmart_analysis import Engine
-
-    monkeypatch.setenv("CONDA_DEFAULT_ENV", "ZMART--object_analysis--classical")
-    fast = yaml.safe_load(FAST_YAML.read_text())["object_analysis"]
-    # The synthetic tile's two squares are small; the fast pipeline's
-    # defaults are for nuclei at a real magnification.
-    fast[0]["detect_objects_fast"].update(threshold=50, diameter=8)
-    scoped = yaml.safe_load(SCOPED_YAML.read_text())
-    pipeline = {
-        "metadata": dict(scoped["metadata"], functions_dir=STEPS_DIR.as_posix()),
-        "object_analysis": fast + scoped["object_analysis"][3:],
-    }
-    pipeline_path = tmp_path / "scoped_fast.yaml"
-    pipeline_path.write_text(yaml.safe_dump(pipeline, sort_keys=False))
-    image_path = _write_synthetic_tile(tmp_path)
-
-    with Engine(max_concurrent=4) as engine:
-        engine.register("scoped", str(pipeline_path), fresh_output())
-        for carrier in (1, 2):
-            for compartment in (1, 2):
-                scope = {"carrier": carrier, "compartment": compartment}
-                engine.submit("scoped", _payload(image_path, gpu=False), scope=scope)
-                if (carrier, compartment) == (2, 1):
-                    engine.submit(
-                        "scoped", _payload(tmp_path / "missing.tif", gpu=False), scope=scope
-                    )
-                closes = ["compartment", "carrier"] if compartment == 2 else "compartment"
-                engine.submit(
-                    "scoped", _payload(image_path, gpu=False), scope=scope, complete=closes
-                )
-        deadline = time.monotonic() + 240
-        while time.monotonic() < deadline:
-            board = engine.status("scoped")
-            results = [e["output"] for e in board.values() if e["state"] == "done"]
-            if sum(r["metadata"].get("phase", 0) == 2 for r in results) == 2:
-                break
-            time.sleep(0.1)
-        else:
-            raise AssertionError(f"timed out; board {engine.status('scoped')}")
-
-    compartments = {
-        tuple(r["population"]["scope"].values()): r
-        for r in results
-        if r["metadata"].get("phase", 0) == 1
-    }
-    carriers = {
-        r["comparison"]["scope"]["carrier"]: r
-        for r in results
-        if r["metadata"].get("phase", 0) == 2
-    }
-    assert set(compartments) == {(1, 1), (1, 2), (2, 1), (2, 2)}
-    assert compartments[(2, 1)]["population"]["n_tiles"] == 2
-    assert compartments[(2, 1)]["population"]["n_failed_tiles"] == 1
-    assert compartments[(1, 1)]["population"]["n_objects"] == 2 * 2  # two objects per tile
-    for carrier in (1, 2):
-        comparison = carriers[carrier]["comparison"]
-        assert comparison["n_units"] == 2 and comparison["n_failed_units"] == 0
-        assert set(comparison["profiles"]) == {"1", "2"}
-        lineage = carriers[carrier]["lineage"]
-        assert set(lineage["provenance"]) >= {"detect_objects_fast", "summarise_population"}
-    assert len(carriers[2]["lineage"]["submissions"]) == 4
-    assert [f["step"] for f in carriers[2]["lineage"]["failed"]] == ["detect_objects_fast"]
-    assert carriers[1]["lineage"]["failed"] == []
-
-
 def test_classical_object_analysis_end_to_end_with_stub(tmp_path):
     result = _run_classical(tmp_path)
     tile = validate_tile_detection(result["object_analysis"])
@@ -188,12 +110,14 @@ def test_classical_object_analysis_end_to_end_with_stub(tmp_path):
     assert props["stage_y_um"] == pytest.approx([1962.5, 2013.5])
     assert "centroid-0" not in props
     assert "bbox-0" not in props
-    assert "extract_classical_features" not in result
-    assert "masks" not in result["detect_objects"]
-    assert "image" not in result["detect_objects"]
+    assert "measure_objects" not in result
+    assert "read_images" not in result
+    assert "masks" not in result["segment_cellpose"]
+    assert result["segment_cellpose"]["detector_params"]["device"] == "cpu"
 
 
 def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
+    segmentation_params_hash = segment_cellpose._segmentation_hash
     base = {
         "channels": None,
         "cellprob_threshold": 0.0,
@@ -214,9 +138,27 @@ def test_detection_checkpoint_hash_ignores_runtime_and_area_filter():
     )
 
 
+def test_the_segmentation_hash_of_known_settings_is_fixed():
+    """Checkpoints written before and after a code change must agree on what made their masks."""
+    settings = {
+        "z_selection": "max",
+        "channels": [0],
+        "method": "fast",
+        "threshold": 100.0,
+        "cellprob_threshold": None,
+        "flow_threshold": None,
+        "niter": None,
+        "diameter": 14,
+        "segmentation_binning": None,
+    }
+    assert segment_cellpose._segmentation_hash(settings) == (
+        "966544120468c6857a2ff30d6d2f58e9bd7da035ddc09b38b4eee2e8536be7f7"
+    )
+
+
 def test_area_filter_rejects_ambiguous_pixel_and_diameter_thresholds():
     with pytest.raises(ValueError, match="not both"):
-        area_filter_params(
+        segment_cellpose._area_filter_params(
             {"source_pixel_size_um": [0.5, 0.5]},
             {"min_area_px": 10, "min_equivalent_diameter_um": 5.0},
         )
@@ -228,38 +170,39 @@ def test_the_pipelines_register(tmp_path):
 
     engine = Engine()
     try:
-        engine.register("classical", str(CLASSICAL_YAML), fresh_output())
-        engine.register("detection", str(DETECTION_YAML), fresh_output())
-        engine.register("fast", str(FAST_YAML), fresh_output())
+        engine.register("cellpose", str(CELLPOSE_YAML), fresh_output())
+        engine.register("watershed", str(WATERSHED_YAML), fresh_output())
         placed = {
-            "classical": engine._pipelines["classical"].step_settings["detect_objects"][
+            "cellpose": engine._pipelines["cellpose"].step_settings["segment_cellpose"][
                 "environment"
             ],
-            "fast": engine._pipelines["fast"].step_settings["detect_objects_fast"]["environment"],
+            "watershed": engine._pipelines["watershed"].step_settings["segment_watershed"][
+                "environment"
+            ],
         }
     finally:
         engine.shutdown()
     # Each detector's step file names its own environment: the watershed
     # needs no torch, so it never starts the Cellpose worker.
-    assert placed["classical"] == "ZMART--object_analysis--cellpose"
-    assert placed["fast"] == "ZMART--object_analysis--classical"
+    assert placed["cellpose"] == "ZMART--object_analysis--cellpose"
+    assert placed["watershed"] == "ZMART--object_analysis--classical"
 
 
-def test_the_fast_pipeline_answers_under_the_same_name():
+def test_both_pipelines_read_first_and_answer_under_the_same_name():
     """Whoever reads the table reads ``pipeline_data["object_analysis"]``."""
     import yaml
 
-    fast = yaml.safe_load(FAST_YAML.read_text())
-    steps = [next(iter(step)) for step in fast["object_analysis"]]
-    assert steps == ["detect_objects_fast", "extract_classical_features", "build_object_table"]
-    assert "environment" not in (fast["object_analysis"][0]["detect_objects_fast"] or {})
+    for path, segmenter in (
+        (CELLPOSE_YAML, "segment_cellpose"),
+        (WATERSHED_YAML, "segment_watershed"),
+    ):
+        steps = [next(iter(step)) for step in yaml.safe_load(path.read_text())["object_analysis"]]
+        assert steps == ["read_images", segmenter, "measure_objects", "build_object_table"]
 
 
-def test_the_fast_detector_runs_the_watershed_and_answers_as_detect_objects(tmp_path):
-    """The fast step fixes the method and leaves its detection where the
-    feature step looks for it, so the rest of the pipeline is unchanged."""
+def test_the_watershed_step_finds_the_four_blobs(tmp_path):
+    """The watershed's detection carries method "fast" and the same record as Cellpose's."""
     import tifffile
-    from detect_objects_fast import run as fast_run
 
     yy, xx = np.mgrid[0:96, 0:96]
     plane = np.zeros((96, 96))
@@ -271,12 +214,13 @@ def test_the_fast_detector_runs_the_watershed_and_answers_as_detect_objects(tmp_
         "input": _payload(path, source_image_size_px=[96, 96]),
         "metadata": {"verbose": 0},
     }
-    out = fast_run(data, {}, threshold=100, diameter=12, output_dir=str(tmp_path))
-    detection = out["detect_objects"]
+    data = read_images.run(data, {})
+    out = segment_watershed.run(data, {}, threshold=100, diameter=12, output_dir=str(tmp_path))
+    detection = out["segment_watershed"]
     assert detection["detector_params"]["method"] == "fast"
+    assert detection["segmentation_params"]["method"] == "fast"
     assert detection["n_objects"] == 4
-    with pytest.raises(ValueError, match="only runs the fast detector"):
-        fast_run(data, {}, method="robust")
+    assert (tmp_path / "tiles" / "field" / "detection_checkpoint.json").exists()
 
 
 def test_the_fast_pipeline_leaves_out_the_per_object_texture_crops():
@@ -285,12 +229,12 @@ def test_the_fast_pipeline_leaves_out_the_per_object_texture_crops():
     everything else was 1.5 s. Fast means without them."""
     import yaml
 
-    fast = yaml.safe_load(FAST_YAML.read_text())
-    extras, _unknown = extract_classical_features._expand_extras(
-        fast["object_analysis"][1]["extract_classical_features"]["extras"]
+    fast = yaml.safe_load(WATERSHED_YAML.read_text())
+    extras, _unknown = measure_objects._expand_extras(
+        fast["object_analysis"][2]["measure_objects"]["extras"]
     )
     assert not extras & {"glrlm", "lbp", "fft"}
-    assert extras == set(extract_classical_features.EXTRAS) - {"glrlm", "lbp", "fft"}
+    assert extras == set(measure_objects.EXTRAS) - {"glrlm", "lbp", "fft"}
 
 
 def _used_gpu(root: Path) -> bool:
@@ -309,7 +253,7 @@ def test_real_cellpose_object_analysis_end_to_end(tmp_path, cellpose_device):
 
     result = _run_engine_workflow(
         "object_analysis_real_cellpose",
-        CLASSICAL_YAML,
+        CELLPOSE_YAML,
         _payload(
             image_path,
             tile_id=["IHC", 0, 0],
@@ -339,7 +283,7 @@ def test_real_cpsam_multichannel_immunohistochemistry_end_to_end(tmp_path, cellp
 
     result = _run_engine_workflow(
         "object_analysis_real_cpsam_multichannel",
-        CLASSICAL_YAML,
+        CELLPOSE_YAML,
         _payload(
             image_path,
             tile_id=["IHC", 0, 0],
@@ -415,8 +359,8 @@ def test_a_single_object_field_survives_to_builtin_and_the_table():
             "source_image_size_px": [64, 64],
             "image_to_stage": [[1, 0], [0, 1]],
         },
-        "detect_objects": {"image_size_px": [64, 64]},
-        "extract_classical_features": {"properties": props},
+        "read_images": {"image_size_px": [64, 64]},
+        "measure_objects": {"properties": props},
     }
     out = build_object_table.run(data, {})
     assert out["object_analysis"]["objects"]["n_objects"] == 1

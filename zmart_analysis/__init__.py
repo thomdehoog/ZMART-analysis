@@ -10,7 +10,7 @@ API
     from zmart_analysis import Engine
 
     engine = Engine()
-    engine.register("analysis", "workflows/object_analysis/pipelines/object_analysis_scoped.yaml",
+    engine.register("analysis", "path/to/a_scoped_pipeline.yaml",
                     "path/to/run")      # writes into path/to/run/analysis/analysis/
     job = engine.submit(pipeline="analysis", data=image,
                         scope={"carrier": 1, "compartment": 3})
@@ -47,7 +47,7 @@ from .workers import (
     WorkerTimeoutError,
 )
 
-__version__ = "5.0.0rc1"
+__version__ = "5.0.0rc2"
 __all__ = [
     "Engine",
     "WorkerError",

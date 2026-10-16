@@ -6,15 +6,14 @@ a larger field, submitted as soon as it is acquired.
 
 ## The pipelines
 
-| Pipeline | What it runs |
+| Pipeline | Steps |
 |---|---|
-| `object_analysis.yaml` | `detect_objects` → `extract_classical_features` → `build_object_table`. Detection uses Cellpose. |
-| `object_analysis_fast.yaml` | The same, with `detect_objects_fast`: a watershed that needs no GPU. It leaves out the texture features that need a crop of every object (`glrlm`, `lbp`, `fft`). |
-| `object_detection.yaml` | `detect_objects` only. It writes the masks and a checkpoint, and measures no features. |
-| `object_analysis_scoped.yaml` | The three steps per tile. Then `summarise_population` describes each compartment, and `compare_populations` compares the compartments of each carrier. |
-| `population_plots.yaml` | `plot_population`: a PCA or UMAP of a detected population, made on request. |
+| `object_analysis_cellpose.yaml` | `read_images` → `segment_cellpose` → `measure_objects` → `build_object_table`. The operator page calls it "robust". |
+| `object_analysis_watershed.yaml` | The same, with `segment_watershed`: a watershed that needs no GPU. It leaves out the texture features that need a crop of every object (`glrlm`, `lbp`, `fft`). The operator page calls it "fast". |
+| `reduce_dimensions.yaml` | `reduce_dimensions`: a PCA or UMAP of a detected population, made on request. |
 
-Every pipeline puts its result under `pipeline_data["object_analysis"]`.
+`read_images` opens the image; no step after it opens a file. Both tile
+pipelines put the table under `pipeline_data["object_analysis"]`.
 
 Every parameter is in the pipeline, with its default. The docstring of each
 step, in `steps/`, says exactly what the step takes and returns.
@@ -42,9 +41,8 @@ when it has them:
 
 | Key | What it is |
 |---|---|
-| `method` | `"robust"` (Cellpose, the default) or `"fast"` (the watershed). The detector in the pipeline decides which of the two can run. |
 | `z_selection` | Which plane of a z-stack to detect on: an index, `"mid"` (the default), or `"max"` / `"mean"` for a projection. |
-| `extra_channel_paths` | The other channels, for a frame that is stored as one file per plane. They are added to the detection image, so the features are measured in every colour. |
+| `extra_channel_paths` | The other channels, for a frame that is stored as one file per plane. The features are measured in every colour. |
 | `extra_channel_indices` | The same for a frame that is stored as one position: the indices of the channels to read from it. |
 | `synthetic_pixels` | For images from a mock microscope: how the pixels were made. It is copied into the checkpoint for the record. |
 | `output_dir` | Where to write the masks and the checkpoint. The default is the `analysis` folder next to the `data` folder the image came from. |
@@ -54,29 +52,18 @@ You can also give any detection setting of the pipeline here, such as
 the pipeline's value for this one image. This is how the operator page tunes
 detection on one position.
 
-### Try it on one image
-
-To try the Cellpose pipeline from a shell, without writing the input
-yourself:
-
-```bash
-python run_pipeline.py image.tif --pixel-size-um 0.65,0.65
-```
-
-This runs `object_analysis.yaml` through the engine and prints the number
-of objects. `python run_pipeline.py --help` lists the flags. There is one
-for each input key.
-
 ## Output
 
 The result is the object table, under `pipeline_data["object_analysis"]`.
 Each row holds the features of one object, its `object_id`, its `tile_name`,
 and its position on the stage as `stage_x_um` and `stage_y_um`. The position
-is worked out from the geometry of the tile.
+is worked out from the geometry of the tile. Beside the table stands the
+segmentation's record, under `segment_cellpose` or `segment_watershed`; its
+`detector_params` say which device it ran on.
 
-`detect_objects` also writes three files to `<analysis>/tiles/<short_name>/`:
-`masks.tif`, `raw_masks.tif` and `detection_checkpoint.json`. Where
-`<analysis>` is depends on the input:
+The segmentation step also writes three files to
+`<analysis>/tiles/<short_name>/`: `masks.tif`, `raw_masks.tif` and
+`detection_checkpoint.json`. Where `<analysis>` is depends on the input:
 
 - With `output_dir` given, the files go there.
 - Otherwise they go to the `analysis` folder next to the `data` folder the
@@ -88,97 +75,58 @@ The checkpoint records the parameters that were actually used, a hash of
 the parameters that shaped the masks, and hashes of the image and the
 masks. With it, a run can be reproduced from what really ran.
 
-## The scoped pipeline
-
-`object_analysis_scoped.yaml` is for runs that tell the engine when a
-compartment and a carrier are complete. It adds two steps.
-
-**`summarise_population`** runs once per compartment, when all its tiles
-have been measured. It describes the objects of the compartment as a
-population:
-
-- the median and quartiles of every feature,
-- the compartment's *profile*, which is the median of each feature,
-- principal components, with the variance each one explains.
-
-**`compare_populations`** runs once per carrier. It puts the profiles of
-the compartments side by side and gives every compartment a robust z-score
-per feature. A compartment that lies more than `outlier_z` spreads from the
-median compartment is flagged. The result also counts the compartments that
-failed (`n_failed_units`) and the tiles whose compartment was not complete
-when the carrier was (`n_not_closed`).
-
-These are the standard aggregation and normalisation of image-based
-profiling, the same as `aggregate` and `mad_robustize` in pycytominer. Here
-they are computed with pandas, numpy and scikit-learn.
-
-Both steps take their level from the pipeline. To summarise per group
-instead, give them `scope: group` and `scope: compartment`. The `levels`
-entry of the pipeline keeps each group inside its own compartment.
-
-Every summary and comparison carries its `lineage`: the tiles it was built
-from and where every earlier step ran.
-
 ## The population plot
 
-`population_plots.yaml` is the one pipeline here that does not run per tile.
-When a whole overview has been detected and its object table is written,
-the operator can ask for a plot of that population. The plot shows the
-first two principal components, or a UMAP made from the first fifty.
+`reduce_dimensions.yaml` is the one pipeline here that does not run per
+tile. When a whole overview has been detected and its object table is
+written, the operator can ask for a plot of that population: the first two
+principal components, or a UMAP made from the first fifty.
 
 Objects that are alike end up close together in the plot, whichever mix of
 features makes them alike. So you can select objects by the structure of
-the population, not only by single features.
-
-The plot prepares the data and computes the PCA in the same way as the
-compartment summary (`workflows/shared/population.py`). A principal
-component therefore means the same thing in both.
-
-A UMAP of half a million objects takes minutes. That is why the plot is
-made on request and never during detection.
+the population, not only by single features. A UMAP of half a million
+objects takes minutes, which is why it is made on request and never during
+detection.
 
 ## Environments
 
-There is one environment per model, and one for everything classical:
-
 | Environment | Holds | Used by |
 |---|---|---|
-| `ZMART--object_analysis--classical` | scipy, scikit-image and the image readers | The fast detector, the features and the two population steps |
-| `ZMART--object_analysis--cellpose` | PyTorch, Cellpose and the image readers | `detect_objects` |
-| `ZMART--object_analysis--umap` | pandas, scikit-learn and umap-learn | `plot_population` |
+| `ZMART--object_analysis--classical` | scipy, scikit-image and the image readers | `read_images`, `segment_watershed`, `measure_objects`, `build_object_table` |
+| `ZMART--object_analysis--cellpose` | PyTorch and Cellpose | `segment_cellpose` |
+| `ZMART--object_analysis--umap` | pandas, scikit-learn and umap-learn | `reduce_dimensions` |
 
-Create each one with `python environments/setup_env.py --step <name>`.
+Create each one with `python environments/setup_env.py --step <name>`, and
+check one that exists with `--check`. The check runs the environment's own
+steps on a small test image; for Cellpose it says which device it used.
 
 Each step file names its own environment, so a pipeline only starts the
-workers it needs. The fast pipeline never loads PyTorch.
+workers it needs. The watershed pipeline never loads PyTorch.
 
 ### Why they are split this way
 
-A model environment holds one model and the image readers (tifffile, ngio,
-ome-types), and never the features. Each model insists on its own versions:
-Cellpose needs one PyTorch, StarDist needs TensorFlow, and the next model
-will need yet another CUDA. These requirements conflict, and each brings its
-own numpy. Kept apart, an upgrade of one model can only break its own
-worker. A model that will not install on one microscope computer removes
-one option, not all detection.
+A model environment holds one model and nothing else: `read_images` and the
+features run in the classical one. Each model insists on its own versions: Cellpose needs one
+PyTorch, StarDist needs TensorFlow, and the next model will need yet another
+CUDA. Kept apart, an upgrade of one model can only break its own worker.
 
-The fast detector and the features share an environment on purpose. Both
-are built on scipy and scikit-image. Splitting them would start a second
-worker and copy every image between the two, and it would separate nothing
-that conflicts.
+The watershed and the features share an environment on purpose. Both are
+built on scipy and scikit-image, and splitting them would only copy every
+image between two workers.
 
 The `umap` environment has no image readers and no PyTorch, because
-`plot_population` reads the object table and not the images. It is kept
-apart from the classical environment because umap-learn brings the numba
-compiler with it, which the classical steps do not need.
+`reduce_dimensions` reads the object table and not the images. It is kept
+apart because umap-learn brings the numba compiler, which the other steps
+do not need.
 
 ### Add a model
 
-1. Write a module next to `parts/cellpose_model.py`. Import the model
-   inside the function that uses it, so the module loads without it.
-2. Add a branch for it in `segment_position` in `detect_objects.py`.
-3. Add its package list to `environments/setup_env.py`.
-4. Write a pipeline that uses a step in the new environment.
+1. Write a step `segment_<model>.py` like `segment_watershed.py`: its `run`
+   hands its own `find_objects` to `segment` in `segment_cellpose.py`, which
+   does the binning, the filters and the record. Import the model inside the
+   function that uses it.
+2. Give it its own environment in `environments/setup_env.py`.
+3. Write a pipeline that runs it after `read_images`.
 
 ## Tuning notes
 

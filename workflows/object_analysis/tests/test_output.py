@@ -1,15 +1,23 @@
-"""analysis_dir: the folder beside the data the images came from."""
+"""Where segment_cellpose files its masks and record, and the digest read_images takes."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from object_analysis.parts.checkpoint import (
-    analysis_dir,
-    file_sha256,
-    short_name,
-    write_detection_checkpoint,
-)
+import segment_cellpose
+from helpers import load_step
+
+read_images = load_step("object_analysis", "read_images")
+analysis_dir = segment_cellpose._analysis_dir
+short_name = segment_cellpose._short_name
+file_sha256 = read_images._sha256
+
+
+def write_detection_checkpoint(detection, raw_masks, given, params):
+    """The record as segment_cellpose writes it, with the digest read_images took."""
+    images = {"sha256": file_sha256(given["image_path"]), "z_selection": "mid"}
+    return segment_cellpose._write_checkpoint(detection, raw_masks, given, images, params)
+
 
 PLANE = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000_C00_Z00000.ome.tiff"
 FRAME = "overview_a1b2c3_K00_M000001_G000001_P000000_V00_T000000"
@@ -148,7 +156,7 @@ def test_a_position_store_files_its_checkpoint_where_the_caller_says(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# What detect_objects does with it when the caller names no output_dir
+# What segment_cellpose does with it when the caller names no output_dir
 # --------------------------------------------------------------------------
 
 

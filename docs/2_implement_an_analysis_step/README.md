@@ -32,9 +32,12 @@ def _twice(n):
 ```
 
 Every step file has the same order: a docstring that says what the step
-does, the imports, `METADATA`, `run`, and then the step's own helpers. A
-helper's name starts with `_`: only this step uses it. Code that several
-steps use goes into `workflows/shared/` or the workflow's `parts/`.
+does, what it takes and what it hands on; the imports; `METADATA`; `run`;
+and then the step's own helpers. `run` only combines the helpers, one call
+to a line with a blank line between, so it reads as the recipe of the step.
+A helper's name starts with `_`: only this step uses it. Each helper opens
+with a short docstring, and a comment sits on the line above the code it
+explains. Where a package already does the work, call the package.
 
 The imports can stay at the top. The engine reads `METADATA` as text and never
 imports the file; only the worker in the step's environment does.
@@ -102,7 +105,7 @@ run the step:
 METADATA = {
     "description": "Score plane sharpness in a z-stack and find the peak",
     "version": "1.0",
-    "environment": "ZMART--focus--main",
+    "environment": "ZMART--alignment--main",
     "max_workers": 1,
 }
 ```
@@ -171,7 +174,7 @@ environment and picks one from `--step`.
 ### Make it
 
 ```bash
-python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main
+python workflows/alignment/environments/setup_env.py               # makes ZMART--alignment--main
 python workflows/object_analysis/environments/setup_env.py --step classical
 ```
 
@@ -239,8 +242,8 @@ results into it; that only uses memory. The engine adds `metadata` and
 `lineage` to your result afterwards. A later step with the same scope
 receives what you returned.
 
-`workflows/object_analysis/steps/summarise_population.py` is a worked
-example.
+The scoped steps in `tests/test_scopes.py`, and `summarise_group` in this
+part's tutorial, are worked examples.
 
 ## Parameters
 
@@ -258,7 +261,7 @@ def _setting(inp, params, key):
     return inp.get(key, params.get(key, None))
 ```
 
-`detect_objects` does this, so an operator can tune detection for one
+`segment_cellpose` does this, so an operator can tune detection for one
 position. The pipeline holds the default, and a job that carries `diameter`
 uses its own value for that image only. Say in the docstring which
 parameters can be overridden this way.
@@ -270,29 +273,29 @@ workflows/object_analysis/
 ├── README.md              what the workflow does and how to choose its settings
 ├── pipelines/             the pipelines (YAML)
 ├── steps/                 one Python file per step
-├── parts/                 optional: code the steps share, so a step stays short
 ├── environments/
 │   ├── setup_env.py       makes the environments
 │   └── clean_env.py       removes them again
 └── tests/
 ```
 
-Code that several workflows use lives in `workflows/shared/`.
-
-The engine loads a step file on its own, not as part of a package. To
-import from `shared/` or `parts/`, a step first adds the `workflows/` folder
-to Python's search path:
+A workflow needs nothing outside its folder: two workflows share no code.
+A step may use another step of its own workflow. The engine loads a step
+file on its own, not as part of a package, so the step first adds its own
+folder to Python's search path:
 
 ```python
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from shared.image_io import load_plane
-from object_analysis.parts.masks import filter_masks_by_area
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from segment_cellpose import segment
 ```
 
-To add a workflow, copy `focus`. It is the smallest one. Then:
+The first step of every pipeline that works on images is `read_images`. It
+opens the files and hands on the pixels, so no step after it opens a file.
+
+To add a workflow, copy `alignment`. It is the smaller one. Then:
 
 1. Write the steps.
 2. Name each environment and list its packages in `setup_env.py`.
@@ -331,12 +334,13 @@ so you can leave them out:
 
 ```bash
 pytest -m "not cellpose and not conda_env and not pooch"   # what CI runs
-pytest workflows/focus                                      # one workflow
+pytest workflows/alignment                                  # one workflow
 ```
 
-`workflows/focus/tests/test_focus.py` shows the pattern. It scores a
-made-up z-stack directly and then, if `ZMART--focus--main` exists, once
-more through the engine.
+`workflows/alignment/tests/test_score_focus.py` shows the pattern. It scores
+a made-up z-stack directly and then, if `ZMART--alignment--main` exists, once
+more through the engine. The `*real_samples.py` tests in each workflow run the
+pipelines on real microscopy from scikit-image's sample data.
 
 When you try an edited step through the engine, make a new `Engine` first.
 A running worker keeps the code it loaded.

@@ -229,7 +229,7 @@ def setup_workflow_env(
             print(f"         Create it: python setup_env.py --step {args.step}")
             sys.exit(1)
         section(f"Checking {env_name}")
-        _run_diagnostics(conda, env_name, diagnostics)
+        _run_diagnostics(conda, env_name, _python_in(env_name) or "python", diagnostics)
         banner("Check Passed")
         return
     if exists:
@@ -272,6 +272,15 @@ def setup_workflow_env(
             sys.exit(1)
         ok(f"Created {env_name}")
 
+    # The environment's own interpreter, by its path, for every command below
+    python = "python" if args.dry_run else _python_in(env_name)
+
+    # conda can report success for an environment left without its interpreter
+    if not args.dry_run and (python is None or not Path(python).is_file()):
+        fail(f"{env_name} was created, but conda shows no Python interpreter in it")
+        print(f"         Remove it (python clean_env.py --step {args.step}) and run this again.")
+        sys.exit(1)
+
     next_step = 2
     if install_torch:
         section(f"[{next_step}/{total_steps}] Installing PyTorch ({gpu_label(gpu)})")
@@ -281,6 +290,8 @@ def setup_workflow_env(
             "--no-capture-output",
             "-n",
             env_name,
+            python,
+            "-m",
             "pip",
             "install",
         ] + get_torch_install_args(gpu)
@@ -293,7 +304,7 @@ def setup_workflow_env(
                 fail("PyTorch installation failed")
                 sys.exit(1)
             ok("PyTorch installed")
-            _run_torch_backend_check(conda, env_name, gpu)
+            _run_torch_backend_check(conda, env_name, python, gpu)
         next_step += 1
 
     section(f"[{next_step}/{total_steps}] Installing analysis packages")
@@ -303,6 +314,8 @@ def setup_workflow_env(
         "--no-capture-output",
         "-n",
         env_name,
+        python,
+        "-m",
         "pip",
         "install",
     ] + pip_packages
@@ -323,7 +336,7 @@ def setup_workflow_env(
     if args.dry_run:
         skip("dry run")
     else:
-        _run_diagnostics(conda, env_name, diagnostics)
+        _run_diagnostics(conda, env_name, python, diagnostics)
 
     elapsed = time.time() - t_start
 
@@ -438,6 +451,22 @@ def clean_workflow_envs(*, workflow: str) -> None:
     print("=" * WIDTH)
 
 
+def _python_in(env_name: str) -> str | None:
+    """The interpreter of a named environment, by its path; None when conda does not list it.
+
+    On Windows, ``conda run -n <env> pip`` (or ``python``) starts whichever
+    interpreter stands first on PATH, and with base active that is base's:
+    the install then failed on a package that needs the environment's newer
+    Python. A path cannot be mistaken. The engine's workers do the same.
+    """
+    for env in get_conda_info().get("envs", []):
+        prefix = Path(env)
+        if prefix.name == env_name:
+            windows = prefix / "python.exe"
+            return str(windows if windows.exists() else prefix / "bin" / "python")
+    return None
+
+
 def _warn_old_conda(conda_version: str) -> None:
     if conda_version == "unknown":
         return
@@ -449,7 +478,9 @@ def _warn_old_conda(conda_version: str) -> None:
         return
 
 
-def _run_diagnostics(conda: str, env_name: str, diagnostics: list[tuple[str, str]]) -> None:
+def _run_diagnostics(
+    conda: str, env_name: str, python: str, diagnostics: list[tuple[str, str]]
+) -> None:
     all_passed = True
     for label, code in diagnostics:
         result = subprocess.run(
@@ -459,7 +490,7 @@ def _run_diagnostics(conda: str, env_name: str, diagnostics: list[tuple[str, str
                 "--no-capture-output",
                 "-n",
                 env_name,
-                "python",
+                python,
                 "-c",
                 code,
             ],
@@ -485,7 +516,7 @@ def _run_diagnostics(conda: str, env_name: str, diagnostics: list[tuple[str, str
         sys.exit(1)
 
 
-def _run_torch_backend_check(conda: str, env_name: str, gpu: str) -> None:
+def _run_torch_backend_check(conda: str, env_name: str, python: str, gpu: str) -> None:
     if gpu == "cpu":
         code = (
             "import torch; "
@@ -516,7 +547,7 @@ def _run_torch_backend_check(conda: str, env_name: str, gpu: str) -> None:
             "--no-capture-output",
             "-n",
             env_name,
-            "python",
+            python,
             "-c",
             code,
         ],

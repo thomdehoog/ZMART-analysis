@@ -91,6 +91,7 @@ metadata:
   verbose: 1
 
 focus:
+  - read_images:
   - score_focus:
       metric: brenner
       skip_ends: 2
@@ -241,7 +242,7 @@ Two more words:
   You choose the names.
 - A **unit** is one such group, such as compartment 3 of carrier 1.
 
-The shipped pipelines use four levels, widest first. The *experiment* holds
+The examples here use four levels, widest first. The *experiment* holds
 everything. A *carrier* is a plate or a slide. A *compartment* is a well, a
 region of a slide, or part of a cleared sample. A *group* is a set of
 images within a compartment. Each image is one *position*.
@@ -253,13 +254,12 @@ metadata:
   functions_dir: "../steps"
   levels: [experiment, carrier, compartment, group]   # widest first
 
-object_analysis:
-  - detect_objects:               # every image, as soon as it arrives
-  - extract_classical_features:
-  - build_object_table:
-  - summarise_population:         # once per compartment
+analysis:
+  - segment:                      # every image, as soon as it arrives
+  - measure:
+  - summarise:                    # once per compartment
       scope: compartment
-  - compare_populations:          # once per carrier
+  - compare:                      # once per carrier
       scope: carrier
 ```
 
@@ -268,8 +268,8 @@ runs once per unit of that level. The steps after it, up to the next
 `scope`, run with it on the same unit.
 
 A scoped step works on the outputs of the level below. Here
-`summarise_population` receives one output per image, and
-`compare_populations` receives one output per compartment.
+`summarise` receives one output per image, and `compare` receives one
+output per compartment.
 
 ### In your script
 
@@ -329,7 +329,7 @@ own id, the step it runs, and the unit as its `scope`. It is `waiting` until
 the images of the unit have finished, then `running`, then `done`.
 
 ```
-{7: {'step': 'summarise_population', 'scope': {'carrier': 1, 'compartment': 3},
+{7: {'step': 'summarise', 'scope': {'carrier': 1, 'compartment': 3},
      'state': 'waiting', 'output': None}}
 ```
 

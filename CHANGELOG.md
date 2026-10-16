@@ -1,5 +1,48 @@
 # Changelog
 
+## 5.0.0rc2 (2026-10-16) -- two workflows
+
+The workflows are two self-contained folders, `alignment` and
+`object_analysis`; `shared/` and `object_analysis/parts/` are gone. What the
+steps compute is unchanged: the same masks, tables, focus heights,
+orientations and registrations on the same input.
+
+- **`read_images` is the first step of every image pipeline.** It opens the
+  files and hands on the pixels; no step after it opens a file. Each workflow
+  has its own.
+- **`alignment`** holds `focus.yaml`, `orientation.yaml` and
+  `registration.yaml` (was `objective_pair.yaml`; `measure_objective_pair` is
+  now `measure_registration`), in one environment, `ZMART--alignment--main`.
+  It replaces `ZMART--focus--main` and `ZMART--driver_configuration--main`:
+  remove those with `conda env remove -n <name>` on a microscope PC.
+- **`object_analysis`**: `object_analysis.yaml` is
+  `object_analysis_cellpose.yaml`, `object_analysis_fast.yaml` is
+  `object_analysis_watershed.yaml`, and `population_plots.yaml` is
+  `reduce_dimensions.yaml`. `detect_objects` is `segment_cellpose`,
+  `detect_objects_fast` is `segment_watershed`, `extract_classical_features`
+  is `measure_objects`, and `plot_population` is `reduce_dimensions`; each
+  publishes under its new name. The run records move with the pipeline
+  names, to `analysis/<new name>/`.
+- **Removed, because nothing called them:** `summarise_population`,
+  `compare_populations`, `object_analysis_scoped.yaml`,
+  `object_detection.yaml` (with `persist_only`), `run_pipeline.py`, the
+  review pictures of the orientation and objective-pair steps, and the
+  reader's PNG/JPEG, scikit-image-sample and `to_physical` paths. The
+  classical environment no longer installs pandas and scikit-learn, and the
+  Cellpose environment no longer installs the image readers (`read_images`
+  runs in the classical one).
+- **Cellpose is pinned below 4.2.** Cellpose 4.2 made a new network
+  (`cpsam_v2`) the default, which changes the masks and downloads 1.2 GB on
+  first use. Moving to it is a decision of its own.
+- **Environment set-up** names the environment's own interpreter by its
+  path. `conda run -n <env> pip` started base's pip when base stood first on
+  PATH, and the install failed. Each environment's check now runs its own
+  steps on a small image; the Cellpose check says which device it used.
+- Tests: each workflow runs its pipelines on real microscopy from
+  scikit-image's sample data (`*real_samples.py`), and
+  `tests/test_workflow_layout.py` checks that a workflow imports nothing from
+  another and that only `read_images` opens an image.
+
 ## 5.0.0rc1 (2026-10-16) -- engine v5
 
 To update a call: `engine.register(name, yaml)` becomes

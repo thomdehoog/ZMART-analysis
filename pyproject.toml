@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zmart-analysis"
-version = "5.0.0rc1"
+version = "5.0.0rc2"
 description = "Reproducible, environment-isolated image analysis pipelines for live adaptive microscopy"
 readme = "README.md"
 license = {text = "MIT"}
@@ -30,7 +30,7 @@ dependencies = [
 # workflows/<name>/environments/setup_env.py and carries the heavy tools
 # (cellpose, torch, umap) that stay out of here.
 test = [
-    # 9.0 brings the subtests fixture the shared-reader tests use.
+    # 9.0 brings the subtests fixture the image reader's tests use.
     "pytest>=9.0",
     "pytest-timeout>=2.3",
     "numpy>=1.24",

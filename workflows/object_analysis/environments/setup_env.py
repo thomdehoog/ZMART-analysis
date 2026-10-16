@@ -1,4 +1,14 @@
-"""Create conda environments for the object_analysis workflow."""
+"""Create the conda environments of the object_analysis workflow.
+
+Three, so each step starts only what it needs:
+
+``cellpose``   segment_cellpose: PyTorch and Cellpose, on the GPU when there is one;
+               no image readers, since read_images runs in ``classical``
+``classical``  read_images, segment_watershed, measure_objects, build_object_table
+``umap``       reduce_dimensions: scikit-learn and UMAP
+
+Each check at the end runs the environment's own steps on a small image.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +25,45 @@ from zmart_analysis.environments import setup_workflow_env  # noqa: E402
 WORKFLOW = "object_analysis"
 PYTHON_VERSION = "3.12"
 
+#: Four bright blobs on a dark field, the picture every check segments.
+BLOBS = (
+    "; ".join(
+        [
+            "import sys, tempfile, numpy as np, tifffile",
+            "from pathlib import Path",
+            "sys.path.insert(0, r'__STEPS__')",
+            "yy, xx = np.mgrid[0:96, 0:96]",
+            "plane = sum(1500.0 * np.exp(-((yy - y) ** 2 + (xx - x) ** 2) / 72.0)"
+            " for y, x in [(24, 24), (24, 72), (72, 24), (72, 72)]).astype('uint16')",
+            "given = dict(image_path='blobs.tif', tile_id=['T', 0, 0], tile_stage_xy_um=[0.0, 0.0],"
+            " source_pixel_size_um=[1.0, 1.0], image_to_stage=[[1, 0], [0, 1]])",
+        ]
+    )
+    + "; "
+)
+
+#: The blobs written as a TIFF and read by read_images, as a pipeline does.
+BLOBS_READ = (
+    BLOBS
+    + "; ".join(
+        [
+            "path = Path(tempfile.mkdtemp()) / 'blobs.tif'",
+            "tifffile.imwrite(path, plane)",
+            "given['image_path'] = str(path)",
+            "import read_images",
+            "data = read_images.run(dict(input=given, metadata=dict(verbose=0)), dict())",
+        ]
+    )
+    + "; "
+)
+
+#: The blobs handed on as read_images hands them on, for an environment
+#: without the image readers.
+BLOBS_HANDED_ON = BLOBS + (
+    "data = dict(input=given, metadata=dict(verbose=0), read_images=dict(image=plane,"
+    " extra_channels=[], channels=None, z_selection='mid', image_size_px=[96, 96], sha256='')); "
+)
+
 STEP_PROFILES = {
     "cellpose": {
         "description": "Cellpose detection",
@@ -22,66 +71,37 @@ STEP_PROFILES = {
         "pip_packages": [
             "pyyaml",
             "numpy",
-            # tifffile exposes a TIFF as a zarr array, which is how OME-TIFF
-            # and OME-Zarr reach the same plane selection. Versions before
-            # 2026.6.1 import a name zarr 3.3 moved, and fail on the first
-            # read with a misleading "zarr 3.3.0 < 3 is not supported".
-            "tifffile>=2026.6.1",
-            "imagecodecs",
-            "pooch",
-            "ngio",  # OME-Zarr, NGFF 0.4 and 0.5
-            "ome-types",  # OME-XML metadata
-            # Pinned to one major version: the default network and what
-            # `diameter: null` means both changed between 3 and 4, and a
-            # table must say which produced it (see detector_params).
-            "cellpose>=4,<5",
-            "scikit-image>=0.23",  # the fast detector's watershed
+            # The masks are written as TIFF files
+            "tifffile",
+            # Pinned to the network the masks are made with, cpsam: 4.2
+            # made cpsam_v2 the default, and the masks change with the
+            # network (see detector_params). Moving to it is a decision.
+            "cellpose>=4,<4.2",
         ],
         "diagnostics": [
-            (
-                "TIFF/zarr interop",
-                "import tifffile, tifffile.zarr, zarr; "
-                "print(f'tifffile {tifffile.__version__} + zarr {zarr.__version__}')",
-            ),
-            (
-                "reads an OME-Zarr position",
-                "import tempfile, numpy as np, ngio; "
-                "from pathlib import Path; "
-                "d = Path(tempfile.mkdtemp()) / 'p.zarr'; "
-                "ngio.create_ome_zarr_from_array("
-                "    d, np.zeros((1, 1, 2, 8, 8), dtype='uint16'), pixelsize=1.0, "
-                "    axes_names=('t','c','z','y','x'), levels=1, overwrite=True); "
-                "c = ngio.open_ome_zarr_container(str(d), mode='r'); "
-                "print('OK')",
-            ),
-            ("OME-XML metadata", "import ome_types; print('OK')"),
             ("cellpose", "from cellpose import models; print('OK')"),
+            (
+                "Cellpose on four blobs",
+                BLOBS_HANDED_ON + "import segment_cellpose; "
+                "found = segment_cellpose.run(data, dict(), diameter=12, gpu=True)['segment_cellpose']; "
+                "print(('OK ' if found['n_objects'] == 4 else 'FAIL ') "
+                "+ str(found['n_objects']) + ' objects on ' + found['detector_params']['device'])",
+            ),
         ],
     },
     "classical": {
-        "description": "scikit-image classical feature extraction and the fast detector",
+        "description": "reading the image, the watershed, the features and the table",
         "install_torch": False,
         "pip_packages": [
             "pyyaml",
             "numpy",
             "scikit-image>=0.23",
-            # The fast detector runs here too (object_analysis_fast.yaml),
-            # and it reads the position and writes its masks the same way
-            # the cellpose one does: the same readers, torch left out.
             "tifffile>=2026.6.1",
             "imagecodecs",
             "ngio",  # OME-Zarr, NGFF 0.4 and 0.5
             "ome-types",  # OME-XML metadata
-            # The well and plate summaries (object_analysis_scoped.yaml):
-            # tables, median imputation, robust scaling and PCA.
-            "pandas",
-            "scikit-learn",
         ],
         "diagnostics": [
-            (
-                "the well and plate summaries",
-                "import pandas; from sklearn.decomposition import PCA; print('OK')",
-            ),
             (
                 "scikit-image",
                 "from skimage.measure import regionprops_table; "
@@ -113,12 +133,21 @@ STEP_PROFILES = {
                 "print('OK')",
             ),
             ("OME-XML metadata", "import ome_types; print('OK')"),
+            (
+                "watershed steps, four blobs",
+                BLOBS_READ + "import segment_watershed, measure_objects, build_object_table; "
+                "data = segment_watershed.run(data, dict(), diameter=12, threshold=100); "
+                "data = measure_objects.run(data, dict(), extras=['all']); "
+                "table = build_object_table.run(data, dict())['object_analysis']; "
+                "n = table['objects']['n_objects']; "
+                "print(('OK ' if n == 4 else 'FAIL ') + str(n) + ' objects')",
+            ),
         ],
     },
     "umap": {
-        "description": "the population plots (plot_population): PCA and UMAP",
+        "description": "two axes for a population (reduce_dimensions): PCA and UMAP",
         "install_torch": False,
-        # Only plot_population runs here. It reads the object table the
+        # Only reduce_dimensions runs here. It reads the object table the
         # other steps wrote, so it needs no image readers and no torch; it
         # gets its own environment because umap-learn brings numba along,
         # a heavy compiler the classical steps have no use for.
@@ -142,9 +171,9 @@ STEP_PROFILES = {
                 "rows = [['id', 'area', 'solidity']] + [[f'c{i}', rng.normal(), rng.normal()] for i in range(40)]; "
                 "csv.writer(d.open('w', newline='')).writerows(rows); "
                 "sys.path.insert(0, r'__STEPS__'); "
-                "from plot_population import run; "
+                "from reduce_dimensions import run; "
                 "got = run(dict(input=dict(table=str(d), kind='umap', ids=None), metadata=dict(verbose=0)), dict()); "
-                "print('OK' if got['plot_population']['objects'] == 40 else 'FAIL')",
+                "print('OK' if got['reduce_dimensions']['objects'] == 40 else 'FAIL')",
             ),
         ],
     },

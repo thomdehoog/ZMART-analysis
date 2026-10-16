@@ -88,7 +88,7 @@ steps run in.
 git clone https://github.com/thomdehoog/ZMART-analysis.git
 cd ZMART-analysis
 pip install -e .
-python workflows/focus/environments/setup_env.py   # once for each workflow you use
+python workflows/alignment/environments/setup_env.py   # once for each workflow you use
 ```
 
 The package installs as `zmart_analysis`: `from zmart_analysis import Engine`.

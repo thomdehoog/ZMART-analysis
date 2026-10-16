@@ -41,7 +41,9 @@ class _Ran:
 
 def _diagnose(answer):
     with mock.patch.object(environments.subprocess, "run", return_value=answer):
-        environments._run_diagnostics("conda", "ZMART--x--main", [("check", "print('x')")])
+        environments._run_diagnostics(
+            "conda", "ZMART--x--main", "python", [("check", "print('x')")]
+        )
 
 
 def test_a_check_that_prints_ok_passes():
@@ -59,12 +61,29 @@ def test_a_check_that_crashes_stops_the_setup():
         _diagnose(_Ran(returncode=1, stdout="", stderr="ModuleNotFoundError: sklearn"))
 
 
-def _setup(argv, envs):
-    """Run setup_workflow_env with a pretend conda; return the commands it ran."""
-    info = {"conda_version": "26.1.0", "envs": envs, "envs_dirs": ["/envs"], "root_prefix": "/"}
+def _setup(argv, envs, envs_after=None):
+    """Run setup_workflow_env with a pretend conda; return the commands it ran.
+
+    ``envs_after`` is what conda lists once the environment is created.
+    """
+
+    def info(listed):
+        return {
+            "conda_version": "26.1.0",
+            "envs": listed,
+            "envs_dirs": ["/envs"],
+            "root_prefix": "/",
+        }
+
+    calls = []
+
+    def conda_info():
+        calls.append(1)
+        return info(envs if len(calls) == 1 or envs_after is None else envs_after)
+
     ran = []
     with (
-        mock.patch.object(environments, "get_conda_info", return_value=info),
+        mock.patch.object(environments, "get_conda_info", side_effect=conda_info),
         mock.patch.object(
             environments.subprocess,
             "run",
@@ -96,3 +115,43 @@ def test_check_of_a_missing_environment_says_so():
 def test_without_check_an_existing_environment_is_left_alone():
     with pytest.raises(SystemExit):
         _setup([], envs=["/envs/ZMART--demo--main"])
+
+
+def test_the_packages_and_checks_run_on_the_environments_own_interpreter(tmp_path):
+    """Named by its path, not as ``pip`` or ``python``.
+
+    On Windows, ``conda run -n <env> pip`` started base's pip (Python 3.9)
+    when base stood first on PATH, and the install failed on a package that
+    needs Python 3.12. The engine's workers already name the interpreter by
+    its path; the setup does the same.
+    """
+    prefix = tmp_path / "ZMART--demo--main"
+    prefix.mkdir()
+    (prefix / "python.exe").write_text("")
+    python = str(prefix / "python.exe")
+
+    ran = _setup([], envs=[], envs_after=[str(prefix)])
+
+    install = next(cmd for cmd in ran if "install" in cmd)
+    check = next(cmd for cmd in ran if "import numpy" in cmd)
+    assert install[install.index(python) :] == [python, "-m", "pip", "install", "numpy"]
+    assert check[check.index(python) :] == [python, "-c", "import numpy"]
+
+
+def test_an_environment_created_without_its_interpreter_stops_the_setup(tmp_path):
+    """conda can report "Created" for an environment that holds no python.exe.
+
+    It happened after a run stopped on a full disk: the next create left 12 MB
+    behind, and the install failed with "The system cannot find the path
+    specified". The setup says what is wrong instead, before installing.
+    """
+    prefix = tmp_path / "ZMART--demo--main"
+    prefix.mkdir()
+
+    with pytest.raises(SystemExit):
+        _setup([], envs=[], envs_after=[str(prefix)])
+
+
+def test_a_dry_run_prints_the_commands_and_runs_none():
+    ran = _setup(["--dry-run"], envs=[])
+    assert ran == []

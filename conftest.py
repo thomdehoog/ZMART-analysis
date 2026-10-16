@@ -1,7 +1,7 @@
 """Shared pytest set-up for the ZMART Analysis test suite.
 
 Loaded for every test file in the repository. Puts the package and the
-workflows' shared helpers on the path, offers an ``engine_factory`` fixture
+test helpers on the path, offers an ``engine_factory`` fixture
 that shuts its engines down, the ``wait_for_results`` and ``wait_for_status``
 fixtures that poll an engine's job board instead of sleeping, and the Cellpose probe the
 object_analysis tests skip on. The step and pipeline factories the engine
@@ -17,11 +17,11 @@ from pathlib import Path
 
 import pytest
 
-# The package and the workflows' shared helpers are importable wherever
-# pytest is started from: the repository root for ``zmart_analysis``, and
-# ``workflows/`` for ``shared``.
+# The package and the test helpers are importable wherever pytest is
+# started from: the repository root for ``zmart_analysis``, ``tests/`` for
+# ``helpers``.
 ROOT = Path(__file__).resolve().parent
-for folder in (ROOT, ROOT / "workflows", ROOT / "tests"):
+for folder in (ROOT, ROOT / "tests"):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
@@ -83,7 +83,7 @@ def wait_for_status():
 
 
 #: The environment the Cellpose step runs in (``environment`` in
-#: ``detect_objects.py``). The tests run Cellpose through the engine, so the
+#: ``segment_cellpose.py``). The tests run Cellpose through the engine, so the
 #: probe looks there, not in the Python that runs pytest.
 CELLPOSE_ENVIRONMENT = "ZMART--object_analysis--cellpose"
 
@@ -123,7 +123,7 @@ def _has_cellpose_runtime() -> tuple[bool, str]:
 import importlib
 import sys
 
-for module in ("skimage", "cellpose.models", "torch"):
+for module in ("cellpose.models", "torch"):
     try:
         importlib.import_module(module)
     except Exception as exc:
