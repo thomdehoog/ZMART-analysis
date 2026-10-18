@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0rc4 (2026-10-18) -- numbered as what it is
+
+- The version is **0.5.0rc4**, the release candidate after 5.0.0rc3. ZMART
+  Analysis is early, like the other ZMART repositories, all at 0.x; the 5.x
+  numbers below said more than it is. Nothing else changed. Run logs written
+  before still name the engine 5.0.0rc...; pip sees 5.x as newer than 0.5, so
+  an environment that has 5.x installed needs `pip install --force-reinstall`.
+
 ## 5.0.0rc3 (2026-10-18) -- a pixel is placed at its centre
 
 - **`build_object_table`** places a detected object at its pixel's centre on
