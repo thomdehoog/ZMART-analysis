@@ -154,9 +154,12 @@ def _add_stage_columns(props: dict, geometry: dict) -> None:
 def _stage_position(row_px, col_px, geometry: dict) -> tuple[float, float]:
     """Where one point of the image is on the stage, in micrometres.
 
-    The point's offset from the image centre is turned by the 2x2
-    ``image_to_stage`` matrix, because image rows and columns need not run
-    the way the stage's x and y do, and added to the tile's own position.
+    A point at pixel index ``i`` is the centre of pixel ``i``, which lies
+    ``i + 0.5 - n/2`` pixels from the image centre -- the tile's own position
+    is that centre (OME-NGFF counts a pixel from its centre too). The offset
+    is turned by the 2x2 ``image_to_stage`` matrix, because image rows and
+    columns need not run the way the stage's x and y do, and added to the
+    tile's own position.
     """
 
     nx, ny = geometry["source_image_size_px"]
@@ -167,9 +170,9 @@ def _stage_position(row_px, col_px, geometry: dict) -> tuple[float, float]:
 
     (m00, m01), (m10, m11) = geometry["image_to_stage"]
 
-    offset_x_um = (float(col_px) - float(nx) / 2.0) * float(pixel_width_um)
+    offset_x_um = (float(col_px) + 0.5 - float(nx) / 2.0) * float(pixel_width_um)
 
-    offset_y_um = (float(row_px) - float(ny) / 2.0) * float(pixel_height_um)
+    offset_y_um = (float(row_px) + 0.5 - float(ny) / 2.0) * float(pixel_height_um)
 
     stage_x_um = float(tile_x_um) + float(m00) * offset_x_um + float(m01) * offset_y_um
 

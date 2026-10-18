@@ -106,8 +106,8 @@ def test_classical_object_analysis_end_to_end_with_stub(tmp_path):
     assert "crop_width_px" not in props
     assert "crop_path" not in props
     assert "embeddings" not in tile["objects"]
-    assert props["stage_x_um"] == pytest.approx([969.0, 1011.0])
-    assert props["stage_y_um"] == pytest.approx([1962.5, 2013.5])
+    assert props["stage_x_um"] == pytest.approx([970.0, 1012.0])
+    assert props["stage_y_um"] == pytest.approx([1964.0, 2015.0])
     assert "centroid-0" not in props
     assert "bbox-0" not in props
     assert "measure_objects" not in result
@@ -365,3 +365,22 @@ def test_a_single_object_field_survives_to_builtin_and_the_table():
     out = build_object_table.run(data, {})
     assert out["object_analysis"]["objects"]["n_objects"] == 1
     assert out["object_analysis"]["objects"]["properties"]["label"] == [1]
+
+
+def test_a_pixel_is_placed_at_its_centre_on_the_stage():
+    """A centroid at pixel index i is the centre of pixel i.
+
+    The tile's stage position is the centre of the image, so the first and the
+    last pixel lie symmetrically about it: in a 10-pixel row of 2 um pixels
+    centred at x = 100, pixel 0 is centred at 91 and pixel 9 at 109. Counting
+    from the pixel's corner put every object half a pixel low (90 and 108).
+    """
+    geometry = {
+        "source_image_size_px": [10, 10],
+        "source_pixel_size_um": [2.0, 2.0],
+        "tile_stage_xy_um": [100.0, 50.0],
+        "image_to_stage": [[1.0, 0.0], [0.0, 1.0]],
+    }
+    assert build_object_table._stage_position(0, 0, geometry) == pytest.approx((91.0, 41.0))
+    assert build_object_table._stage_position(9, 9, geometry) == pytest.approx((109.0, 59.0))
+    assert build_object_table._stage_position(4.5, 4.5, geometry) == pytest.approx((100.0, 50.0))
