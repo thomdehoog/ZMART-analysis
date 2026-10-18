@@ -1513,7 +1513,7 @@ class TestPackageAPI:
     def test_version(self):
         import zmart_analysis
 
-        assert zmart_analysis.__version__ == "5.0.0rc2"
+        assert zmart_analysis.__version__ == "5.0.0rc3"
 
     def test_engine_in_all(self):
         import zmart_analysis

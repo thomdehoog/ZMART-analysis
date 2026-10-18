@@ -1,5 +1,14 @@
 # Changelog
 
+## 5.0.0rc3 (2026-10-18) -- a pixel is placed at its centre
+
+- **`build_object_table`** places a detected object at its pixel's centre on
+  the stage: a centroid at pixel index i lies `i + 0.5 - n/2` pixels from the
+  tile's centre. Objects were half a pixel low before. OME-NGFF counts a pixel
+  from its centre, as the ZMART writers now do.
+- The test suite's cellpose probe says an environment has no interpreter
+  instead of ending the run.
+
 ## 5.0.0rc2 (2026-10-16) -- two workflows
 
 The workflows are two self-contained folders, `alignment` and
