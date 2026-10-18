@@ -614,12 +614,14 @@ def _tiff_pixel_size(pixels, downsample):
 
 
 def _tiff_origin(pixels, chosen, unit):
-    """The stage position of the plane read, from the OME Plane entries.
+    """The stage position the OME Plane entries record for the plane read.
 
-    The entry of the chosen t, c and z is used, else the first. Returns {}
-    when no position was recorded (the origin is the image corner), and None
-    when one was recorded but cannot be put in the pixel size's unit: no
-    coordinate is better than a wrong one.
+    The entry of the chosen t, c and z is used, else the first. The value is
+    passed on as recorded: writers differ on which point of the image it names
+    (the Leica driver writes the field centre, the controller's mock its
+    corner), so it is not a placement. Returns {} when no position was
+    recorded, and None when one was recorded but cannot be put in the pixel
+    size's unit: no coordinate is better than a wrong one.
     """
 
     if pixels is None or not pixels.planes or unit is None:
