@@ -145,6 +145,11 @@ print("cuda" if torch.cuda.is_available() else "cpu")
     except subprocess.TimeoutExpired:
         _CELLPOSE_RUNTIME_CACHE = False, "runtime probe timed out"
         return _CELLPOSE_RUNTIME_CACHE
+    except OSError as exc:
+        # The environment's folder is there but its interpreter is not: say so,
+        # and let the tests that need it skip, rather than ending the whole run.
+        _CELLPOSE_RUNTIME_CACHE = False, f"the {CELLPOSE_ENVIRONMENT} environment has no interpreter: {exc}"
+        return _CELLPOSE_RUNTIME_CACHE
 
     if result.returncode == 0:
         _CELLPOSE_RUNTIME_CACHE = True, result.stdout.strip().splitlines()[-1]
