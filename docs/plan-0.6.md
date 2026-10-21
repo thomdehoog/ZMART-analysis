@@ -1,10 +1,23 @@
 # ZMART Analysis 0.6 — scopes over time, parts, and a cheaper hand-over
 
-Status: PLAN, not built. Written 2026-10-21 from the engine at 0.5.0rc7
-(ZMB `release-candidate`, 8926aa6). Decisions D1–D6 settled with Thom the
-same day. Revised after review A (12 findings), review B (14 findings) and a final
-review C over both (9 findings, verdict "ready after small fixes"), all
-taken in; see the end.
+Status: BUILT as 0.6.0rc1 (2026-10-21). Written the same day from the
+engine at 0.5.0rc7 (ZMB `release-candidate`, 8926aa6). Decisions D1–D6
+settled with Thom. Revised after review A (12 findings), review B (14
+findings) and a final review C over both (9 findings, verdict "ready after
+small fixes"), all taken in; see the end.
+
+Where the build differs from this plan:
+
+- `submit(..., priority=...)` raises Python's own `TypeError` for an
+  unknown argument; there is no message of its own, which would be a
+  compatibility shim. The CHANGELOG says what replaces it.
+- Two more moves than the file table below, to keep every file under 800
+  lines and to one job: the worker pools went from `workers.py` to
+  `worker_pool.py`, and reading a step file's METADATA from `engine.py` to
+  `pipeline.py`; a unit's lineage went to `units.py`. The close of one unit
+  is named in `engine.py` (`Close`) instead of being passed as eight values.
+- Not done yet: the interface passing `Engine(handover=...)` (it needs a
+  setting of its own), and the measurement after the build.
 
 ## Goal
 

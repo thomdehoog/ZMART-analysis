@@ -83,6 +83,16 @@ the object table under `object_analysis`.
 If your step raises an error, only its own job fails. On the job board,
 `engine.status(name)`, the job is `failed`, with the step and the error.
 
+A few names are the engine's own, in what it hands a step: `input`,
+`metadata`, `provenance`, `lineage`, `parts`, `failures` and `previous`. A
+step cannot be called that; register refuses it.
+
+Steps that follow each other in one environment, with the same
+`max_workers`, run together in one worker, and the output of one reaches
+the next in memory, as it is. Only the last output of such a run is
+written to a file, so every output must still be one that can be written:
+plain Python and NumPy arrays, as above.
+
 `pipeline_data["metadata"]` holds:
 
 | Key | What it is |
@@ -113,7 +123,7 @@ METADATA = {
 | Key | What it does | Default |
 |---|---|---|
 | `environment` | The conda environment the step runs in. Required: the engine refuses a step without it. | |
-| `max_workers` | How many copies of the step may run at once. | `1` |
+| `max_workers` | How many copies of the step may run at once, whatever the steps around it. | `1` |
 | `description`, `version` | Notes for the reader. Every shipped step has them. | |
 
 The engine reads `METADATA` as text, without running the file. So write it
@@ -220,16 +230,35 @@ per unit, for example once per compartment, when that unit is complete.
 [Part 1](../1_use_the_engine/README.md#steps-that-wait-for-a-group-of-images)
 explains scopes and shows such a pipeline.
 
-A scoped step receives a different `pipeline_data`. There is no `input`:
+A scoped step receives a different `pipeline_data`. There is no `input`;
+there are the **parts** of its unit:
+
+```text
+parts ──► your step ──► a new dictionary ──► a part one level up
+```
+
+Every part has the same outside, whether it comes from one image or from a
+whole well:
+
+```python
+part = {
+    "id": 12,                                          # the job, as on the board
+    "scope": {"compartment": 3, "position": 7},        # where it is from
+    "output": {"segment": {...}, "measure": {...}},    # what the steps made
+}
+```
+
+The engine fixes this outside; what is inside `output` is yours. An image's
+part also carries the `input` it was submitted with.
 
 | Key | What it is |
 |---|---|
-| `results` | One entry per image of the unit, in submission order. Each entry is what the per-image steps returned. For a wider scope, there is one entry per narrower unit instead: a carrier step receives one result per compartment. Each entry is read from disk when the step reaches it, so a large unit never sits in memory at once; loop over it, or make a `list(...)` of it to use it twice. |
-| `failures` | What failed in this unit. Each failure has `scope`, `step`, `error`, `phase` and `submission_idx`. |
+| `parts` | One part per image of the unit, in submission order. For a wider scope, one part per narrower unit instead: a carrier step receives one part per compartment, its `scope` the compartment and its `id` the compartment's scoped job. Each part is read from disk when the step reaches it, so a large unit never sits in memory at once; loop over it, or make a `list(...)` of it to use it twice. |
+| `failures` | What failed in this unit, each as `{"id", "scope", "step", "error"}`: the job that failed, where, in which step, and why. |
 | `metadata["unit"]` | Which unit this is, widest level first, for example `{"carrier": 1, "compartment": 3}`. It is `{}` for a step over everything. |
 | `metadata["scope_level"]` | The level, for example `"compartment"`. |
 | `metadata["scope"]` | The `scope` of the image that completed the unit. |
-| `metadata["n_accumulated"]`, `metadata["n_failures"]` | How many results and how many failures. |
+| `metadata["n_accumulated"]`, `metadata["n_failures"]` | How many images and how many failures. |
 
 A failure with `"step": "engine"` did not come from a step. It is the
 engine's own note: an image of a narrower unit that was never completed.
@@ -237,13 +266,47 @@ Completing a level completes the narrower units inside it, so this happens
 only when the pipeline cannot tell that a level is narrower: list your levels
 under `levels`.
 
-**Return a new dictionary with your output.** Do not copy the per-image
-results into it; that only uses memory. The engine adds `metadata` and
-`lineage` to your result afterwards. A later step with the same scope
-receives what you returned.
+**Return a new dictionary with your output.** Do not copy the parts into
+it; that only uses memory. The engine adds `metadata` and `lineage` to your
+result afterwards. A later step with the same scope receives what you
+returned.
 
-The scoped steps in `tests/test_scopes.py`, and `summarise_group` in this
-part's tutorial, are worked examples.
+```python
+def run(pipeline_data, state, **params):
+    counts = [part["output"]["segment"]["n_cells"] for part in pipeline_data["parts"]]
+    return {"total": sum(counts), "images": len(counts)}
+```
+
+The scoped steps in `tests/test_parts.py` and `tests/test_scopes.py`, and
+`summarise_group` in this part's tutorial, are worked examples.
+
+## A step over time
+
+A step with `timepoints: 2` or more
+([part 1](../1_use_the_engine/README.md#steps-that-look-over-time)) runs once
+per timepoint of its place, in timepoint order. It receives its parts
+grouped by timepoint, oldest first, and its own output at the timepoint
+before:
+
+| Key | What it is |
+|---|---|
+| `parts` | `[{"timepoint": 3, "parts": [...]}, {"timepoint": 4, "parts": [...]}]`: the timepoints of its place within the window. A round the place never had is missing, not empty. |
+| `previous` | What this step returned for the same place at the timepoint before, or `None`: at the first timepoint, or when that run failed. |
+| `metadata["unit"]` | Its place and this timepoint, for example `{"compartment": 3, "position": 7, "timepoint": 4}`. |
+
+`previous` is what a tracker needs to keep each cell's id from one
+timepoint to the next:
+
+```python
+def run(pipeline_data, state, **params):
+    *before, now = pipeline_data["parts"]
+    cells = now["parts"][0]["output"]["segment"]["cells"]
+    previous = pipeline_data["previous"]
+    ids = match(cells, previous["cells"]) if previous else new_ids(cells)
+    return {"cells": cells, "ids": ids}
+```
+
+The time steps in `tests/test_time.py` are worked examples.
 
 ## Parameters
 
@@ -319,8 +382,14 @@ Tests live in `workflows/<name>/tests/`. They can import a step by its
 name, because `workflows/conftest.py` puts every `steps/` folder on the
 search path.
 
-To test a scoped step, pass it `{"results": [...], "failures": [],
-"metadata": {"unit": {...}, "scope_level": "compartment"}}`.
+To test a scoped step, pass it its parts by hand:
+
+```python
+def test_summarise():
+    parts = [{"id": 1, "scope": {"compartment": 3}, "output": {"segment": {"n_cells": 5}}}]
+    out = run({"parts": parts, "failures": [], "metadata": {"unit": {"compartment": 3}}}, {})
+    assert out["total"] == 5
+```
 
 Some tests need something your computer may not have. They carry a marker,
 so you can leave them out:

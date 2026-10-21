@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.6.0rc1 (2026-10-21) -- scopes over time, parts, and less reading and writing
+
+Two changes break a script or a scoped step written for 0.5:
+
+- **`deadline` replaces `priority`.** `submit(..., deadline=seconds)` says
+  by when the microscope needs an image's answer. Waiting jobs start nearest
+  deadline first; jobs without one come after, in the order they were
+  submitted, across every pipeline of the engine. The order holds wherever
+  a job waits: for an engine thread, for a scope's thread and for a step's
+  worker. A job with a deadline shows it on the board and in the run
+  record, and `late` once it ended after it. `priority` is gone.
+- **A scoped step reads `parts`, not `results`.** Every part has the same
+  outside, `{id, scope, output}`, and an image's part also its `input`:
+  the job as on the board, where it is from, and what the steps made. The
+  inside of `output` is the step's own. Failures have the same outside,
+  `{id, scope, step, error}`, also in a lineage. A step cannot be named
+  after a key the engine uses (`input`, `metadata`, `provenance`,
+  `lineage`, `parts`, `failures`, `previous`).
+
+New:
+
+- **Scopes over time.** An image's scope may name its `timepoint`. A unit
+  is then its place at that timepoint; `complete="timepoint"` closes the
+  round. A scoped step with `timepoints: N` sees its place at this
+  timepoint and the ones before it within N, grouped by timepoint, and its
+  own answer at the timepoint before as `previous`; the runs of one place
+  go in timepoint order, without a thread waiting for another. A
+  `scope: position` step runs as soon as its image is done.
+- **Steps of one environment run as one chain.** Consecutive steps with
+  the same environment and `max_workers` run in one worker call: the output
+  of one reaches the next in memory, and only the last one is written. The
+  watershed pipeline writes once per tile instead of four times, the focus
+  pipeline once instead of twice. Each step keeps its own timeout, record,
+  provenance and `max_workers`, and an error names its step.
+- **`Engine(handover=folder)`** puts the files between chains on a disk of
+  your choice, under `zmart-analysis/<user>/<pipeline>/`, away from the
+  acquisition's data. Without it they stay in the run folder.
+
+Also:
+
+- The engine's files each hold one thing: `pipeline.py` reads a pipeline,
+  `units.py` keeps which images belong together and when a unit is
+  complete, `board.py` the board, the run record and the hand-over folders,
+  `job_queue.py` the order, `worker_pool.py` the workers of every
+  environment. Names are plain, without a leading underscore.
+- The clean-up after a crash removes only folders named as a registration;
+  a process another user owns counts as alive.
+- `max_workers` from a pipeline counts for that place of the step, also
+  when the same step is listed twice.
+- The plan, with its three reviews, is `docs/plan-0.6.md`.
+
 ## 0.5.0rc7 (2026-10-21) -- the two workflows we use
 
 rc5 had everything below except the board fix and the stop on macOS; rc6

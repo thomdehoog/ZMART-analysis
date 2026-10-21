@@ -1635,7 +1635,7 @@ class TestPackageAPI:
     def test_version(self):
         import zmart_analysis
 
-        assert zmart_analysis.__version__ == "0.5.0rc7"
+        assert zmart_analysis.__version__ == "0.6.0rc1"
 
     def test_engine_in_all(self):
         import zmart_analysis

@@ -2,24 +2,27 @@
 Engine -- what you call to run analyses.
 
 You register a pipeline, submit images to it, and read their output from the
-job board. The Engine never runs step code itself: it reads each step's
-METADATA without running the file, and hands the work to workers (see
-workers.py). A registered pipeline (pipeline.py) has its units (units.py:
-what belongs together, and what is complete) and its board (board.py: the
-jobs, the run record and the hand-over folders); waiting jobs start in the
-order of the job queue (job_queue.py).
+job board. How the parts click together:
 
-A worker lives for as long as a registered pipeline needs it: deregister a
-pipeline and the workers no other pipeline needs are stopped.
+    The Engine takes a pipeline (pipeline.py); a pipeline has its units
+    (units.py: what belongs together, and what is complete) and its board
+    (board.py: what is happening, the run record, the hand-over folders).
+    Jobs wait in the job queue (job_queue.py) and run in workers
+    (worker_pool.py, workers.py); data between them goes through the
+    hand-over (handover.py).
+
+The Engine never runs step code itself: it reads each step's METADATA
+without running the file, and hands the work to workers, a chain of steps
+at a time. A worker lives for as long as a registered pipeline needs it:
+deregister a pipeline and the workers no other pipeline needs are stopped.
 
 Every pipeline writes into ``<output>/analysis/<name>/``: a copy of its
-YAML, the run record, and the folders one step's output is
-handed to the next through (handover.py). Between steps, data goes through
-these folders, not through the engine.
+YAML and the run record. The folders one chain's output is handed to the
+next through are there too, or under ``Engine(handover=...)``.
 
 Thread safety: ``lock`` guards the registered pipelines and the accepting
-flag; a pipeline's units and board have their own locks. ``submit`` and ``status`` may
-be called from different threads.
+flag; a pipeline's units and board have their own locks. ``submit`` and
+``status`` may be called from different threads.
 """
 
 from __future__ import annotations

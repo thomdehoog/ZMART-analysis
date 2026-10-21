@@ -45,6 +45,15 @@ engine = Engine()
 |---|---|---|
 | `max_concurrent` | `8` | How many jobs run at the same time. |
 | `execution_timeout` | `300.0` | Seconds one step may run before it is stopped and its job fails. `None` means no limit. |
+| `handover` | `None` | A folder for the files handed between steps, such as a local data disk. Without it they go into the pipeline's folder of the run. |
+
+Steps that follow each other in one environment, with the same
+`max_workers`, run together in one worker: the output of one is handed to
+the next in memory, and only the last one is written. Where an environment
+changes, the output goes through a file. On a microscope the run folder is
+often the data disk or a network share, so for large stacks give `handover`
+a local disk; on a PC with a size-limited profile, not a folder in the
+profile.
 
 Workers are not stopped while they wait. A worker stops only when you
 deregister the last pipeline that needs it, or shut the engine down.
@@ -147,7 +156,7 @@ job_3 = engine.submit(
 )
 ```
 
-`submit(pipeline, data, scope=None, priority=None, complete=None)` hands one
+`submit(pipeline, data, scope=None, deadline=None, complete=None)` hands one
 image to a pipeline. It returns the job's id at once; the work happens in the
 background. Ids are whole numbers, counted per pipeline from 1.
 
@@ -158,7 +167,7 @@ image of the group says that the group is complete.
 |---|---|
 | `pipeline` | The name you registered the pipeline under. |
 | `data` | A dictionary with the input for this job. The pipeline decides what belongs in it; the comment at the top of a shipped pipeline says what to submit. |
-| `priority` | A whole number. Higher runs first. Jobs with the same priority run in the order they were submitted. Default `0`. |
+| `deadline` | Seconds from now by which the microscope needs this image's answer. Waiting jobs start nearest deadline first; jobs without one come after, in the order they were submitted. |
 | `scope`, `complete` | Only for pipelines with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
 Submitting to a name that is not registered raises `KeyError`. Submitting
@@ -201,6 +210,7 @@ waits until the three positions are done, then runs on their outputs.
 | `state` | `queued`, `running`, `waiting`, `done`, `failed` or `cancelled`. |
 | `output` | What the steps returned, once the job is `done`. `None` before. |
 | `error` | Only on a `failed` job: what went wrong. |
+| `deadline`, `late` | Only on a job submitted with a deadline: when it was due, and once it ended, whether it ended after that. A late job is not stopped. |
 
 The states:
 
@@ -208,7 +218,7 @@ The states:
 |---|---|
 | `queued` | Waiting for a worker to take its step. |
 | `running` | A worker runs its step. |
-| `waiting` | A scoped job waits for the images of its unit to finish. |
+| `waiting` | A scoped job waits for the images of its unit to finish. A step over time also waits for its place's timepoint before; then `after` names it. |
 | `done` | Finished. The output is there. |
 | `failed` | A step raised an error. |
 | `cancelled` | Stopped by `deregister` or `shutdown` before it finished. |
@@ -346,7 +356,66 @@ A scoped output holds what the step returned, with `metadata` and
 | Key | What it is |
 |---|---|
 | `metadata["unit"]` | The unit this result is about, for example `{"carrier": 1, "compartment": 3}`. |
-| `lineage` | What the result was built from. `submissions` lists every image of the unit, `failed` lists every failure in it, and `provenance` says where every earlier step ran. |
+| `lineage` | What the result was built from. `submissions` lists the ids of every image of the unit, `failed` every failure in it, each as `{id, scope, step, error}`, and `provenance` where every earlier step ran. |
+
+## Steps that look over time
+
+A time-lapse visits the same places again and again. Each image says
+which round it belongs to with a `timepoint` in its scope, a whole number
+your acquisition gives:
+
+```python
+scope={"carrier": 1, "compartment": 3, "position": 7, "timepoint": 4}
+```
+
+Place is a nesting, carrier, compartment, group, position. Time is a line
+beside it. A step chooses a block of both: how much place with `scope`, and
+how many timepoints with `timepoints`:
+
+```text
+              timepoint 0   timepoint 1   timepoint 2   timepoint 3
+position 7         ●             ●             ●             ●
+position 8         ●             ●             ●             ●
+```
+
+```yaml
+metadata:
+  levels: [experiment, carrier, compartment, position]
+
+tracking:
+  - segment:                    # every image, as soon as it arrives
+  - track_cells:
+      scope: position
+      timepoints: 2             # this timepoint and the one before
+```
+
+| `timepoints` | The unit | Runs |
+|---|---|---|
+| `1` (the default) | its place at one timepoint | when that place at that timepoint is complete |
+| a number, `N` | its place at this timepoint, with the `N - 1` before it | once per timepoint, in timepoint order per place |
+
+- **A round.** `complete="timepoint"` closes every open unit of that
+  timepoint. A step over everything (`scope: experiment`) is one unit per
+  timepoint.
+- **A position** closes itself when its image is done: a `scope: position`
+  step needs no `complete`. List `position` under `levels`, so position 7
+  of one well is not position 7 of another.
+- **The timepoint before** is the latest earlier timepoint the place has.
+  The engine never counts: after a skipped round, 4 follows 2.
+- **In order.** The step of a place at timepoint 4 starts only when the
+  same step at its timepoint before has ended, so a track is built in
+  order. Meanwhile it is `waiting` on the board, with `after`.
+- **A late image** reopens its own timepoint. A step over several
+  timepoints that already ran at a later timepoint is not run again.
+
+In this version a step over several timepoints is the last scoped step of
+the pipeline, a `scope: position` step is the first, and `timepoints: all`
+is not there yet. Register says so when a pipeline asks for it. What such
+a step receives is in
+[part 2](../2_implement_an_analysis_step/README.md#a-step-over-time).
+
+Give every image of a time-lapse a `deadline`: the time until the
+microscope comes back to that place.
 
 ## When something fails
 
