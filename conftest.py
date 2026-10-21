@@ -106,9 +106,9 @@ def _has_cellpose_runtime() -> tuple[bool, str]:
     if _CELLPOSE_RUNTIME_CACHE is not None:
         return _CELLPOSE_RUNTIME_CACHE
 
-    from zmart_analysis.workers import _the_interpreter_in, _the_prefix_of
+    from zmart_analysis.workers import the_interpreter_in, the_prefix_of
 
-    prefix = _the_prefix_of(CELLPOSE_ENVIRONMENT)
+    prefix = the_prefix_of(CELLPOSE_ENVIRONMENT)
     if prefix is None:
         _CELLPOSE_RUNTIME_CACHE = (
             False,
@@ -137,7 +137,7 @@ print("cuda" if torch.cuda.is_available() else "cpu")
 """
     try:
         result = subprocess.run(
-            [str(_the_interpreter_in(prefix)), "-c", code],
+            [str(the_interpreter_in(prefix)), "-c", code],
             capture_output=True,
             text=True,
             timeout=120,

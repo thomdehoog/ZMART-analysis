@@ -86,7 +86,7 @@ else:
 PICKLE_PROTOCOL = 5
 
 
-def _load_module(step_path):
+def load_module(step_path):
     """Import the step file as a module named after it, and return it.
 
     The engine itself never runs the file; it only reads its METADATA
@@ -114,7 +114,7 @@ def _load_module(step_path):
     return module
 
 
-def _environment_record():
+def environment_record():
     """What this worker's environment is, measured once when it starts.
 
     ``environment`` is the conda environment's name, ``python`` the
@@ -134,7 +134,7 @@ def _environment_record():
     }
 
 
-def _loaded_package_versions(module_to_dists):
+def loaded_package_versions(module_to_dists):
     """The version of every installed package this worker has imported.
 
     Only what was actually loaded, so a step's record names cellpose and
@@ -151,11 +151,11 @@ def _loaded_package_versions(module_to_dists):
     return dict(sorted(versions.items()))
 
 
-def _stamp(result, step_name, env_record, module_to_dists):
+def stamp(result, step_name, env_record, module_to_dists):
     """Add this step's provenance to its result, when the result is a dict."""
     if isinstance(result, dict):
         record = dict(env_record)
-        record["packages"] = _loaded_package_versions(module_to_dists)
+        record["packages"] = loaded_package_versions(module_to_dists)
         result.setdefault("provenance", {})[step_name] = record
     return result
 
@@ -198,7 +198,7 @@ def process_alive(parent_pid):
     parent, so we use kernel32.OpenProcess instead.
     """
     if sys.platform == "win32":
-        return _windows_process_alive(parent_pid)
+        return windows_process_alive(parent_pid)
     try:
         os.kill(parent_pid, 0)
         return True
@@ -206,7 +206,7 @@ def process_alive(parent_pid):
         return False
 
 
-def _windows_process_alive(parent_pid, kernel32=None):
+def windows_process_alive(parent_pid, kernel32=None):
     """Return whether a Windows process exists and has not terminated.
 
     ``OpenProcess`` can succeed for a terminated process while another handle
@@ -272,7 +272,7 @@ def main():
     request_count = 0
     # Measured once per worker: the environment cannot change under a
     # running interpreter in any way that would matter to the record.
-    env_record = _environment_record()
+    env_record = environment_record()
     module_to_dists = metadata.packages_distributions()
 
     try:
@@ -299,7 +299,7 @@ def main():
             # Load or reuse cached module
             if step_path not in module_cache:
                 logger.info("Loading module: %s", step_name)
-                module_cache[step_path] = _load_module(step_path)
+                module_cache[step_path] = load_module(step_path)
             module = module_cache[step_path]
 
             # Get or create per-step state dict
@@ -309,7 +309,7 @@ def main():
 
             try:
                 result = run_step(module, pipeline_data, state, params, files)
-                result = _stamp(result, os.path.splitext(step_name)[0], env_record, module_to_dists)
+                result = stamp(result, os.path.splitext(step_name)[0], env_record, module_to_dists)
                 response = ("ok", finish(result, step_name, files))
                 logger.info("Request #%d completed", request_count)
             except Exception:

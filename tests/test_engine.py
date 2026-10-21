@@ -564,7 +564,7 @@ class TestWorkerErrorPaths:
             listener.close()
 
     def test_windows_parent_check_distinguishes_running_and_terminated(self, subtests):
-        from zmart_analysis.worker_script import _windows_process_alive
+        from zmart_analysis.worker_script import windows_process_alive
 
         class FakeKernel32:
             def __init__(self, wait_result, handle=123):
@@ -591,13 +591,13 @@ class TestWorkerErrorPaths:
         for wait_result, expected in cases:
             with subtests.test(wait_result=wait_result):
                 kernel32 = FakeKernel32(wait_result)
-                assert _windows_process_alive(4321, kernel32) == expected
+                assert windows_process_alive(4321, kernel32) == expected
                 assert kernel32.open_args == (0x00100000, False, 4321)
                 assert kernel32.wait_args == (123, 0)
                 assert kernel32.closed == [123]
 
         unavailable = FakeKernel32(0x00000102, handle=0)
-        assert not _windows_process_alive(4321, unavailable)
+        assert not windows_process_alive(4321, unavailable)
         assert unavailable.closed == []
 
 
@@ -1752,7 +1752,7 @@ class TestTheBrake:
         path = _a_step_that_sleeps(pid_file)
         w = Worker(environment=None, connect_timeout=10)
         w.ensure_running()
-        w._conn = AWaitThatClosingDoesNotWake(w._conn)
+        w.conn = AWaitThatClosingDoesNotWake(w.conn)
         errors = []
         t = threading.Thread(
             target=_capture_exception,
@@ -1783,8 +1783,8 @@ class TestTheBrake:
         )
         pid_file = os.path.join(_TEMP_DIR, f"tree_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
-        real = worker_module._the_python_of
-        worker_module._the_python_of = lambda environment: [sys.executable, wrapper]
+        real = worker_module.the_python_of
+        worker_module.the_python_of = lambda environment: [sys.executable, wrapper]
         try:
             w = Worker(environment="fake-env", connect_timeout=20)
             t = threading.Thread(
@@ -1792,7 +1792,7 @@ class TestTheBrake:
             )
             t.start()
             grandchild = _wait_for_file(pid_file)
-            wrapper_pid = w._process.pid
+            wrapper_pid = w.process.pid
             assert grandchild != wrapper_pid
             w.shutdown(now=True)
             t.join(timeout=5)
@@ -1800,7 +1800,7 @@ class TestTheBrake:
             assert not _alive(wrapper_pid), "the wrapper must be gone"
             assert not _alive(grandchild), "the worker behind the wrapper must be gone"
         finally:
-            worker_module._the_python_of = real
+            worker_module.the_python_of = real
 
     def test_an_engine_shut_down_without_waiting_stops_its_running_step(self):
         from zmart_analysis import Engine
@@ -1855,8 +1855,8 @@ class TestTheBrake:
         )
         pid_file = os.path.join(_TEMP_DIR, f"spawn_{_next_id()}.pid")
         path = _a_step_that_sleeps(pid_file)
-        real = worker_module._the_python_of
-        worker_module._the_python_of = lambda environment: [sys.executable, wrapper]
+        real = worker_module.the_python_of
+        worker_module.the_python_of = lambda environment: [sys.executable, wrapper]
         try:
             w = Worker(environment="slow-env", connect_timeout=20)
             errors = []
@@ -1866,7 +1866,7 @@ class TestTheBrake:
             )
             t.start()
             time.sleep(0.5)
-            wrapper_pid = w._process.pid
+            wrapper_pid = w.process.pid
             w.shutdown(now=True)
             t.join(timeout=10)
             assert not t.is_alive(), "the caller must be released"
@@ -1879,7 +1879,7 @@ class TestTheBrake:
             )
             assert not w.is_alive()
         finally:
-            worker_module._the_python_of = real
+            worker_module.the_python_of = real
 
     def test_a_worker_put_down_before_it_spawned_does_not_spawn(self):
         """A press that lands before the process exists.
