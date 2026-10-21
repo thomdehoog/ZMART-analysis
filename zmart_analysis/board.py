@@ -237,6 +237,11 @@ class Board:
             self.jobs[job].update(step=step, state="queued")
             self.jobs[job].pop("after", None)
 
+    def job_step(self, job, step):
+        """A running job's worker has started *step* (the next of its chain)."""
+        with self.lock:
+            self.jobs[job]["step"] = step
+
     def job_running(self, job):
         """A worker has taken the job's step and runs it."""
         with self.lock:

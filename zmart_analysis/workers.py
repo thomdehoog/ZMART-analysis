@@ -43,7 +43,14 @@ logger = logging.getLogger(__name__)
 
 
 class WorkerError(Exception):
-    """Base exception for all worker subprocess errors."""
+    """Base exception for all worker subprocess errors.
+
+    ``step`` names the step it happened in, when one was running.
+    """
+
+    def __init__(self, message, step=None):
+        super().__init__(message)
+        self.step = step
 
 
 class WorkerSpawnError(WorkerError):
@@ -61,8 +68,8 @@ class WorkerTimeoutError(WorkerError):
 class StepExecutionError(WorkerError):
     """Step's run() raised an exception inside the worker subprocess."""
 
-    def __init__(self, message, remote_traceback=None):
-        super().__init__(message)
+    def __init__(self, message, remote_traceback=None, step=None):
+        super().__init__(message, step)
         self.remote_traceback = remote_traceback
 
 
@@ -326,90 +333,97 @@ class Worker:
         self.cleanup()
         raise WorkerCrashedError(f"Worker for '{label(self.environment)}' was killed")
 
-    def execute(self, step_path, pipeline_data, params, timeout=300.0, files=None):
+    def execute(self, steps, pipeline_data, timeout=300.0, files=None, report=None):
         """
-        Send work to the worker and block until result.
+        Run a chain of steps in the worker, and block until its output.
 
         Parameters
         ----------
-        step_path : str
-            Path to the step .py file.
+        steps : list of (str, dict)
+            The chain: each step's file and its parameters from the YAML,
+            run one after another, the output of one the data of the next.
         pipeline_data : dict
-            Data dict to pass to the step's run() function.
-        params : dict
-            Keyword arguments from the YAML config.
-        timeout : float
-            Seconds to wait for the step to complete.
+            The data for the first step.
+        timeout : float or None
+            Seconds each step may take; it starts again at every step.
         files : dict, optional
             How the data goes through folders (see worker_script.py).
+        report : callable, optional
+            Called as ``report("start", name)`` before each step and
+            ``report("done", record)`` after it.
 
         Raises
         ------
         StepExecutionError
-            If the step's run() raised an exception.
+            A step's run() raised an exception.
         WorkerTimeoutError
-            If the step exceeded `timeout` and the worker was killed.
+            A step exceeded `timeout` and the worker was killed.
         WorkerCrashedError
-            If the worker process died during execution.
+            The worker process died during the chain.
+        Each names the step it happened in as ``.step``.
         """
         self.ensure_running()
         pid = self.process.pid
-        step_name = Path(step_path).stem
-        self.current_step = step_name
-        t0 = time.monotonic()
+        env_label = label(self.environment)
+        steps = [(str(path), params) for path, params in steps]
+        self.current_step = Path(steps[0][0]).stem
 
-        message = (str(step_path), pipeline_data, params, files or {})
+        message = (steps, pipeline_data, files or {})
         try:
             data = pickle.dumps(message, protocol=PICKLE_PROTOCOL)
-            logger.debug(
-                "Worker execute: sending %d bytes to pid=%d (step=%s)", len(data), pid, step_name
-            )
+            logger.debug("Worker execute: sending %d bytes to pid=%d", len(data), pid)
             self.conn.send_bytes(data)
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
-            logger.error("Worker send failed: pid=%d, step=%s: %s", pid, step_name, e)
+            logger.error("Worker send failed: pid=%d, step=%s: %s", pid, self.current_step, e)
             self.cleanup()
-            env_label = label(self.environment)
-            raise WorkerCrashedError(f"Worker for '{env_label}' lost connection: {e}") from e
+            raise WorkerCrashedError(
+                f"Worker for '{env_label}' lost connection: {e}", self.current_step
+            ) from e
 
         # The connection is held here: a kill from another thread drops
         # self.conn while this one still waits on it.
         conn = self.conn
-        try:
-            if not self.answer_arrives(conn, timeout):
-                logger.error(
-                    "Worker timed out: pid=%d, step=%s, timeout=%.0fs", pid, step_name, timeout
-                )
+        while True:
+            step = self.current_step
+            try:
+                if not self.answer_arrives(conn, timeout):
+                    logger.error(
+                        "Worker timed out: pid=%d, step=%s, timeout=%.0fs", pid, step, timeout
+                    )
+                    self.cleanup()
+                    raise WorkerTimeoutError(
+                        f"Worker for '{env_label}' timed out after {timeout}s in {step}", step
+                    )
+                kind, payload = pickle.loads(conn.recv_bytes())
+            except (EOFError, ConnectionResetError, OSError) as e:
+                stderr = self.stderr_drainer.get_output() if self.stderr_drainer else ""
+                logger.error("Worker crashed: pid=%d, step=%s, stderr=%s", pid, step, stderr[:500])
                 self.cleanup()
-                env_label = label(self.environment)
-                raise WorkerTimeoutError(f"Worker for '{env_label}' timed out after {timeout}s")
-            raw = conn.recv_bytes()
-        except (EOFError, ConnectionResetError, OSError) as e:
-            stderr = self.stderr_drainer.get_output() if self.stderr_drainer else ""
-            logger.error("Worker crashed: pid=%d, step=%s, stderr=%s", pid, step_name, stderr[:500])
-            self.cleanup()
-            env_label = label(self.environment)
-            raise WorkerCrashedError(f"Worker for '{env_label}' crashed. stderr: {stderr}") from e
+                raise WorkerCrashedError(
+                    f"Worker for '{env_label}' crashed. stderr: {stderr}", step
+                ) from e
 
-        elapsed = time.monotonic() - t0
-        response = pickle.loads(raw)
-        self.current_step = None
-
-        if not isinstance(response, tuple) or len(response) != 2:
-            env_label = label(self.environment)
-            raise WorkerCrashedError(f"Worker for '{env_label}' sent invalid response")
-
-        status, payload = response
-        if status == "error":
-            logger.warning("Step error: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
-            raise StepExecutionError(
-                payload.get("message", "Unknown error"),
-                remote_traceback=payload.get("traceback"),
-            )
-        if status != "ok":
-            raise WorkerCrashedError(f"Worker sent unknown status: {status!r}")
-
-        logger.debug("Worker execute done: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
-        return payload
+            if kind == "start":
+                # The next step: the timeout starts again.
+                self.current_step = payload
+                if report is not None:
+                    report("start", payload)
+            elif kind == "done":
+                if report is not None:
+                    report("done", payload)
+            elif kind == "ok":
+                self.current_step = None
+                return payload
+            elif kind == "error":
+                self.current_step = None
+                logger.warning("Step error: pid=%d, step=%s", pid, payload.get("step"))
+                raise StepExecutionError(
+                    payload.get("message", "Unknown error"),
+                    remote_traceback=payload.get("traceback"),
+                    step=payload.get("step"),
+                )
+            else:
+                raise WorkerCrashedError(f"Worker sent an unknown reply: {kind!r}", step)
 
     def answer_arrives(self, conn, timeout):
         """Wait for the step's answer; False when *timeout* passes first.
@@ -657,51 +671,56 @@ class WorkerPool:
     def execute(
         self,
         environment,
-        step_path,
+        steps,
         pipeline_data,
-        params,
-        max_workers=1,
         timeout=300.0,
         owner=None,
         files=None,
         started=None,
         order=None,
+        report=None,
     ):
         """
-        Execute a step in a worker subprocess.
+        Run a chain of steps in a worker of *environment*.
 
-        Blocks until a worker is available (respecting per-step concurrency)
-        and the step completes. Callers waiting for the same step are let
-        in by their order key (job_queue.py).
+        Blocks until each step of the chain may run (its ``max_workers``)
+        and a worker is free, then until the chain is done. Callers waiting
+        for the same step are let in by their order key (job_queue.py).
 
         Parameters
         ----------
         environment : str or None
             Conda environment. None = orchestrator's environment.
-        step_path : str
-            Path to the step .py file.
+        steps : list of (str, dict, int)
+            The chain: each step's file, its parameters from the YAML, and
+            how many of it may run at once.
         pipeline_data : dict
-            Data to pass to the step.
-        params : dict
-            Step parameters from YAML.
-        max_workers : int
-            Maximum concurrent instances of this step.
-        timeout : float
-            Seconds to wait for step completion.
+            The data for the first step.
+        timeout : float or None
+            Seconds each step may take.
         owner : object, optional
-            Who the step runs for; :meth:`kill_owner` stops its steps.
+            Who the steps run for; :meth:`kill_owner` stops them.
         files : dict, optional
             How the data goes through folders (see worker_script.py).
         started : callable, optional
-            Called once a worker has taken the step, just before it runs.
-            Until then the step only waits, for its turn or for a worker.
+            Called once a worker has taken the chain, just before it runs.
+            Until then the chain only waits, for its turn or for a worker.
         order : tuple, optional
             The job's order key; without one, the call waits behind every
             keyed one.
+        report : callable, optional
+            Called with each step's start and record (see Worker.execute).
         """
-        gate = self.gate_for(step_path, max_workers)
-        gate.acquire(order)
+        # Each step's own gate, taken in one fixed order so that two chains
+        # that share steps can never hold each other up.
+        gates = [
+            self.gate_for(path, width) for path, width in sorted({(p, w) for p, _, w in steps})
+        ]
+        taken = []
         try:
+            for gate in gates:
+                gate.acquire(order)
+                taken.append(gate)
             while True:
                 pool = self.env_pool_for(environment)
                 try:
@@ -720,16 +739,23 @@ class WorkerPool:
                 with self.pool_lock:
                     refused = owner is not None and owner in self.killed
                 if refused:
-                    raise WorkerCrashedError("Step not started: its pipeline was cancelled")
+                    raise WorkerCrashedError(
+                        "Step not started: its pipeline was cancelled", Path(steps[0][0]).stem
+                    )
                 if started is not None:
                     started()
                 return worker.execute(
-                    step_path, pipeline_data, params, timeout=timeout, files=files
+                    [(path, params) for path, params, _ in steps],
+                    pipeline_data,
+                    timeout=timeout,
+                    files=files,
+                    report=report,
                 )
             finally:
                 pool.release(worker)
         finally:
-            gate.release()
+            for gate in reversed(taken):
+                gate.release()
 
     def env_pool_for(self, environment):
         """Get or create the pool for an environment."""

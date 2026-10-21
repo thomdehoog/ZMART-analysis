@@ -240,7 +240,7 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            result = w.execute(path, {"input": 1}, {"x": 42}, timeout=10)
+            result = w.execute([(path, {"x": 42})], {"input": 1}, timeout=10)
         finally:
             w.shutdown()
         assert result["ran"]
@@ -258,8 +258,8 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            ra = w.execute(path_a, {}, {}, timeout=10)
-            rb = w.execute(path_b, {}, {}, timeout=10)
+            ra = w.execute([(path_a, {})], {}, timeout=10)
+            rb = w.execute([(path_b, {})], {}, timeout=10)
             assert ra["from"] == "a"
             assert rb["from"] == "b"
         finally:
@@ -278,8 +278,8 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            r1 = w.execute(path, {}, {}, timeout=10)
-            r2 = w.execute(path, {}, {}, timeout=10)
+            r1 = w.execute([(path, {})], {}, timeout=10)
+            r2 = w.execute([(path, {})], {}, timeout=10)
             assert r1["n"] == 1
             assert r2["n"] == 2
         finally:
@@ -298,9 +298,9 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            r1 = w.execute(path, {}, {}, timeout=10)
-            r2 = w.execute(path, {}, {}, timeout=10)
-            r3 = w.execute(path, {}, {}, timeout=10)
+            r1 = w.execute([(path, {})], {}, timeout=10)
+            r2 = w.execute([(path, {})], {}, timeout=10)
+            r3 = w.execute([(path, {})], {}, timeout=10)
             assert r1["count"] == 1
             assert r2["count"] == 2
             assert r3["count"] == 3
@@ -349,7 +349,7 @@ class TestWorkerProtocol:
         )
         w = Worker(environment=None)
         try:
-            out = w.execute(sibling, {"input": {"n": 7}}, {})
+            out = w.execute([(sibling, {})], {"input": {"n": 7}})
             assert out["measured"] == 7
             assert out["via"] == "loader_sibling"
         finally:
@@ -373,8 +373,8 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            ra = w.execute(path_a, {}, {}, timeout=10)
-            rb = w.execute(path_b, {}, {}, timeout=10)
+            ra = w.execute([(path_a, {})], {}, timeout=10)
+            rb = w.execute([(path_b, {})], {}, timeout=10)
             assert ra["state_key"] == "a"
             assert rb["state_key"] == "b"
         finally:
@@ -389,8 +389,8 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            r1 = w.execute(path, {}, {}, timeout=10)
-            r2 = w.execute(path, {}, {}, timeout=10)
+            r1 = w.execute([(path, {})], {}, timeout=10)
+            r2 = w.execute([(path, {})], {}, timeout=10)
             assert r1["pid"] == r2["pid"]
         finally:
             w.shutdown()
@@ -404,9 +404,9 @@ class TestWorkerProtocol:
         """)
         w = Worker(environment=None, connect_timeout=10)
         try:
-            r1 = w.execute(path, {}, {}, timeout=10)
+            r1 = w.execute([(path, {})], {}, timeout=10)
             w.shutdown()
-            r2 = w.execute(path, {}, {}, timeout=10)
+            r2 = w.execute([(path, {})], {}, timeout=10)
             assert r1["pid"] != r2["pid"]
         finally:
             w.shutdown()
@@ -423,7 +423,7 @@ class TestWorkerProtocol:
         }
         w = Worker(environment=None, connect_timeout=10)
         try:
-            r = w.execute(path, data, {}, timeout=10)
+            r = w.execute([(path, {})], data, timeout=10)
         finally:
             w.shutdown()
         assert r["tuple"] == (1, 2)
@@ -452,7 +452,7 @@ class TestWorkerErrorPaths:
         """)
         w = Worker(environment=None, connect_timeout=10)
         with pytest.raises(WorkerCrashedError):
-            w.execute(path, {}, {}, timeout=10)
+            w.execute([(path, {})], {}, timeout=10)
         w.shutdown()
 
     def test_timeout_raises_worker_timeout_error(self):
@@ -464,7 +464,7 @@ class TestWorkerErrorPaths:
         """)
         w = Worker(environment=None, connect_timeout=10)
         with pytest.raises(WorkerTimeoutError) as ctx:
-            w.execute(path, {}, {}, timeout=1)
+            w.execute([(path, {})], {}, timeout=1)
         assert "timed out" in str(ctx.value)
         # A slow step is not a user-code exception; keep the types distinct.
         assert not isinstance(ctx.value, StepExecutionError)
@@ -478,7 +478,7 @@ class TestWorkerErrorPaths:
         """)
         w = Worker(environment=None, connect_timeout=10)
         with pytest.raises(StepExecutionError) as ctx:
-            w.execute(path, {}, {}, timeout=10)
+            w.execute([(path, {})], {}, timeout=10)
         assert "test" in str(ctx.value)
         assert "ValueError" in ctx.value.remote_traceback
         w.shutdown()
@@ -632,8 +632,8 @@ class TestPool:
             def run(pd, state, **p): pd["pid"] = os.getpid(); return pd
         """)
         pool = WorkerPool()
-        r1 = pool.execute(None, path, {}, {}, timeout=10)
-        r2 = pool.execute(None, path, {}, {}, timeout=10)
+        r1 = pool.execute(None, [(path, {}, 1)], {}, timeout=10)
+        r2 = pool.execute(None, [(path, {}, 1)], {}, timeout=10)
         assert r1["pid"] == r2["pid"]
         pool.shutdown_all()
 
@@ -644,7 +644,7 @@ class TestPool:
         pool = WorkerPool()
         pool.shutdown_all()
         with pytest.raises(RuntimeError, match="shut down"):
-            pool.execute(None, path, {}, {}, timeout=10)
+            pool.execute(None, [(path, {}, 1)], {}, timeout=10)
 
     def test_error_through_pool(self):
         from zmart_analysis.workers import WorkerPool
@@ -654,7 +654,7 @@ class TestPool:
         """)
         pool = WorkerPool()
         with pytest.raises(StepExecutionError) as ctx:
-            pool.execute(None, path, {}, {}, timeout=10)
+            pool.execute(None, [(path, {}, 1)], {}, timeout=10)
         assert "pool err" in str(ctx.value)
         pool.shutdown_all()
 
@@ -673,7 +673,7 @@ class TestPool:
         results = []
 
         def run_one():
-            r = pool.execute(None, path, {}, {}, max_workers=1, timeout=15)
+            r = pool.execute(None, [(path, {}, 1)], {}, timeout=15)
             results.append(r)
 
         t0 = time.monotonic()
@@ -704,7 +704,7 @@ class TestPool:
         results = []
 
         def run_one():
-            r = pool.execute(None, path, {}, {}, max_workers=4, timeout=15)
+            r = pool.execute(None, [(path, {}, 4)], {}, timeout=15)
             results.append(r)
 
         threads = [threading.Thread(target=run_one) for _ in range(4)]
@@ -950,14 +950,14 @@ class TestEngineConcurrency:
             with pytest.raises(ValueError):
                 e.register("test", yaml, fresh_output())
 
-    def test_a_yaml_max_workers_reaches_the_step_settings(self):
+    def test_a_yaml_max_workers_reaches_the_steps_chain(self):
         _temp_step("def run(pd, state, **p): return pd", name="wide")
         yaml = _temp_yaml("wf:\n  - wide:\n      max_workers: 3")
         from zmart_analysis import Engine
 
         with Engine() as e:
             e.register("test", yaml, fresh_output())
-            assert e.pipelines["test"].step_settings["wide"]["max_workers"] == 3
+            assert e.pipelines["test"].chains[0][0].widths == [3]
 
     def test_many_concurrent_jobs(self):
         _temp_step(
@@ -1703,7 +1703,8 @@ class TestTheBrake:
         w = Worker(environment=None, connect_timeout=10)
         errors = []
         t = threading.Thread(
-            target=_capture_exception, args=(errors, lambda: w.execute(path, {}, {}, timeout=60))
+            target=_capture_exception,
+            args=(errors, lambda: w.execute([(path, {})], {}, timeout=60)),
         )
         t.start()
         pid = _wait_for_file(pid_file)
@@ -1756,7 +1757,7 @@ class TestTheBrake:
         errors = []
         t = threading.Thread(
             target=_capture_exception,
-            args=(errors, lambda: w.execute(path, {}, {}, timeout=None)),
+            args=(errors, lambda: w.execute([(path, {})], {}, timeout=None)),
             daemon=True,
         )
         t.start()
@@ -1788,7 +1789,8 @@ class TestTheBrake:
         try:
             w = Worker(environment="fake-env", connect_timeout=20)
             t = threading.Thread(
-                target=_capture_exception, args=([], lambda: w.execute(path, {}, {}, timeout=60))
+                target=_capture_exception,
+                args=([], lambda: w.execute([(path, {})], {}, timeout=60)),
             )
             t.start()
             grandchild = _wait_for_file(pid_file)
@@ -1862,7 +1864,7 @@ class TestTheBrake:
             errors = []
             t = threading.Thread(
                 target=_capture_exception,
-                args=(errors, lambda: w.execute(path, {}, {}, timeout=60)),
+                args=(errors, lambda: w.execute([(path, {})], {}, timeout=60)),
             )
             t.start()
             time.sleep(0.5)
@@ -1919,7 +1921,7 @@ class TestTheBrake:
             errors = []
             t = threading.Thread(
                 target=_capture_exception,
-                args=(errors, lambda: w.execute(path, {}, {}, timeout=60)),
+                args=(errors, lambda: w.execute([(path, {})], {}, timeout=60)),
             )
             t.start()
             time.sleep(0.3)

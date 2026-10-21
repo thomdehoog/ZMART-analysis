@@ -211,11 +211,12 @@ def test_the_hand_over_files_are_npy_and_intermediate_ones_go(engine_factory):
 
     handover = Path(output) / "analysis" / "p" / ".handover"
     kept = sorted(p.relative_to(handover).as_posix() for p in handover.rglob("*") if p.is_file())
-    # One registration, one job, only its last step's folder left.
+    # One registration, one job, one chain of both steps: a single folder,
+    # named from the chain's first index to its last step.
     assert len({k.split("/")[0] for k in kept}) == 1
     assert [k.split("/", 1)[1] for k in kept] == [
-        "1/1-double_in_place/array_0.npy",
-        "1/1-double_in_place/data.pickle",
+        "1/0-double_in_place/array_0.npy",
+        "1/0-double_in_place/data.pickle",
     ]
 
 

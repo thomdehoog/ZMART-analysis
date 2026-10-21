@@ -11,17 +11,21 @@ Protocol
 1. Parent spawns this script with --port, --authkey
 2. Script connects to parent on localhost:port with authkey
 3. Message loop:
-   - Receive (step_path, pipeline_data, params, files)
-   - Load module at step_path (cached)
-   - Call module.run(pipeline_data, state, **params)
-   - Send ("ok", result) or ("error", {"message": ..., "traceback": ...})
+   - Receive (steps, pipeline_data, files): a chain, the steps
+     [(step_path, params), ...] that run one after another in this call
+   - For each step: send ("start", name); load the module (cached); call
+     module.run(data, state, **params); send ("done", record), the step's
+     times and provenance. Its output is the next step's data, in memory.
+   - Send ("ok", output) after the last step, or ("error", {"message",
+     "traceback", "step"}) when a step raises; the steps after it do not run
 4. Receive None sentinel -> clean exit
 
 Files
 -----
 ``files`` says how the data goes through folders (see handover.py):
 ``load`` names the folder of the step before, ``parts`` the
-``(folder, id, scope)`` of every part a scoped step works over (for a
+``(folder, id, scope)`` of every part a scoped step works over; they are
+for the chain's first step, (for a
 window, ``windows`` holds them by timepoint and ``previous`` the folder of
 its output at the timepoint before), and
 ``save`` the folder to write the output to;
@@ -69,6 +73,7 @@ import pickle
 import platform
 import sys
 import traceback
+from datetime import datetime
 from importlib import metadata
 from multiprocessing.connection import Client
 
@@ -151,12 +156,19 @@ def loaded_package_versions(module_to_dists):
     return dict(sorted(versions.items()))
 
 
-def stamp(result, step_name, env_record, module_to_dists):
-    """Add this step's provenance to its result, when the result is a dict."""
+def provenance_of(env_record, module_to_dists):
+    """Where a step ran: the environment, and the packages loaded by now."""
+    return {**env_record, "packages": loaded_package_versions(module_to_dists)}
+
+
+def stamp(result, provenance):
+    """Add the chain's provenance so far to a step's result, when it is a dict.
+
+    Every step of the chain up to this one, so a step that returns a new
+    dictionary does not lose the provenance of the steps before it.
+    """
     if isinstance(result, dict):
-        record = dict(env_record)
-        record["packages"] = loaded_package_versions(module_to_dists)
-        result.setdefault("provenance", {})[step_name] = record
+        result.setdefault("provenance", {}).update(provenance)
     return result
 
 
@@ -291,41 +303,70 @@ def main():
                 logger.info("Received shutdown sentinel")
                 break
 
-            step_path, pipeline_data, params, files = message
-            step_name = os.path.basename(step_path)
+            steps, pipeline_data, files = message
             request_count += 1
-            logger.info("Request #%d: step=%s (%d bytes)", request_count, step_name, len(raw))
+            logger.info("Request #%d: %d step(s) (%d bytes)", request_count, len(steps), len(raw))
 
-            # Load or reuse cached module
-            if step_path not in module_cache:
-                logger.info("Loading module: %s", step_name)
-                module_cache[step_path] = load_module(step_path)
-            module = module_cache[step_path]
+            def send(reply):
+                conn.send_bytes(pickle.dumps(reply, protocol=PICKLE_PROTOCOL))
 
-            # Get or create per-step state dict
-            if step_path not in state_dicts:
-                state_dicts[step_path] = {}
-            state = state_dicts[step_path]
-
+            data, provenance, step_name = pipeline_data, {}, None
             try:
-                result = run_step(module, pipeline_data, state, params, files)
-                result = stamp(result, os.path.splitext(step_name)[0], env_record, module_to_dists)
-                response = ("ok", finish(result, step_name, files))
+                for index, (step_path, params) in enumerate(steps):
+                    step_name = os.path.splitext(os.path.basename(step_path))[0]
+                    send(("start", step_name))
+                    start = datetime.now().isoformat(timespec="milliseconds")
+
+                    if step_path not in module_cache:
+                        logger.info("Loading module: %s", step_name)
+                        module_cache[step_path] = load_module(step_path)
+                    state = state_dicts.setdefault(step_path, {})
+
+                    # The chain's inputs are for its first step; the steps
+                    # after it get the step before's output, in memory.
+                    given = files if index == 0 else {}
+                    result = run_step(module_cache[step_path], data, state, params, given)
+                    provenance[step_name] = provenance_of(env_record, module_to_dists)
+                    result = stamp(result, provenance)
+
+                    end = datetime.now().isoformat(timespec="milliseconds")
+                    send(
+                        (
+                            "done",
+                            {
+                                "step": step_name,
+                                "start": start,
+                                "end": end,
+                                **provenance[step_name],
+                            },
+                        )
+                    )
+
+                    # Only the last step's output leaves the worker.
+                    last = index == len(steps) - 1
+                    data = finish(
+                        result, step_name, files if last else {"metadata": files.get("metadata")}
+                    )
+                send(("ok", data))
                 logger.info("Request #%d completed", request_count)
             except Exception:
                 tb = traceback.format_exc()
-                logger.error("Request #%d failed:\n%s", request_count, tb)
-                response = (
-                    "error",
-                    {
-                        "message": traceback.format_exception_only(*sys.exc_info()[:2])[0].strip(),
-                        "traceback": tb,
-                    },
+                logger.error("Request #%d failed at %s:\n%s", request_count, step_name, tb)
+                send(
+                    (
+                        "error",
+                        {
+                            "message": traceback.format_exception_only(*sys.exc_info()[:2])[
+                                0
+                            ].strip(),
+                            "traceback": tb,
+                            "step": step_name,
+                        },
+                    )
                 )
 
-            conn.send_bytes(pickle.dumps(response, protocol=PICKLE_PROTOCOL))
             # Nothing of this job stays in memory until the next one.
-            raw = message = pipeline_data = result = response = None
+            raw = message = pipeline_data = data = result = None
     finally:
         conn.close()
         logger.info("Worker exiting: pid=%d, requests=%d", os.getpid(), request_count)

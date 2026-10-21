@@ -63,6 +63,51 @@ class StepConfig:
 
 
 @dataclass
+class Chain:
+    """Consecutive steps of a phase that run as one call to one worker.
+
+    They share an environment and a ``max_workers``; the output of one is
+    handed to the next in memory, and only the chain's last output is
+    written. Each step keeps its own ``max_workers`` (``widths``).
+    """
+
+    steps: list[StepConfig]
+    #: The index in its phase of the chain's first step.
+    first: int
+    environment: str | None
+    widths: list[int]
+
+    @property
+    def last(self):
+        """The name of the chain's last step."""
+        return self.steps[-1].name
+
+
+def width_of(step, step_settings):
+    """How many of *step* may run at once: the pipeline's word, else the file's."""
+    if step.max_workers is not None:
+        return step.max_workers
+    return step_settings[step.name]["max_workers"]
+
+
+def chains_of(steps, step_settings):
+    """A phase's steps, cut into chains wherever the environment or the
+    ``max_workers`` changes. ``max_workers`` is the step's own in the
+    pipeline, else its file's."""
+    chains = []
+    for index, step in enumerate(steps):
+        settings = step_settings[step.name]
+        width = width_of(step, step_settings)
+        last = chains[-1] if chains else None
+        if last and last.environment == settings["environment"] and last.widths[-1] == width:
+            last.steps.append(step)
+            last.widths.append(width)
+        else:
+            chains.append(Chain([step], index, settings["environment"], [width]))
+    return chains
+
+
+@dataclass
 class Phase:
     """A group of sequential steps with an optional scope trigger."""
 
@@ -249,6 +294,8 @@ class PipelineState:
         self.verbose = verbose
         #: The pipeline's top-level key, for the results' metadata.
         self.workflow_name = workflow_name or name
+        #: Per phase, its steps cut into chains (see chains_of).
+        self.chains = [chains_of(phase.steps, step_settings) for phase in phases]
         self.units = Units(phases, levels)
         self.board = Board(name, phases, Path(output) / "analysis" / name, registration)
 

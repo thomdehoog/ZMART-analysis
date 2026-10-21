@@ -39,7 +39,7 @@ from pathlib import Path
 
 from .board import described
 from .job_queue import Order, OrderedThreadPool, deadline_at
-from .pipeline import PipelineState, check_phases, parse_yaml, split_phases
+from .pipeline import PipelineState, check_phases, parse_yaml, split_phases, width_of
 from .units import Stored
 from .workers import WorkerPool
 
@@ -167,18 +167,13 @@ class Engine:
                         if env is not None and env == self.default_env:
                             env = None
                         settings["environment"] = env
-                        if step.max_workers is not None:
-                            settings["max_workers"] = step.max_workers
-                        if (
-                            not isinstance(settings["max_workers"], int)
-                            or settings["max_workers"] < 1
-                        ):
-                            raise ValueError(
-                                f"Step '{step.name}': max_workers must be a "
-                                f"whole number of 1 or more, got "
-                                f"{settings['max_workers']!r}"
-                            )
                         step_settings[step.name] = settings
+                    width = width_of(step, step_settings)
+                    if isinstance(width, bool) or not isinstance(width, int) or width < 1:
+                        raise ValueError(
+                            f"Step '{step.name}': max_workers must be a "
+                            f"whole number of 1 or more, got {width!r}"
+                        )
 
             state = PipelineState(
                 name=name,
@@ -502,17 +497,16 @@ class Engine:
 
         # The first step gets the data as sent; each next one reads the
         # folder the step before wrote.
-        step_name, folder, steps = "unknown", None, []
+        folder, steps = None, []
         try:
-            for index, step in enumerate(phase.steps):
-                step_name = step.name
+            for chain in state.chains[0]:
                 files = {
                     "load": folder,
-                    "save": state.board.step_folder(submission_idx, index, step.name),
+                    "save": state.board.step_folder(submission_idx, chain.first, chain.last),
                 }
-                summary = self.run_step(
+                summary = self.run_chain(
                     state,
-                    step,
+                    chain,
                     None if folder else pipeline_data,
                     submission_idx,
                     files,
@@ -529,6 +523,7 @@ class Engine:
             state.board.job_done(submission_idx, folder, steps)
 
         except Exception as e:
+            step_name = getattr(e, "step", None) or phase.steps[0].name
             failed = (submission_idx, scope)
             state.units.record_failure(failed, step_name, str(e), 0, scope, submission_idx)
             state.job_failed(submission_idx, str(e), step_name, steps)
@@ -723,68 +718,68 @@ class Engine:
         }
         pipeline_data = {"parts": None, "failures": failures, "metadata": metadata}
 
-        # The first step reads its parts from their folders; each next one
-        # reads the folder the step before wrote. Every output keeps the
+        # The first chain reads its parts from their folders; each next one
+        # reads the folder the chain before wrote. Every output keeps the
         # phase's metadata, and the last one gets the lineage.
+        chains = state.chains[close.phase_idx]
         folder = None
-        for index, step in enumerate(phase.steps):
+        for chain in chains:
             files = {
                 "load": folder,
                 **({} if folder else given),
-                "save": state.board.step_folder(close.job, index, step.name),
+                "save": state.board.step_folder(close.job, chain.first, chain.last),
                 "metadata": metadata,
-                "lineage": lineage if index == len(phase.steps) - 1 else None,
+                "lineage": lineage if chain is chains[-1] else None,
             }
-            try:
-                summary = self.run_step(
-                    state,
-                    step,
-                    None if folder else pipeline_data,
-                    close.job,
-                    files,
-                    steps,
-                    close.order,
-                )
-            except Exception as e:
-                e.step = step.name
-                raise
+            summary = self.run_chain(
+                state,
+                chain,
+                None if folder else pipeline_data,
+                close.job,
+                files,
+                steps,
+                close.order,
+            )
             folder = files["save"]
 
         return folder, summary
 
     # -- Steps ---------------------------------------------------------
 
-    def run_step(self, state, step_config, pipeline_data, job, files, steps, order):
-        """Run one step of *job* in a worker.
+    def run_chain(self, state, chain, pipeline_data, job, files, steps, order):
+        """Run a chain of *job* in one call to a worker.
 
-        The board shows the job queued at this step, and running once a
-        worker has taken it. A pipeline being cancelled starts no further
-        step. The step's times and provenance are added to *steps*, for the
-        record. Returns the output's summary.
+        The board shows the job queued at the chain's first step, running
+        once a worker has taken it, and at each step as the worker starts
+        it. A pipeline being cancelled starts no further chain. Each step's
+        record (its times and provenance) is added to *steps* as it ends,
+        for the run record. Returns the output's summary. An error names
+        the step it happened in as ``.step``.
         """
         if state.cancelling:
             raise RuntimeError("cancelled by deregister")
-        state.board.job_at(job, step_config.name)
-        settings = state.step_settings[step_config.name]
-        func_path = state.functions_dir / f"{step_config.name}.py"
+        state.board.job_at(job, chain.steps[0].name)
 
-        start = datetime.now().isoformat(timespec="milliseconds")
-        summary = self.workers.execute(
-            environment=settings["environment"],
-            step_path=str(func_path),
+        def report(kind, value):
+            if kind == "start":
+                state.board.job_step(job, value)
+            else:
+                steps.append(value)
+
+        return self.workers.execute(
+            environment=chain.environment,
+            steps=[
+                (str(state.functions_dir / f"{step.name}.py"), step.params, width)
+                for step, width in zip(chain.steps, chain.widths, strict=True)
+            ],
             pipeline_data=pipeline_data,
-            params=step_config.params,
-            max_workers=settings["max_workers"],
             timeout=self.execution_timeout,
             owner=state,
             files=files,
             started=lambda: state.board.job_running(job),
             order=order,
+            report=report,
         )
-        end = datetime.now().isoformat(timespec="milliseconds")
-        where = summary["provenance"].get(step_config.name, {})
-        steps.append({"step": step_config.name, "start": start, "end": end, **where})
-        return summary
 
     def pipeline_named(self, name):
         """Get a registered pipeline state or raise."""
