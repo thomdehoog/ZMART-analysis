@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 (2026-10-21) -- the two workflows we use
+## 0.5.0rc5 (2026-10-21) -- the two workflows we use
 
 - **`alignment` is now `focus`.** It holds `focus.yaml` (`read_images` ->
   `score_focus`), the pipeline the operator page runs for every point of a
