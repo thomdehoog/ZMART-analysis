@@ -244,12 +244,15 @@ def windows_process_alive(parent_pid, kernel32=None):
         kernel32.WaitForSingleObject.restype = wintypes.DWORD
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.GetLastError.restype = wintypes.DWORD
 
     synchronize = 0x00100000
     wait_timeout = 0x00000102
+    access_denied = 5
     handle = kernel32.OpenProcess(synchronize, False, parent_pid)
     if not handle:
-        return False
+        # Another user's process may not be opened: it exists, so it runs.
+        return kernel32.GetLastError() == access_denied
     try:
         return kernel32.WaitForSingleObject(handle, 0) == wait_timeout
     finally:

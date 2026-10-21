@@ -567,10 +567,14 @@ class TestWorkerErrorPaths:
         from zmart_analysis.worker_script import windows_process_alive
 
         class FakeKernel32:
-            def __init__(self, wait_result, handle=123):
+            def __init__(self, wait_result, handle=123, error=0):
                 self.wait_result = wait_result
                 self.handle = handle
+                self.error = error
                 self.closed = []
+
+            def GetLastError(self):
+                return self.error
 
             def OpenProcess(self, access, inherit, process_id):
                 self.open_args = (access, inherit, process_id)
@@ -599,6 +603,10 @@ class TestWorkerErrorPaths:
         unavailable = FakeKernel32(0x00000102, handle=0)
         assert not windows_process_alive(4321, unavailable)
         assert unavailable.closed == []
+
+        # Another user's process may not be opened: it is there, so alive.
+        refused = FakeKernel32(0x00000102, handle=0, error=5)  # ERROR_ACCESS_DENIED
+        assert windows_process_alive(4321, refused)
 
 
 # ---- Pool ------------------------------------------------------------

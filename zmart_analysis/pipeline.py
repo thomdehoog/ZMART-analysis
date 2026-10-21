@@ -285,6 +285,7 @@ class PipelineState:
         *,
         output,
         registration,
+        handover=None,
     ):
         self.name = name
         self.yaml_path = Path(yaml_path)
@@ -297,7 +298,7 @@ class PipelineState:
         #: Per phase, its steps cut into chains (see chains_of).
         self.chains = [chains_of(phase.steps, step_settings) for phase in phases]
         self.units = Units(phases, levels)
-        self.board = Board(name, phases, Path(output) / "analysis" / name, registration)
+        self.board = Board(name, phases, Path(output) / "analysis" / name, registration, handover)
 
         self.lock = threading.Lock()
         #: Every future this pipeline started, image jobs and scope closes, so

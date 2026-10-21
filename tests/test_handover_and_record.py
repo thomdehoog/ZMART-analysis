@@ -12,6 +12,7 @@ Usage
     python -m pytest tests/test_handover_and_record.py -v
 """
 
+import getpass
 import hashlib
 import json
 import platform
@@ -571,3 +572,37 @@ def test_status_of_every_pipeline_while_one_is_closing(engine_factory):
     engine.deregister("a")
     poller.join()
     assert errors == []
+
+
+def test_a_hand_over_folder_of_its_own_keeps_the_run_folder_clean(engine_factory, tmp_path):
+    """Engine(handover=...): the files between steps go there, not to the run."""
+    output = fresh_output()
+    engine = engine_factory(handover=str(tmp_path))
+    engine.register("p", write_yaml("wf:\n  - make_array:\n  - double_in_place:"), output)
+    wait_for(engine, "p", engine.submit(pipeline="p", data={"k": 1}))
+
+    mine = tmp_path / "zmart-analysis" / getpass.getuser() / "p"
+    kept = sorted(p.relative_to(mine).as_posix() for p in mine.rglob("*") if p.is_file())
+    assert [k.split("/", 1)[1] for k in kept] == [
+        "1/0-double_in_place/array_0.npy",
+        "1/0-double_in_place/data.pickle",
+    ]
+    run = Path(output) / "analysis" / "p"
+    assert sorted(p.name for p in run.iterdir()) == ["pipeline.yaml", "run.jsonl"]
+
+    engine.deregister("p")
+    assert not [p for p in mine.rglob("*") if p.is_file()]
+
+
+def test_the_clean_up_removes_only_registrations_it_can_read(engine_factory, tmp_path):
+    """A shared hand-over folder holds other things too: they stay."""
+    mine = tmp_path / "zmart-analysis" / getpass.getuser() / "p"
+    dead = mine / f"20200101-000000-000000-999999@{socket.gethostname()}"
+    foreign = mine / "not-a-registration"
+    (dead / "1").mkdir(parents=True)
+    (foreign / "keep").mkdir(parents=True)
+    engine_factory(handover=str(tmp_path)).register(
+        "p", write_yaml("wf:\n  - v5_plain:"), fresh_output()
+    )
+    assert not dead.exists()
+    assert foreign.exists()

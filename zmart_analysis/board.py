@@ -34,15 +34,20 @@ be read while the pipeline runs and keeps everything up to a crash.
 
 The hand-over folders
 ---------------------
-One step's output reaches the next through a folder (handover.py). The
-folders of one registration live in ``.handover/<registration>/<job>/``
-under the pipeline's folder and are deleted when the pipeline is
-deregistered; a registration that crashed leaves them, and the next
-registration of the pipeline on the same computer clears them.
+One chain's output reaches the next through a folder (handover.py). The
+folders of one registration live in ``<registration>/<job>/`` under the
+pipeline's hand-over place: ``.handover`` in the pipeline's folder, or,
+with ``Engine(handover=...)``, ``zmart-analysis/<user>/<pipeline>`` in the
+folder named there (a local disk, away from the acquisition's data). They
+are deleted when the pipeline is deregistered; a registration that crashed
+leaves them, and the next registration of the pipeline on the same
+computer clears them. Only folders named as a registration are cleared:
+in a shared folder, anything else stays.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
 import logging
 import os
@@ -69,13 +74,14 @@ def leftover(registration):
     Its name ends in the process and the computer that made it, as
     ``<time>-<pid>@<computer>``: a folder of this process that is no longer
     open, or of a process on this computer that is gone, is left over from
-    a crash. Another computer's is left alone.
+    a crash. Another computer's is left alone, and so is a name that does
+    not read as a registration: it is not ours.
     """
     try:
         rest, host = registration.rsplit("@", 1)
         pid = int(rest.rsplit("-", 1)[1])
     except (IndexError, ValueError):
-        return True
+        return False
     if host != socket.gethostname():
         return False
     if pid == os.getpid():
@@ -138,13 +144,18 @@ class Board:
     has its own.
     """
 
-    def __init__(self, name, phases, folder, registration):
+    def __init__(self, name, phases, folder, registration, handover=None):
         self.name = name
         self.phases = phases
         #: Where everything of this pipeline is written: analysis/<name>/.
         self.folder = Path(folder)
-        #: The files handed from step to step, one folder per registration.
-        self.handover = self.folder / ".handover" / registration
+        #: The files handed from chain to chain, one folder per registration.
+        place = (
+            Path(handover) / "zmart-analysis" / getpass.getuser() / name
+            if handover
+            else self.folder / ".handover"
+        )
+        self.handover = place / registration
         self.record = RunRecord(self.folder / "run.jsonl", registration)
         #: The board outputs handed out and still held by someone, by id.
         self.handed = weakref.WeakValueDictionary()
@@ -169,6 +180,7 @@ class Board:
         """
         LIVE.add(self.handover.name)
         self.folder.mkdir(parents=True, exist_ok=True)
+        self.handover.parent.mkdir(parents=True, exist_ok=True)
         if self.handover.parent.exists():
             for old in self.handover.parent.iterdir():
                 if leftover(old.name):

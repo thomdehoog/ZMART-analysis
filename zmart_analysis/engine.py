@@ -74,10 +74,16 @@ class Engine:
         closes each get a thread pool of this size.
     execution_timeout : float or None
         Seconds one step may run before it is killed (default: 300).
+    handover : str or Path, optional
+        Where the files handed between steps go, under
+        ``zmart-analysis/<user>/<pipeline>/``: a local disk, away from the
+        acquisition's data. Without it they go to ``.handover`` in the
+        pipeline's folder of the run.
     """
 
-    def __init__(self, max_concurrent=8, execution_timeout=300.0):
+    def __init__(self, max_concurrent=8, execution_timeout=300.0, handover=None):
         self.execution_timeout = execution_timeout
+        self.handover = handover
         self.workers = WorkerPool()
         #: The order key of every job (job_queue.py).
         self.order = Order()
@@ -186,6 +192,7 @@ class Engine:
                 workflow_name=workflow_name,
                 output=output,
                 registration=f"{datetime.now():%Y%m%d-%H%M%S-%f}-{os.getpid()}@{socket.gethostname()}",
+                handover=self.handover,
             )
             # Imported here: the package sets its version after importing this module.
             from . import __version__
