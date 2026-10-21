@@ -28,7 +28,8 @@ Architecture
     units.py          which images belong together, and when a unit is complete
     board.py          the job board, the run record and the hand-over folders
     job_queue.py      the order in which waiting jobs start
-    workers.py        the worker processes that run the steps, and their errors
+    workers.py        a worker process that runs the steps, and its errors
+    worker_pool.py    the workers of every environment, and who may use them
     worker_script.py  runs inside a step's conda environment; imports nothing
                       from the engine but handover.py, so it works in any
                       environment

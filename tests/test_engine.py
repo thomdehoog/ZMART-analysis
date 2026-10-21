@@ -68,8 +68,7 @@ from zmart_analysis import (
     WorkerSpawnError,
     WorkerTimeoutError,
 )
-from zmart_analysis.engine import get_step_settings
-from zmart_analysis.pipeline import split_phases
+from zmart_analysis.pipeline import get_step_settings, split_phases
 
 _TEMP_DIR = str(_SESSION_TEMP)
 
@@ -620,7 +619,7 @@ class TestPool:
         width was seen first, so a pipeline that asked for eight got one, or
         the other way round, depending on registration order.
         """
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         pool = WorkerPool()
         try:
@@ -633,7 +632,7 @@ class TestPool:
             pool.shutdown_all(now=True)
 
     def test_per_env_worker_reuse(self):
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         path = _temp_step("""
             import os
@@ -646,7 +645,7 @@ class TestPool:
         pool.shutdown_all()
 
     def test_shutdown_before_use(self):
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         path = _temp_step("def run(pd, state, **p): return pd")
         pool = WorkerPool()
@@ -655,7 +654,7 @@ class TestPool:
             pool.execute(None, [(path, {}, 1)], {}, timeout=10)
 
     def test_error_through_pool(self):
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         path = _temp_step("""
             def run(pd, state, **p): raise ValueError("pool err")
@@ -668,7 +667,7 @@ class TestPool:
 
     def test_semaphore_limits_concurrency(self):
         """max_workers=1 serializes execution of the same step."""
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         path = _temp_step("""
             import time
@@ -698,7 +697,7 @@ class TestPool:
 
     def test_semaphore_allows_parallelism(self):
         """max_workers=4 allows parallel execution."""
-        from zmart_analysis.workers import WorkerPool
+        from zmart_analysis.worker_pool import WorkerPool
 
         path = _temp_step("""
             import time

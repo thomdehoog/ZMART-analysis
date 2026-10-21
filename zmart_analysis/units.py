@@ -78,6 +78,7 @@ signal whose scope leaves out the level it closes.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import defaultdict
 from typing import NamedTuple
@@ -117,6 +118,39 @@ def matches(entry_scope, key):
     if key is None:
         return True
     return all(entry_scope.get(k) == v for k, v in key.items())
+
+
+def lineage_of(stored, failures):
+    """What a scoped result is built from.
+
+    ``submissions`` are the ids of every image job under the unit,
+    ``failed`` every failure under it, and ``provenance`` the distinct
+    record of every step below this one: where it ran, on which Python
+    and packages. One record per step is the norm; two mean the
+    environment changed during the run.
+    """
+    submissions, failed, provenance, seen = [], list(failures), {}, set()
+
+    def add(step, record):
+        # Records are deduplicated on their JSON text.
+        key = (step, json.dumps(record, sort_keys=True, default=str))
+        if key not in seen:
+            seen.add(key)
+            provenance.setdefault(step, []).append(record)
+
+    for item in stored:
+        below = item.summary.get("lineage")
+        if below:
+            submissions += below["submissions"]
+            failed += below["failed"]
+            for step, records in below["provenance"].items():
+                for record in records:
+                    add(step, record)
+        else:
+            submissions.append(item.id)
+        for step, record in item.summary.get("provenance", {}).items():
+            add(step, record)
+    return {"submissions": sorted(submissions), "failed": failed, "provenance": provenance}
 
 
 class Units:

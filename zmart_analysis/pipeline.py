@@ -25,6 +25,8 @@ futures and the ``cancelling`` flag, is kept here.
 
 from __future__ import annotations
 
+import ast
+import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +36,8 @@ import yaml
 from .board import Board
 from .handover import ENGINE_KEYS
 from .units import Units
+
+logger = logging.getLogger(__name__)
 
 #: Names a step cannot have: its output would land on a key the engine uses.
 ENGINE_NAMES = (*ENGINE_KEYS, "parts", "failures", "previous")
@@ -343,3 +347,57 @@ class PipelineState:
             self.board.job_cancelled(job, steps)
         else:
             self.board.job_failed(job, error, step, steps)
+
+
+# -- Step files ----------------------------------------------------------
+
+
+def get_step_settings(step_path: Path) -> dict:
+    """
+    Extract execution settings from a step file without running it.
+
+    Parses the file's AST to read the METADATA dict literal.
+    No module code is executed.
+
+    Returns
+    -------
+    dict
+        - environment : str or None
+            Conda environment name. None means orchestrator's environment.
+        - max_workers : int
+            Maximum parallel workers for this step. Default 1.
+    """
+    metadata = metadata_of(step_path) or {}
+    settings = {
+        "environment": metadata.get("environment", None),
+        "max_workers": metadata.get("max_workers", 1),
+    }
+    logger.debug(
+        "Step settings for %s: environment=%s, max_workers=%d",
+        step_path.name,
+        settings["environment"],
+        settings["max_workers"],
+    )
+    return settings
+
+
+def metadata_of(step_path: Path) -> dict:
+    """Extract the METADATA dict literal from a step file via AST."""
+    with open(step_path) as f:
+        tree = ast.parse(f.read())
+
+    for node in ast.iter_child_nodes(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "METADATA"
+        ):
+            result = ast.literal_eval(node.value)
+            logger.debug(
+                "Extracted METADATA from %s (line %d): %s", step_path.name, node.lineno, result
+            )
+            return result
+
+    logger.debug("No METADATA found in %s, using defaults", step_path.name)
+    return {}

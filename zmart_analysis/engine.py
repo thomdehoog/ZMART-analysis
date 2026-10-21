@@ -24,10 +24,8 @@ be called from different threads.
 
 from __future__ import annotations
 
-import ast
 import concurrent.futures
 import hashlib
-import json
 import logging
 import os
 import socket
@@ -39,9 +37,17 @@ from pathlib import Path
 
 from .board import described
 from .job_queue import Order, OrderedThreadPool, deadline_at
-from .pipeline import PipelineState, check_phases, parse_yaml, split_phases, width_of
-from .units import Stored
-from .workers import WorkerPool
+from .pipeline import (
+    PipelineState,
+    check_phases,
+    get_step_settings,
+    metadata_of,
+    parse_yaml,
+    split_phases,
+    width_of,
+)
+from .units import Stored, lineage_of
+from .worker_pool import WorkerPool
 
 logger = logging.getLogger(__name__)
 
@@ -548,39 +554,6 @@ class Engine:
                 signal = ("position", scope)
                 self.queue_closes(state, [signal], [token], [position_job], submission_idx, order)
 
-    @staticmethod
-    def lineage_of(stored, failures):
-        """What a scoped result is built from.
-
-        ``submissions`` are the ids of every image job under the unit,
-        ``failed`` every failure under it, and ``provenance`` the distinct
-        record of every step below this one: where it ran, on which Python
-        and packages. One record per step is the norm; two mean the
-        environment changed during the run.
-        """
-        submissions, failed, provenance, seen = [], list(failures), {}, set()
-
-        def add(step, record):
-            # Records are deduplicated on their JSON text.
-            key = (step, json.dumps(record, sort_keys=True, default=str))
-            if key not in seen:
-                seen.add(key)
-                provenance.setdefault(step, []).append(record)
-
-        for item in stored:
-            below = item.summary.get("lineage")
-            if below:
-                submissions += below["submissions"]
-                failed += below["failed"]
-                for step, records in below["provenance"].items():
-                    for record in records:
-                        add(step, record)
-            else:
-                submissions.append(item.id)
-            for step, record in item.summary.get("provenance", {}).items():
-                add(step, record)
-        return {"submissions": sorted(submissions), "failed": failed, "provenance": provenance}
-
     def close_unit(self, state, level, scope, submission_idx, job, order):
         """Handle a scope completion signal for scope job *job*.
 
@@ -667,7 +640,7 @@ class Engine:
         # The lineage comes from what was stored, and the worker adds it to
         # the phase's last output, so a step that builds a new dict cannot
         # drop it.
-        lineage = self.lineage_of(stored, failures)
+        lineage = lineage_of(stored, failures)
         steps = []
         try:
             folder, summary = self.run_scoped_phase(close, failures, lineage, steps, given)
@@ -799,54 +772,3 @@ class Engine:
         with self.lock:
             n = len(self.pipelines)
         return f"Engine(pipelines={n}, pool={self.workers!r})"
-
-
-def get_step_settings(step_path: Path) -> dict:
-    """
-    Extract execution settings from a step file without running it.
-
-    Parses the file's AST to read the METADATA dict literal.
-    No module code is executed.
-
-    Returns
-    -------
-    dict
-        - environment : str or None
-            Conda environment name. None means orchestrator's environment.
-        - max_workers : int
-            Maximum parallel workers for this step. Default 1.
-    """
-    metadata = metadata_of(step_path) or {}
-    settings = {
-        "environment": metadata.get("environment", None),
-        "max_workers": metadata.get("max_workers", 1),
-    }
-    logger.debug(
-        "Step settings for %s: environment=%s, max_workers=%d",
-        step_path.name,
-        settings["environment"],
-        settings["max_workers"],
-    )
-    return settings
-
-
-def metadata_of(step_path: Path) -> dict:
-    """Extract the METADATA dict literal from a step file via AST."""
-    with open(step_path) as f:
-        tree = ast.parse(f.read())
-
-    for node in ast.iter_child_nodes(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "METADATA"
-        ):
-            result = ast.literal_eval(node.value)
-            logger.debug(
-                "Extracted METADATA from %s (line %d): %s", step_path.name, node.lineno, result
-            )
-            return result
-
-    logger.debug("No METADATA found in %s, using defaults", step_path.name)
-    return {}
