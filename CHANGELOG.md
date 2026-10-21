@@ -1,8 +1,9 @@
 # Changelog
 
-## 0.5.0rc6 (2026-10-21) -- the two workflows we use
+## 0.5.0rc7 (2026-10-21) -- the two workflows we use
 
-rc5 had everything below except the board fix.
+rc5 had everything below except the board fix and the stop on macOS; rc6
+had all but the stop.
 
 - **`alignment` is now `focus`.** It holds `focus.yaml` (`read_images` ->
   `score_focus`), the pipeline the operator page runs for every point of a
@@ -23,6 +24,11 @@ rc5 had everything below except the board fix.
 - **The board says `running` only while a worker runs the step.** A job that
   waits for a worker, because its step has `max_workers: 1` and another job
   has it, is `queued` at that step. It used to show `running` already.
+- **Stopping at once no longer hangs on macOS.** `shutdown(wait=False)`
+  killed the step, but the caller waiting for its answer was not woken,
+  because macOS does not wake a thread waiting on a pipe that another
+  thread closes. The caller now looks every half second whether its worker
+  was killed.
 - Tests: the priority test holds its first job at a gate until the others are
   queued, so a slow computer no longer runs a low-priority job first. CI also
   runs on `release-candidate`.

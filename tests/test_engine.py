@@ -1519,7 +1519,7 @@ class TestPackageAPI:
     def test_version(self):
         import zmart_analysis
 
-        assert zmart_analysis.__version__ == "0.5.0rc6"
+        assert zmart_analysis.__version__ == "0.5.0rc7"
 
     def test_engine_in_all(self):
         import zmart_analysis
@@ -1604,6 +1604,57 @@ class TestTheBrake:
         t.join(timeout=5)
         assert not t.is_alive(), "the caller blocked in execute() must be released"
         assert not _alive(pid), "the worker process must be gone"
+        assert len(errors) == 1
+        assert isinstance(errors[0], WorkerCrashedError)
+
+    def test_a_caller_whose_pipe_is_closed_under_it_is_released(self):
+        """On macOS a thread waiting on a pipe is not woken when another thread
+        closes it. Seen in CI: shutdown(wait=False) killed the step and closed
+        its pipe, and the caller waited in execute() until the test timed out.
+        The pipe here models that: closing it wakes no one."""
+        from zmart_analysis import WorkerCrashedError
+        from zmart_analysis.workers import Worker
+
+        class AWaitThatClosingDoesNotWake:
+            def __init__(self, conn):
+                self.conn = conn
+                self.closed = False
+
+            def send_bytes(self, data):
+                self.conn.send_bytes(data)
+
+            def poll(self, timeout=None):
+                if self.closed:
+                    raise OSError("handle is closed")
+                if timeout is None:
+                    while True:
+                        time.sleep(0.05)
+                time.sleep(timeout)
+                return False
+
+            def recv_bytes(self):
+                return self.conn.recv_bytes()
+
+            def close(self):
+                self.closed = True
+                self.conn.close()
+
+        pid_file = os.path.join(_TEMP_DIR, f"deaf_{_next_id()}.pid")
+        path = _a_step_that_sleeps(pid_file)
+        w = Worker(environment=None, connect_timeout=10)
+        w.ensure_running()
+        w._conn = AWaitThatClosingDoesNotWake(w._conn)
+        errors = []
+        t = threading.Thread(
+            target=_capture_exception,
+            args=(errors, lambda: w.execute(path, {}, {}, timeout=None)),
+            daemon=True,
+        )
+        t.start()
+        _wait_for_file(pid_file)
+        w.shutdown(now=True)
+        t.join(timeout=5)
+        assert not t.is_alive(), "the caller blocked in execute() must be released"
         assert len(errors) == 1
         assert isinstance(errors[0], WorkerCrashedError)
 

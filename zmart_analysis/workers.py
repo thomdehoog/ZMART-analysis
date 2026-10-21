@@ -74,6 +74,10 @@ WORKER_SCRIPT = ENGINE_DIR / "worker_script.py"
 #: the old protocol 2.
 PICKLE_PROTOCOL = 5
 
+#: How long a caller waits on a worker's pipe before it looks whether the
+#: worker was killed meanwhile (see Worker.answer_arrives).
+WAIT_TURN_S = 0.5
+
 # Maximum bytes of stderr to retain for crash diagnostics.
 _STDERR_BUFFER = 8192
 
@@ -364,15 +368,18 @@ class Worker:
             env_label = _label(self.environment)
             raise WorkerCrashedError(f"Worker for '{env_label}' lost connection: {e}") from e
 
+        # The connection is held here: a kill from another thread drops
+        # self._conn while this one still waits on it.
+        conn = self._conn
         try:
-            if not self._conn.poll(timeout=timeout):
+            if not self.answer_arrives(conn, timeout):
                 logger.error(
                     "Worker timed out: pid=%d, step=%s, timeout=%.0fs", pid, step_name, timeout
                 )
                 self._cleanup()
                 env_label = _label(self.environment)
                 raise WorkerTimeoutError(f"Worker for '{env_label}' timed out after {timeout}s")
-            raw = self._conn.recv_bytes()
+            raw = conn.recv_bytes()
         except (EOFError, ConnectionResetError, OSError) as e:
             stderr = self._stderr_drainer.get_output() if self._stderr_drainer else ""
             logger.error("Worker crashed: pid=%d, step=%s, stderr=%s", pid, step_name, stderr[:500])
@@ -400,6 +407,26 @@ class Worker:
 
         logger.debug("Worker execute done: pid=%d, step=%s, elapsed=%.2fs", pid, step_name, elapsed)
         return payload
+
+    def answer_arrives(self, conn, timeout):
+        """Wait for the step's answer; False when *timeout* passes first.
+
+        Waits in short turns and looks between them whether the worker was
+        killed. On macOS a thread waiting on a pipe is not woken when another
+        thread closes it, so a kill alone would leave this caller waiting.
+        A killed worker raises OSError here, as a broken pipe does.
+        """
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            turn = WAIT_TURN_S
+            if deadline is not None:
+                turn = min(turn, max(0.0, deadline - time.monotonic()))
+            if conn.poll(turn):
+                return True
+            if self._closed:
+                raise OSError("the worker was killed")
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
 
     def is_alive(self):
         """Check if the worker process is still running."""
