@@ -66,7 +66,7 @@ GATED = """
 # Adds up the values of the images of one unit.
 TOTAL = """
     def run(pd, state, **p):
-        return {"total": sum(r["gated"]["value"] for r in pd["results"])}
+        return {"total": sum(part["output"]["gated"]["value"] for part in pd["parts"])}
 """
 
 GATED_WITH_VALUE = """

@@ -1273,7 +1273,7 @@ class TestEngineStatus:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["tiles"] = sorted(r["tile"] for r in pd["results"])
+                pd["tiles"] = sorted(part["output"]["tile"] for part in pd["parts"])
                 return pd
         """,
             name="drift_stitch",
@@ -1485,7 +1485,7 @@ class TestEngineDeadline:
             """
             import os, time
             def run(pd, state, **p):
-                given = pd["results"][0]["input"]
+                given = pd["parts"][0]["input"]
                 gate = given.get("gate")
                 while gate and not os.path.exists(gate):
                     time.sleep(0.01)
@@ -1583,7 +1583,7 @@ class TestEngineDeadline:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["total"] = sum(item["value"] for item in pd["results"])
+                pd["total"] = sum(part["output"]["value"] for part in pd["parts"])
                 return pd
         """,
             name="close_collect",

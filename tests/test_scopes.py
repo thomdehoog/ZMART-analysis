@@ -52,7 +52,8 @@ UNIT = """
 
     def run(pd, state, **p):
         meta = pd["metadata"]
-        values = [r.get("value", r.get("total")) for r in pd["results"]]
+        outputs = [part["output"] for part in pd["parts"]]
+        values = [output.get("value", output.get("total")) for output in outputs]
         if 666 in values:
             raise ValueError("unit failed")
         level = meta["scope_level"]
@@ -64,7 +65,6 @@ UNIT = """
             "level": level,
             "unit": {k: meta["scope"][k] for k in wider if k in meta["scope"]},
             "engine_unit": meta["unit"],
-            "inputs_provenance": [sorted(r.get("provenance", {})) for r in pd["results"]],
         }
 """
 
@@ -759,8 +759,8 @@ def test_a_failed_compartment_reaches_its_carrier(pipeline):
     assert failed["step"] == "unit"
     assert failed["scope"] == {"carrier": 1, "compartment": 2}
     assert "unit failed" in failed["error"]
-    # The carrier was told: its lineage names the failed step and its close.
-    assert [(f["step"], f["submission_idx"]) for f in carrier["lineage"]["failed"]] == [("unit", 3)]
+    # The carrier was told: its lineage names the failed step and its job.
+    assert [(f["step"], f["id"]) for f in carrier["lineage"]["failed"]] == [("unit", 4)]
 
 
 def test_a_carrier_of_failed_compartments_still_runs(pipeline):
@@ -778,8 +778,8 @@ def test_a_carrier_of_failed_compartments_still_runs(pipeline):
 
 def test_a_failure_names_its_step_job_and_scope(pipeline):
     """On the board a failed tile is its own job; a failed unit step is the
-    scope job of the unit it closed. Phase and submission are what the
-    lineage records add, see test_lineage_lists_a_failed_tile_and_a_failed_compartment."""
+    scope job of the unit it closed. The lineage's failures carry the same
+    ids, see test_lineage_lists_a_failed_tile_and_a_failed_compartment."""
     with Engine() as e:
         e.register("p", pipeline("compartment"), fresh_output())
         e.submit("p", {"fail": True}, scope={"compartment": 1})  # job 1
@@ -844,8 +844,9 @@ def test_every_level_records_its_own_step_and_scope(pipeline):
         else:
             assert set(r["provenance"]) == {"unit"}
             assert r["metadata"].get("scope_level") == r["level"]
+    # Where the steps below ran is in the lineage, not in what a step receives.
     compartment = by_unit(results, "compartment")[(("carrier", 1), ("compartment", 1))]
-    assert compartment["inputs_provenance"] == [["tile"], ["tile"]]
+    assert set(compartment["lineage"]["provenance"]) == {"tile"}
 
 
 def test_a_carrier_can_be_traced_back_to_its_tiles(pipeline):
@@ -910,10 +911,8 @@ def test_lineage_lists_a_failed_tile_and_a_failed_compartment(pipeline):
         results = scoped(e, 2)
 
     carrier = by_unit(results, "carrier")[(("carrier", 1),)]
-    failed = sorted(
-        (f["step"], f["phase"], f["submission_idx"]) for f in carrier["lineage"]["failed"]
-    )
-    assert failed == [("tile", 0, 1), ("unit", 1, 4)]
+    failed = sorted((f["step"], f["id"]) for f in carrier["lineage"]["failed"])
+    assert failed == [("tile", 1), ("unit", 5)]
     assert carrier["lineage"]["submissions"] == [2]
 
 
@@ -938,7 +937,7 @@ class TestEngineScopes:
             import time
             def run(pd, state, **p):
                 time.sleep(0.2)   # a slow compartment, so a carrier signal could overtake it
-                return {"compartment_sum": sum(r["value"] for r in pd["results"]),
+                return {"compartment_sum": sum(part["output"]["value"] for part in pd["parts"]),
                         "compartment": pd["metadata"]["scope"]["compartment"]}
         """,
             name="carriers_compartment",
@@ -946,8 +945,8 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                return {"carrier_sum": sum(r["compartment_sum"] for r in pd["results"]),
-                        "compartments": sorted(r["compartment"] for r in pd["results"]),
+                return {"carrier_sum": sum(part["output"]["compartment_sum"] for part in pd["parts"]),
+                        "compartments": sorted(part["output"]["compartment"] for part in pd["parts"]),
                         "carrier": pd["metadata"]["scope"]["carrier"]}
         """,
             name="carriers_carrier",
@@ -1004,7 +1003,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                tiles = [r["tile"] for r in pd["results"]]
+                tiles = [part["output"]["tile"] for part in pd["parts"]]
                 pd["tiles"] = sorted(tiles)
                 return pd
         """,
@@ -1046,7 +1045,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["order"] = [r["val"] for r in pd["results"]]
+                pd["order"] = [part["output"]["val"] for part in pd["parts"]]
                 return pd
         """,
             name="ord_collect",
@@ -1083,7 +1082,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["vals"] = sorted([r["val"] for r in pd["results"]])
+                pd["vals"] = sorted([part["output"]["val"] for part in pd["parts"]])
                 return pd
         """,
             name="mg_collect",
@@ -1125,7 +1124,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["group_vals"] = [r["v"] for r in pd["results"]]
+                pd["group_vals"] = [part["output"]["v"] for part in pd["parts"]]
                 return pd
         """,
             name="cl_group",
@@ -1133,8 +1132,8 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["all_vals"] = [r.get("group_vals", [])
-                                   for r in pd["results"]]
+                pd["all_vals"] = [part["output"].get("group_vals", [])
+                                  for part in pd["parts"]]
                 return pd
         """,
             name="cl_all",
@@ -1171,7 +1170,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["total"] = sum(r["v"] for r in pd["results"])
+                pd["total"] = sum(part["output"]["v"] for part in pd["parts"])
                 return pd
         """,
             name="al_sum",
@@ -1211,7 +1210,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["n_results"] = len(pd["results"])
+                pd["n_results"] = len(pd["parts"])
                 pd["n_failures"] = len(pd["failures"])
                 pd["failure_steps"] = [f.get("step") for f in pd["failures"]]
                 pd["failure_errors"] = [f.get("error") for f in pd["failures"]]
@@ -1257,7 +1256,7 @@ class TestEngineScopes:
         _temp_step(
             """
             def run(pd, state, **p):
-                pd["n_results"] = len(pd["results"])
+                pd["n_results"] = len(pd["parts"])
                 pd["failure_errors"] = [f["error"] for f in pd["failures"]]
                 return pd
         """,

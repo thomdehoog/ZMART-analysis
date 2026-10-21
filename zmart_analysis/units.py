@@ -42,17 +42,29 @@ submitted into it until it is closed; a later image opens it again. Which
 levels are narrower comes from the pipeline's ``levels`` (widest first, the
 experiment above all), or else from the order of its scoped steps.
 
+Order and identity
+------------------
+What is kept for the next phase is a ``Stored``: the folder of the output,
+the job that made it and the scope it is from (an image's scope, or the
+unit a scope job closed), and the summary its lineage is built from. The
+order it is collected in is the submit it came with: for a unit, the
+submit that closed it. That is not the scope job's id, which a submit hands
+out after its image's, so a carrier closed by the same submit as its last
+compartment still collects that compartment.
+
 Up the levels
 -------------
 A scoped step receives the previous phase's failures of its unit, and what
-a narrower level never closed, as failures too. ``ScopeError`` is raised by
-a close signal whose scope leaves out the level it closes.
+a narrower level never closed, as failures too, each as
+``{"id", "scope", "step", "error"}``. ``ScopeError`` is raised by a close
+signal whose scope leaves out the level it closes.
 """
 
 from __future__ import annotations
 
 import threading
 from collections import defaultdict
+from typing import NamedTuple
 
 
 class ScopeError(Exception):
@@ -60,6 +72,23 @@ class ScopeError(Exception):
 
     Raised by ``Engine.submit``; see ``Units.check_complete``.
     """
+
+
+class Stored(NamedTuple):
+    """A phase's output, kept for the next phase."""
+
+    folder: str
+    #: The job that made it, as on the board.
+    id: int
+    #: Where it is from: an image's scope, or the unit a scope job closed.
+    scope: dict
+    #: What its lineage is built from (handover.summary_of).
+    summary: dict
+
+
+def given(failure):
+    """A failure as a scoped step receives it: which job, where, which step, why."""
+    return {key: failure[key] for key in ("id", "scope", "step", "error")}
 
 
 def matches(entry_scope, key):
@@ -92,8 +121,9 @@ class Units:
         #: The image jobs: [(future, scope, submission_idx)].
         self.entries = []
         #: Results waiting for the next phase: phase_idx -> [(submission_idx,
-        #: scope, result)]. For phase 0 the index is the tile's own submit;
-        #: for a scoped phase it is the submit that closed the unit.
+        #: scope, Stored)]. For phase 0 the index and scope are the image's
+        #: own; for a scoped phase they are those of the submit that closed
+        #: the unit (see "Order and identity").
         self.phase_results = defaultdict(list)
         #: Scoped phases still running: phase_idx -> [(scope, idx, Event)].
         #: A later phase waits on the ones of its unit that were signalled
@@ -236,34 +266,40 @@ class Units:
 
     # -- Results and failures --------------------------------------------
 
-    def store_result(self, phase_idx, result, scope, submission_idx):
-        """Keep a phase's result, with its scope and the submit that made or
-        closed it, for the next phase."""
+    def store_result(self, phase_idx, stored, scope, submission_idx):
+        """Keep a phase's output for the next phase, under the scope and the
+        submit it is collected by."""
         with self.lock:
-            self.phase_results[phase_idx].append((submission_idx, dict(scope), result))
+            self.phase_results[phase_idx].append((submission_idx, dict(scope), stored))
 
-    def record_failure(self, scope, step_name, error_msg, phase, submission_idx):
-        """Record a failed step for the lineage of the scoped steps above it.
-        ``phase`` is the phase it failed in and ``submission_idx`` the tile,
-        or the submit that closed the unit."""
+    def record_failure(self, failed, step_name, error_msg, phase, scope, submission_idx):
+        """Record a failed job for the scoped steps above it.
+
+        *failed* is the job as on the board, ``(id, scope)``: an image, or a
+        scope job and its unit. *phase* is the phase it failed in; *scope*
+        and *submission_idx* are what it is collected by, as for a result.
+        """
+        job, failed_scope = failed
         with self.lock:
             self.failures.append(
                 {
-                    "scope": scope,
+                    "id": job,
+                    "scope": dict(failed_scope),
                     "step": step_name,
                     "error": error_msg,
                     "phase": phase,
+                    "match": dict(scope),
                     "submission_idx": submission_idx,
                 }
             )
 
     def collect(self, phase_idx, unit, before):
-        """The previous phase's results and failures for *unit*, from submits
+        """The previous phase's outputs and failures for *unit*, from submits
         up to and including *before*, taken out of the store.
 
         Waits first for the previous phase's runs of this unit, when that
-        phase is scoped. Returns (results, failures), results in submission
-        order.
+        phase is scoped. Returns (stored, failures): the ``Stored`` outputs
+        in submission order, and the failures as a step receives them.
         """
         prev_idx = phase_idx - 1
 
@@ -280,9 +316,9 @@ class Units:
                     remaining.append(entry)
             self.phase_results[prev_idx] = remaining
             matching.sort(key=lambda x: x[0])
-            results = [r for _, r in matching]
-            failures = self.take_failures(prev_idx, unit, before)
-            return results, failures
+            stored = [item for _, item in matching]
+            failures = [given(f) for f in self.take_failures(prev_idx, unit, before)]
+            return stored, failures
 
     def held_for(self, phase_idx, unit, before):
         """What *unit* still holds from every phase before the one being
@@ -295,26 +331,24 @@ class Units:
             for k in range(phase_idx - 1):
                 # Phase k's results wait for phase k+1's level to close.
                 not_closed = self.phases[k + 1].scope
-                for idx, entry_scope, _ in self.phase_results[k]:
+                for idx, entry_scope, stored in self.phase_results[k]:
                     if idx <= before and matches(entry_scope, unit):
-                        held.append(
-                            {
-                                "scope": entry_scope,
-                                "step": "engine",
-                                "error": f"{not_closed} not closed",
-                                "phase": k,
-                                "submission_idx": idx,
-                            }
-                        )
+                        note = {
+                            "id": stored.id,
+                            "scope": stored.scope,
+                            "step": "engine",
+                            "error": f"{not_closed} not closed",
+                        }
+                        held.append((idx, note))
                 held += [
-                    f
+                    (f["submission_idx"], given(f))
                     for f in self.failures
                     if f["phase"] == k
                     and f["submission_idx"] <= before
-                    and matches(f["scope"], unit)
+                    and matches(f["match"], unit)
                 ]
-        held.sort(key=lambda f: f["submission_idx"])
-        return held
+        held.sort(key=lambda pair: pair[0])
+        return [note for _, note in held]
 
     def take_failures(self, phase_idx, unit, before):
         """Remove and return the failures of phase *phase_idx* that belong
@@ -324,7 +358,7 @@ class Units:
             if (
                 f["phase"] == phase_idx
                 and f["submission_idx"] <= before
-                and matches(f["scope"], unit)
+                and matches(f["match"], unit)
             ):
                 taken.append(f)
             else:

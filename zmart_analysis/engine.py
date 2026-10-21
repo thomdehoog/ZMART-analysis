@@ -39,6 +39,7 @@ from pathlib import Path
 from .board import described
 from .job_queue import Order, OrderedThreadPool, deadline_at
 from .pipeline import PipelineState, parse_yaml, split_phases
+from .units import Stored
 from .workers import WorkerPool
 
 logger = logging.getLogger(__name__)
@@ -486,12 +487,14 @@ class Engine:
 
             # Store result for scope collection if next phase is scoped
             if len(state.phases) > 1 and state.phases[1].scope is not None:
-                state.units.store_result(0, (folder, summary), scope, submission_idx)
+                stored = Stored(folder, submission_idx, scope, summary)
+                state.units.store_result(0, stored, scope, submission_idx)
 
             state.board.job_done(submission_idx, folder, steps)
 
         except Exception as e:
-            state.units.record_failure(scope, step_name, str(e), 0, submission_idx)
+            failed = (submission_idx, scope)
+            state.units.record_failure(failed, step_name, str(e), 0, scope, submission_idx)
             state.job_failed(submission_idx, str(e), step_name, steps)
             logger.error(
                 "Phase 0 failed in '%s' (submission %d, step %s): %s",
@@ -503,14 +506,14 @@ class Engine:
             raise
 
     @staticmethod
-    def lineage_of(results, failures):
+    def lineage_of(stored, failures):
         """What a scoped result is built from.
 
-        ``submissions`` are the indices of every tile under the unit,
-        ``failed`` every failure record under it, and ``provenance`` the
-        distinct record of every step below this one: where it ran, on
-        which Python and packages. One record per step is the norm; two
-        mean the environment changed during the run.
+        ``submissions`` are the ids of every image job under the unit,
+        ``failed`` every failure under it, and ``provenance`` the distinct
+        record of every step below this one: where it ran, on which Python
+        and packages. One record per step is the norm; two mean the
+        environment changed during the run.
         """
         submissions, failed, provenance, seen = [], list(failures), {}, set()
 
@@ -521,8 +524,8 @@ class Engine:
                 seen.add(key)
                 provenance.setdefault(step, []).append(record)
 
-        for r in results:
-            below = r.get("lineage")
+        for item in stored:
+            below = item.summary.get("lineage")
             if below:
                 submissions += below["submissions"]
                 failed += below["failed"]
@@ -530,10 +533,8 @@ class Engine:
                     for record in records:
                         add(step, record)
             else:
-                idx = r.get("metadata", {}).get("submission_idx")
-                if idx is not None:
-                    submissions.append(idx)
-            for step, record in r.get("provenance", {}).items():
+                submissions.append(item.id)
+            for step, record in item.summary.get("provenance", {}).items():
                 add(step, record)
         return {"submissions": sorted(submissions), "failed": failed, "provenance": provenance}
 
@@ -560,34 +561,35 @@ class Engine:
             except Exception:
                 pass  # Failures already recorded by Phase 0 handler
 
-        # Collect results from previous phase, and what a narrower level
+        # Collect the previous phase's outputs, and what a narrower level
         # never closed
-        results, failures = state.units.collect(phase_idx, unit, submission_idx)
+        stored, failures = state.units.collect(phase_idx, unit, submission_idx)
         failures += state.units.held_for(phase_idx, unit, submission_idx)
 
         if state.cancelling:
             state.board.job_cancelled(job)
             return
 
-        if not results and not failures:
-            logger.warning("No results for scope '%s' (unit=%s) in '%s'", level, unit, state.name)
+        if not stored and not failures:
+            logger.warning(
+                "Nothing to close for scope '%s' (unit=%s) in '%s'", level, unit, state.name
+            )
             state.job_failed(job, f"no images in this {level}")
             return
 
         # Clean up consumed job entries
         state.units.forget_entries(unit, submission_idx)
 
-        # Execute the scoped phase. Each result is a (folder, summary) pair;
-        # the lineage comes from the summaries, and the worker adds it to
+        # The lineage comes from what was stored, and the worker adds it to
         # the phase's last output, so a step that builds a new dict cannot
         # drop it.
-        lineage = self.lineage_of([summary for _, summary in results], failures)
+        lineage = self.lineage_of(stored, failures)
         steps = []
         try:
             folder, summary = self.run_scoped_phase(
                 state,
                 phase_idx,
-                results,
+                stored,
                 failures,
                 scope,
                 level,
@@ -601,13 +603,15 @@ class Engine:
             # Store for next phase if there is one
             next_phase = phase_idx + 1
             if next_phase < len(state.phases):
-                state.units.store_result(phase_idx, (folder, summary), scope, submission_idx)
+                done = Stored(folder, job, unit or {}, summary)
+                state.units.store_result(phase_idx, done, scope, submission_idx)
 
             state.board.job_done(job, folder, steps, jobs=lineage["submissions"])
 
         except Exception as e:
             step_name = getattr(e, "step", None)
-            state.units.record_failure(scope, step_name, str(e), phase_idx, submission_idx)
+            failed = (job, unit or {})
+            state.units.record_failure(failed, step_name, str(e), phase_idx, scope, submission_idx)
             state.job_failed(job, str(e), step_name, steps)
             logger.error(
                 "Phase %d failed in '%s' (submission %d, step %s): %s",
@@ -622,7 +626,7 @@ class Engine:
         self,
         state,
         phase_idx,
-        accumulated_results,
+        stored,
         failures,
         scope,
         scope_level,
@@ -632,7 +636,7 @@ class Engine:
         steps,
         order,
     ):
-        """Execute a scoped phase over the folders of its unit's results.
+        """Execute a scoped phase over the parts of its unit.
         ``unit`` is the unit being closed, widest level first, ``{}`` for
         everything. An exception from a step carries the step's name as
         ``.step``. Returns the last step's folder and summary."""
@@ -647,21 +651,21 @@ class Engine:
             "scope_level": scope_level,
             "scope": scope,
             "unit": unit,
-            "n_accumulated": len(accumulated_results),
+            "n_accumulated": len(stored),
             "n_failures": len(failures),
             "verbose": state.verbose,
             "output": str(state.board.folder),
         }
-        pipeline_data = {"results": None, "failures": failures, "metadata": metadata}
+        pipeline_data = {"parts": None, "failures": failures, "metadata": metadata}
 
-        # The first step reads the results from their folders; each next one
+        # The first step reads its parts from their folders; each next one
         # reads the folder the step before wrote. Every output keeps the
         # phase's metadata, and the last one gets the lineage.
         folder = None
         for index, step in enumerate(phase.steps):
             files = {
                 "load": folder,
-                "results": None if folder else [path for path, _ in accumulated_results],
+                "parts": None if folder else [item[:3] for item in stored],
                 "save": state.board.step_folder(job, index, step.name),
                 "metadata": metadata,
                 "lineage": lineage if index == len(phase.steps) - 1 else None,

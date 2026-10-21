@@ -74,8 +74,9 @@ TILE = """
 # Over a unit: what it received, in order, and how many arrays were kept.
 COUNT = """
     def run(pd, state, **p):
-        sums = [float(r["tile"]["pixels"].sum()) for r in pd["results"]]
-        return {"n": [r["tile"]["n"] for r in pd["results"]], "sums": sums,
+        tiles = [part["output"]["tile"] for part in pd["parts"]]
+        sums = [float(tile["pixels"].sum()) for tile in tiles]
+        return {"n": [tile["n"] for tile in tiles], "sums": sums,
                 "kept": pd["metadata"]["output"]}
 """
 
@@ -90,8 +91,8 @@ OWN_CLASS = """
         return pd
 """
 
-# A scoped step that hands its results on unchanged.
-PASS_RESULTS = """
+# A scoped step that hands its parts on unchanged.
+PASS_PARTS = """
     def run(pd, state, **p):
         return pd
 """
@@ -118,7 +119,7 @@ SLOW = """
 def steps():
     for name, code in {
         "own_class": OWN_CLASS,
-        "pass_results": PASS_RESULTS,
+        "pass_parts": PASS_PARTS,
         "masked": MASKED,
         "slow": SLOW,
         "make_array": MAKE_ARRAY,
@@ -492,17 +493,17 @@ def test_an_output_the_engine_cannot_read_does_not_break_deregister(engine_facto
     assert not list((Path(output) / "analysis" / "p" / ".handover").iterdir())
 
 
-def test_results_handed_on_by_a_scoped_step_stay_readable(engine_factory):
+def test_parts_handed_on_by_a_scoped_step_stay_readable(engine_factory):
     engine = engine_factory()
     engine.register(
-        "p", write_yaml("wf:\n  - v5_tile:\n  - pass_results:\n      scope: group"), fresh_output()
+        "p", write_yaml("wf:\n  - v5_tile:\n  - pass_parts:\n      scope: group"), fresh_output()
     )
     engine.submit(pipeline="p", data={"n": 4}, scope={"group": 1}, complete="group")
     entry = wait_for(engine, "p", 2)
     engine.deregister("p")
 
-    results = entry["output"]["results"]
-    assert isinstance(results, list) and results[0]["tile"]["pixels"].sum() == 40_000
+    parts = entry["output"]["parts"]
+    assert isinstance(parts, list) and parts[0]["output"]["tile"]["pixels"].sum() == 40_000
 
 
 def test_a_masked_array_reaches_the_board_as_it_was(engine_factory):

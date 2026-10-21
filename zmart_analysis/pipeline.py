@@ -27,7 +27,11 @@ from pathlib import Path
 import yaml
 
 from .board import Board
+from .handover import ENGINE_KEYS
 from .units import Units
+
+#: Names a step cannot have: its output would land on a key the engine uses.
+ENGINE_NAMES = (*ENGINE_KEYS, "parts", "failures", "previous")
 
 # -- Data structures ---------------------------------------------------
 
@@ -122,6 +126,11 @@ def split_phases(steps_config):
                 "environment."
             )
         max_workers = raw_params.pop("max_workers", None)
+        if name in ENGINE_NAMES:
+            raise ValueError(
+                f"A step is named {name!r}, a key the engine uses in what it hands "
+                f"a step ({', '.join(ENGINE_NAMES)}); give the step another name."
+            )
 
         if scope is not None:
             if current_steps:
