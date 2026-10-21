@@ -1,8 +1,9 @@
 # ZMART Analysis 0.6 — scopes over time, parts, and a cheaper hand-over
 
 Status: PLAN, not built. Written 2026-10-21 from the engine at 0.5.0rc7
-(ZMB `release-candidate`, 8926aa6). Decisions D1–D5 settled with Thom the
-same day. Revised after review A (12 findings, all taken in; see the end).
+(ZMB `release-candidate`, 8926aa6). Decisions D1–D6 settled with Thom the
+same day. Revised after review A (12 findings) and review B (14 findings),
+all taken in; see the end.
 
 ## Goal
 
@@ -203,13 +204,23 @@ They do not come from the stored dictionaries (a per-image step that
 returns a new dictionary drops `metadata`; a unit's stored metadata has
 no job id). The engine knows them and hands them over:
 
-- `store_phase0_result` and `store_phase_result` keep `(folder, id,
-  scope)`: for an image the job id and the submit's scope; for a unit the
-  **scope job's id** (today the closing image's index is stored) and the
-  **unit** (today the closing image's whole scope).
-- `files["results"]` becomes a list of these triples, and the worker's
-  `parts` sequence reads each folder when the step reaches it and builds
-  the part from the triple and the folder.
+- **Order and identity are kept apart.** Every collect, hold and wait
+  today filters by "submitted up to the closing image" (`idx <= before`),
+  and the scope jobs of a submit are numbered after its image. So the
+  number used for that order stays the closing submit's index, and the
+  part's identity is stored beside it: each stored result is
+  `(order, match_scope, (folder, id, part_scope))`. For an image `id` is
+  its job and `part_scope` its scope; for a unit `id` is the **scope
+  job** and `part_scope` the **unit**. (Storing the scope job's id as the
+  order would make a well drop out of its own carrier when one submit
+  completes both.)
+- Failures likewise keep `submission_idx` for the order and add `id` for
+  the part.
+- `files["results"]` becomes a list of `(folder, id, part_scope)`, and the
+  worker's `parts` sequence reads each folder when the step reaches it and
+  builds the part. A scoped step that hands its input on in what it
+  returns is stored with the same triples (the `RESULTS` marker in
+  `handover.py`) and reads back as parts on the board.
 
 ### What a step receives and returns
 
@@ -234,7 +245,9 @@ no job id). The engine knows them and hands them over:
   `submissions` stay.
 - **Step names the engine uses are refused at register:** `input`,
   `metadata`, `provenance`, `lineage`, `parts`, `failures`, `previous`.
-  A step of that name would overwrite the engine's key.
+  A step of that name would overwrite the engine's key. A key of those
+  names inside what a step returns is the engine's: it is not part of the
+  next part's `output`.
 - The one check stays: a step that returns anything but a dictionary
   fails with a message that says a dictionary was expected.
 
@@ -258,20 +271,33 @@ share, busy with the images themselves. A 100-plane, 4-channel z-stack is
 about 3.2 GB in uint16; a four-step pipeline writes and reads it again at
 every step.
 
-The rule: **memory inside a worker, fast local disk between workers, the
-run folder only for what is kept.** It is not decided by measuring; the
-gain is measured after it is built, to state it in the CHANGELOG.
+The rule: **memory inside a worker, a disk of your choice between
+workers, the run folder only for what is kept.** It is not decided by
+measuring; the gain is measured after it is built, to state it in the
+CHANGELOG.
 
-### Steps that run together
+### Steps that run together: a chain
 
-- **A chain** is a run of consecutive steps in one phase with the same
-  environment **and** the same `max_workers`. A chain is one call to one
-  worker: the worker runs its steps in order and passes the dictionary
-  from one to the next in memory. Only the chain's last output is
+- **A chain** is a run of consecutive steps in one phase whose resolved
+  settings (the step file's environment and `max_workers`, after the
+  pipeline's override) are the same. Chains are built in `register`,
+  where those settings are known, per occurrence of a step in the
+  pipeline (a step listed twice may sit in two different chains).
+- A chain is **one call to one worker**: the worker runs its steps in
+  order and passes the dictionary from one to the next in memory. Every
+  middle step's output still goes through `finish` (the dictionary check,
+  the phase's `metadata` for the next step), without the write; `lineage`
+  is added to the last output only. Only the chain's last output is
   written.
-- Breaking a chain where `max_workers` differs keeps every step's limit
-  exactly as it is; nothing has to be merged or guessed. The shipped
-  pipelines:
+- **`max_workers` counts chains.** The wait for a worker is keyed by the
+  chain (its step files and its width), so a chain's limit holds across
+  pipelines as a step's does today. Guide 2 says so.
+- **The trade, stated:** steps with `max_workers: 1` that used to overlap
+  (job 2's `read_images` while job 1's `score_focus` runs) now run as one
+  chain per job. Each job writes less; a batch of jobs at once can be
+  slower when a step's own limit was what kept the overlap. The
+  measurement after the build includes a batch, not only one job.
+- The shipped pipelines:
   - `focus`: `read_images → score_focus` → one chain (one write instead of
     two);
   - `object_analysis_watershed`: all four steps, classical, `max_workers:
@@ -279,63 +305,98 @@ gain is measured after it is built, to state it in the CHANGELOG.
   - `object_analysis_cellpose`: `[read_images] → [segment_cellpose] →
     [measure_objects, build_object_table]` → three writes instead of four;
     the hand-overs left are the ones between environments.
-- **Timeout:** `execution_timeout` stays per step: a chain of three steps
-  may take three times as long before it is stopped.
-- **The board** still shows the step a job is at: the worker sends a
-  short "at step X" message before each step of a chain, and the engine
-  marks the board.
-- **A failure** names the step that raised, as today.
-- **Provenance** stays per step (the worker stamps each step's packages,
-  as today).
-- `previous` and parts are unaffected: they read the folders written at
-  the end of a chain or phase.
+
+### What the worker tells the engine during a chain
+
+- Before each step of a chain the worker sends a short message, "at step
+  X", and after it the step's record: `{step, start, end, provenance}`.
+  The answer at the end carries the last output and the list of records;
+  an error answer carries the records so far and the failing step's name.
+- The engine:
+  - marks the board's `step` only (the job stays `running`; `job_at`,
+    which sets `queued`, is not reused for this);
+  - restarts the step timeout at each "at step X": `execution_timeout`
+    is a real per-step limit, also inside a chain, and `None` means none,
+    as today;
+  - remembers the last step it was told about, so `StepExecutionError`,
+    `WorkerTimeoutError` and `WorkerCrashedError` carry `.step`, and the
+    board's failed job names the right step even after a crash or
+    timeout;
+  - writes the records into the run record per step, as today, also for
+    the steps of a failed chain that did finish.
+- Provenance per step comes from these records, not from the output
+  dictionary, so a step that returns a new dictionary cannot drop the
+  provenance of the steps before it.
+- `answer_arrives` (the macOS-safe wait) reads these messages in its loop;
+  a kill in the middle of a chain still releases the caller with
+  `WorkerCrashedError`, and the steps after it never run.
+
+### Between chained steps, values pass as they are
+
+Written to a folder, a NumPy scalar comes back as a Python number and an
+array comes back as a fresh copy; passed in memory, neither happens. So:
+
+- An output must still be writable (it is written at the end of its
+  chain, and on the board); between chained steps it is passed as it is.
+  Guide 2 says both.
+- The test "outputs identical with and without chaining" is made on the
+  shipped pipelines and the sample images, not promised for every
+  pipeline.
 
 ### Where the files go
 
-- The hand-over moves out of the run folder to a local folder:
-  `Engine(handover=<folder>)`, by default the system's temporary folder.
-  Inside it, the same layout as today (`<registration>/<job>/<step>`), and
-  the same clean-up: deleted at deregister and shutdown; a folder left by
-  a crashed run is removed by the next registration on the same computer
-  (today's `leftover` rule, now in the new place).
+- **`Engine(handover=<folder>)`.** Without it, the hand-over stays where
+  it is today, in the run folder, so nothing moves into a Windows profile
+  with a size limit by surprise. With it, the hand-over goes to that
+  folder: a local data disk on a microscope PC.
+- Inside it, always a folder of the engine's own:
+  `<handover>/zmart-analysis/<user>/<pipeline>/<registration>/<job>/<step>`.
+  Clean-up looks only there, and only removes names that read as a
+  registration (`<time>-<pid>@<computer>`); a name it cannot read is left
+  alone (today's `leftover` returns "leftover" for those, which in a
+  shared folder would remove other things). A process it may not look at
+  (another user's) counts as alive.
 - The run folder keeps what is meant to stay: `pipeline.yaml`,
-  `run.jsonl`, and the files steps write to `metadata["output"]`.
-- On the ZMB PCs the profile has a size limit (about 28 GB) and the
-  system's temporary folder is inside it. The guide says to point
-  `handover` at a local data disk for large stacks; the interface passes
-  it (its own small follow-up).
-
-### Engine changes for the hand-over
-
-- `pipeline.py`: phases split into chains (environment + `max_workers`);
-  `.handover` moves to `Engine(handover=...)`; `leftover` looks there.
-- `engine.py`: `_execute_step` runs a chain; the board follows the
-  worker's step messages.
-- `worker_script.py`: runs a chain in one call, in memory between its
-  steps; sends "at step X"; stamps provenance per step; writes the last
-  output.
-- `workers.py`: `Worker.execute` reads step messages until the answer;
-  the per-step timeout is summed over the chain.
+  `run.jsonl`, and the files steps write to `metadata["output"]`. The
+  checkpoints and masks the interface reads are written by the steps to
+  `<run>/analysis/tiles` (`output_dir`), not to the hand-over, and do not
+  move.
+- **The interface** passes `handover=` (its one change in 0.6): a local
+  data disk on the microscope PC, set where it creates the engine.
+- **`score_focus` stops handing on the stack.** Its output is the focus
+  result; the stack it scored is dropped from what it returns, as
+  `build_object_table` already drops its heavy data. Today every focus
+  job's final output holds its whole stack until deregister, and the
+  interface does not deregister during a session.
 
 ### Tests for the hand-over
 
 - a chain of two same-environment steps writes one folder, not two;
-- steps with different `max_workers`, or different environments, are not
-  chained;
-- the board shows each step of a chain in turn;
-- a failure in the middle of a chain names that step; the steps after it
-  do not run;
-- provenance has an entry for every step of a chain;
-- a chain's timeout is the sum of its steps' timeouts;
-- nothing is written under the run folder's `analysis/<pipeline>/` except
-  `pipeline.yaml`, `run.jsonl` and what steps keep;
-- a hand-over folder left by a crashed run is removed by the next
-  registration;
-- the outputs of a pipeline are identical with and without chaining (the
-  shipped pipelines on the sample images, as their tests do today).
+- steps with different resolved environments or `max_workers` (including
+  a pipeline override) are not chained; a step listed twice is placed per
+  occurrence;
+- `max_workers: 1` on a chain holds across two pipelines using it;
+- the board shows each step of a chain in turn, with the job `running`;
+- a failure in the middle of a chain names that step on the board and in
+  the error; the steps after it do not run; the steps before it are in
+  the run record;
+- a timeout in the middle of a chain names that step; each step has its
+  own timeout;
+- provenance has an entry for every step of a chain, also when a step
+  returns a new dictionary;
+- with `handover=` nothing is written under the run folder's
+  `analysis/<pipeline>/` except `pipeline.yaml`, `run.jsonl` and what
+  steps keep; without it, the files are where they are today;
+- clean-up removes a crashed run's registration folder and nothing else
+  (a foreign folder in the hand-over folder survives);
+- the shipped pipelines give the same outputs with and without chaining
+  on the sample images;
+- `score_focus`'s output no longer holds the stack.
 
 Measured after the build, to report: the watershed and Cellpose pipelines
-on a 2048×2048 tile and on a 100-plane, 4-channel stack, before and after.
+on a 2048×2048 tile and on a 100-plane, 4-channel stack, one job and a
+batch, before and after, with the hand-over in the run folder and on a
+local disk.
 
 ## How it is built
 
@@ -346,8 +407,9 @@ immediately from the outside how everything clicks together."
 
 ### Rules for the build
 
-- **One way to do each thing.** One ordered queue (deadline, then id),
-  used for image jobs, scope jobs and the wait for a step's worker. One
+- **One way to do each thing.** One order (deadline, then id), in two
+  small pieces built on it: an ordered thread pool (image jobs, scope
+  jobs) and an ordered gate (the wait for a chain's worker). One
   unit key, for place and time. One part builder, at read time. No second
   path kept "for compatibility": `results`, `priority` and the old
   `.handover` place go.
@@ -369,10 +431,10 @@ by what each part is, and two short files are folded in:
 | File | Holds | About |
 |---|---|---|
 | `engine.py` | `Engine`: register, submit, status, deregister, shutdown; running image jobs and scope jobs | as today |
-| `pipeline.py` | a pipeline: reading the YAML into phases and chains, every check made at register, and the state of a registered pipeline, which holds its units and its board | ~300 |
-| `units.py` *(new)* | place and time: unit keys, open and close, the cascade, collecting a unit's parts and failures, windows and `previous` | ~450 |
+| `pipeline.py` | a pipeline: reading the YAML into phases, every check made at register, building chains from the resolved step settings, and the state of a registered pipeline, which holds its `Units` and its `Board` | ~300 |
+| `units.py` *(new)* | place and time: unit keys, open and close, the cascade, collecting a unit's parts and failures, windows and `previous`, and the job futures and the `cancelling` flag | ~450 |
 | `board.py` *(new; takes in `record.py`)* | what a run shows and leaves: the job board, the run record, the hand-over folders and their clean-up | ~300 |
-| `job_queue.py` *(was `priority_pool.py`)* | the ordered queue, used by the engine's threads and by the wait for a step's worker | ~120 |
+| `job_queue.py` *(was `priority_pool.py`)* | the order: an ordered thread pool and an ordered gate | ~120 |
 | `handover.py` | the folder format, and `parts`: the lazy sequence a scoped step reads | ~200 |
 | `workers.py`, `worker_script.py` | worker processes; a chain run in one call | as today, plus chains |
 | `environments.py`, `conda.py` | unchanged | |
@@ -382,8 +444,21 @@ From the outside: **`Engine` takes a `pipeline`; a pipeline has `units`
 `job_queue` and run in `workers`; data between them goes through
 `handover`.** The module docstring of `engine.py` says this in five lines.
 
-The split is a move first (a commit that moves code, with the 0.5 tests
-green), then the 0.6 changes on top, so the review of each is plain.
+`Units` and `Board` each have their own lock and never call each other;
+the pipeline state composes them, and the engine talks to both. Nothing
+today needs the two updated together under one lock. `board.py` owns the
+hand-over folders' life (make, clean, leftover) because `handover.py`
+must stay standard-library only and loaded by file in every step
+environment.
+
+**Naming.** "Chain" is the word for steps that run together in one
+worker. The engine's existing "scope completion chain"
+(`_handle_scope_complete_chain`) is renamed in the move commit to say
+what it does (`close_units`), so the word has one meaning.
+
+The split is a move first (a commit that moves and renames code, with the
+0.5 tests green), then the 0.6 changes on top, so the review of each is
+plain.
 
 ### Cut from the plan by these rules
 
@@ -395,7 +470,8 @@ green), then the 0.6 changes on top, so the review of each is plain.
 
 ## Engine changes
 
-All in `zmart_analysis/`; no new dependency.
+All in `zmart_analysis/`; no new dependency. After the move commit (see
+"How it is built"), in the files of that table:
 
 1. **pipeline.py — reading.** `split_phases` takes `timepoints` off a step
    like `scope` and `max_workers`; it belongs to the phase. Refused at
@@ -403,35 +479,42 @@ All in `zmart_analysis/`; no new dependency.
    `scope`; `timepoints` not a whole number ≥ 1 (`all`: "not in this
    version"); `scope: position` with `timepoints: 1`; `scope: position`
    when `levels` lacks `position`; a step named after an engine key.
-2. **pipeline.py — the unit key.** `scope_key` adds the scope's
-   `timepoint` when it has one, also for the step over everything
-   (`{"timepoint": t}`). `note_open` opens that per-timepoint unit.
-   `close_signals`, `collect_for_scope`, `held_for` and the scoped waits
-   use the key. `complete="timepoint"` closes the open units of that
-   timepoint, narrowest first.
-3. **pipeline.py — what is stored.** `(folder, id, scope)` per result, as
-   above; the scope job's id and the unit for unit results; job ids on
-   failures.
-4. **pipeline.py — windows.** Per place: the last N−1 timepoints'
-   references are kept; the window phases run in timepoint order by
-   continuation (the end of t starts t+1 if ready), never by a blocking
-   wait; each run's output folder is kept as the next one's `previous`.
-5. **pipeline.py — position as a scope.** A phase with `scope: position`
-   starts for an image once the image's phase 0 is done, with no close
-   signal.
-6. **worker_script.py, handover.py.** `parts` replaces `StoredResults`:
-   the same lazy sequence, over triples, building parts. `previous` is
-   read from its folder.
-7. **The order.** One ordered queue, key `(deadline or +inf, id)`, used
-   for the image jobs, for the scope jobs (replacing the plain
-   `ThreadPoolExecutor`; the reason they are separate today, that a scope
-   job must not take the last thread its images need, stays: they remain
-   two pools, each ordered) and for the wait on a step's worker
-   (`WorkerPool.execute` takes the key instead of using a plain
-   semaphore). `priority_pool.py` becomes `job_queue.py`.
-8. **engine.py.** `submit(pipeline, data, scope=None, deadline=None,
-   complete=None)`; `deadline` and `late` on the board and in the record;
-   scope jobs inherit the nearest deadline.
+2. **pipeline.py — chains.** Built in `register` from the resolved step
+   settings (environment and `max_workers` after the pipeline's
+   override), per occurrence.
+3. **units.py — the unit key.** `scope_key` adds the scope's `timepoint`
+   when it has one, also for the step over everything (`{"timepoint": t}`).
+   `note_open` opens that per-timepoint unit. `close_signals`,
+   `collect_for_scope`, `held_for` and the scoped waits use the key.
+   `complete="timepoint"` closes the open units of that timepoint,
+   narrowest first.
+4. **units.py — what is stored.** `(order, match_scope, (folder, id,
+   part_scope))` per result; failures with `submission_idx` and `id`.
+5. **units.py — windows and position.** Per place: the last N−1
+   timepoints' references are kept; window phases run in timepoint order
+   by continuation, never by a blocking wait; each run's output folder is
+   kept as the next one's `previous`. A phase with `scope: position`
+   starts for an image once its phase 0 is done.
+6. **board.py.** The board, the run record (from `record.py`), the
+   step-only mark for "at step X", per-step records into the record, and
+   the hand-over folders under `Engine(handover=...)` or the run folder,
+   with the safe clean-up.
+7. **handover.py, worker_script.py.** `parts` replaces `StoredResults`;
+   the `RESULTS` marker holds the triples. The worker runs a chain in one
+   call: `finish` without the write between its steps, a step message and
+   a step record around each, one write at the end; `previous` read from
+   its folder.
+8. **workers.py.** `answer_arrives` reads the step messages, restarts the
+   step timeout at each, and remembers the step for `.step` on errors.
+   `WorkerPool.execute` waits at the ordered gate, keyed by the chain.
+9. **job_queue.py** (was `priority_pool.py`). The order `(deadline or
+   +inf, id)`: an ordered thread pool for image jobs and one for scope
+   jobs (they stay two pools, so a scope job never takes the last thread
+   its images need), and an ordered gate for the worker wait.
+10. **engine.py.** `Engine(..., handover=None)`; `submit(pipeline, data,
+    scope=None, deadline=None, complete=None)`; `deadline` and `late` on
+    the board and in the record; scope jobs inherit the nearest deadline;
+    `_handle_scope_complete_chain` renamed `close_units`.
 
 ## Tests first
 
@@ -541,7 +624,8 @@ The scoped steps in the existing tests move from `results` to `parts`:
   inside is free; per-image steps are unchanged; the board keeps its
   shape.
 - **D6** The hand-over is part of 0.6: same-environment chains pass data
-  in memory; the hand-over moves to a local folder; not decided by
+  in memory; the hand-over can be moved to a local folder
+  (`Engine(handover=...)`, the run folder by default); not decided by
   measuring, measured after to report the gain.
 
 ## Review A (2026-10-21), and what changed
@@ -573,8 +657,38 @@ The scoped steps in the existing tests move from `results` to `parts`:
 12. Missing files added (`helpers.py`, guide tables, CHANGELOG, the
     interface's fake engines).
 
+## Review B (2026-10-21), and what changed
+
+1. Clean-up in a shared temp folder would remove everything it cannot
+   read → a folder of the engine's own; unreadable names are left alone.
+2. Storing a unit under its scope job's id breaks "up to the closing
+   submit" → order and identity kept apart.
+3. Defaulting the hand-over to the profile's temp folder would fill the
+   28 GB profile, and the focus output holds whole stacks → default stays
+   the run folder; `handover=` opt-in, passed by the interface;
+   `score_focus` drops the stack.
+4. One summary per chain loses per-step times and provenance → the worker
+   sends a record per step.
+5. "At step X" would flip a running job to queued, and a crash named the
+   wrong step → a step-only mark; errors carry `.step`.
+6. Summing timeouts is wrong for an engine-wide timeout and `None` → the
+   timeout restarts at each step.
+7. The worker wait had no key for a chain; overlap of `max_workers: 1`
+   steps is lost → keyed by the chain; the trade stated; a batch measured.
+8. Chains need resolved settings → built in register, per occurrence.
+9. "Identical outputs" cannot hold in general (NumPy scalars, shared
+   arrays) → claimed for the shipped pipelines; guide 2 says why.
+10. Middle steps skipped `finish` → `finish` without the write.
+11. The stored `RESULTS` marker → holds the triples, reads back as parts.
+12. Other users' processes and pipeline name collisions → user and
+    pipeline in the path; "access denied" counts as alive.
+13. The lock and the futures had no owner → `Units` and `Board` own
+    locks; futures and `cancelling` in `units.py`.
+14. "Chain" meant two things; "one queue" was two pieces → the old chain
+    renamed; the order described as a pool and a gate.
+
 ## Where the work lands
 
 ZMB-UZH/ZMART-analysis `release-candidate`, version 0.6.0rc1, TDD, after
-0.5.0 is promoted to `main`. No change in the interface or the assembly
-for 0.6 itself.
+0.5.0 is promoted to `main`. The interface's one change for 0.6 is passing
+`Engine(handover=...)` (a local data disk); the assembly does not change.
