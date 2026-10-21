@@ -33,12 +33,11 @@ import os
 import socket
 import sys
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
 from .board import described
-from .job_queue import OrderedThreadPool
+from .job_queue import Order, OrderedThreadPool, deadline_at
 from .pipeline import PipelineState, parse_yaml, split_phases
 from .workers import WorkerPool
 
@@ -61,15 +60,12 @@ class Engine:
     def __init__(self, max_concurrent=8, execution_timeout=300.0):
         self.execution_timeout = execution_timeout
         self.workers = WorkerPool()
-        self.image_pool = OrderedThreadPool(max_concurrent)
-        # Scope completion waits for phase-0 futures.  Keep that coordination
-        # off the priority executor whose futures it awaits, otherwise a
-        # completion task can occupy the last executor thread and deadlock the
-        # lower-priority work needed to satisfy it.
-        self.scope_pool = ThreadPoolExecutor(
-            max_workers=max_concurrent,
-            thread_name_prefix="engine-scope",
-        )
+        #: The order key of every job (job_queue.py).
+        self.order = Order()
+        self.image_pool = OrderedThreadPool(max_concurrent, "engine-image")
+        # A close waits for the image jobs of its unit. It runs in a pool of
+        # its own, or it could take the last thread those image jobs need.
+        self.scope_pool = OrderedThreadPool(max_concurrent, "engine-scope")
         self.pipelines = {}
         self.registering = set()
         self.accepting = True
@@ -211,7 +207,7 @@ class Engine:
             sum(len(p.steps) for p in phases),
         )
 
-    def submit(self, pipeline, data, scope=None, priority=None, complete=None):
+    def submit(self, pipeline, data, scope=None, deadline=None, complete=None):
         """
         Submit one image to a registered pipeline. Returns its job id at once.
 
@@ -224,8 +220,11 @@ class Engine:
         scope : dict, optional
             The units this image belongs to,
             e.g. {"carrier": 1, "compartment": 3, "group": 2}.
-        priority : int, optional
-            Higher runs first. Equal priorities run in submission order.
+        deadline : float, optional
+            Seconds from now by which the microscope needs this image's
+            answer. Waiting jobs start nearest deadline first; jobs without
+            one come after, in submission order. The board marks a job that
+            ended after its deadline ``late``; it is not stopped.
         complete : str or list, optional
             The level, or levels, this image closes for its unit. Each
             level the pipeline has a step for adds a scope job to the board.
@@ -244,7 +243,7 @@ class Engine:
         """
         scope = scope or {}
         data = data if data is not None else {}
-        priority_value = priority if priority is not None else 0
+        due = deadline_at(deadline)
 
         # Keep acceptance, executor submission, and optional scope submission
         # atomic with shutdown. Once shutdown acquires this lock and closes
@@ -259,20 +258,15 @@ class Engine:
                 [] if not complete else [complete] if isinstance(complete, str) else list(complete)
             )
             state.units.check_complete(complete_levels, scope)
-            job = state.board.new_image_job(scope)
+            job = state.board.new_image_job(scope, due)
+            order = self.order.key(due)
             state.units.note_open(scope)
             state.board.record.write(
                 "submit", job=job, scope=scope, complete=complete, data=described(data)
             )
 
-            # Submit Phase 0 to thread pool
             future = self.image_pool.submit(
-                self.run_image_job,
-                state,
-                data,
-                scope,
-                job,
-                priority=priority_value,
+                order, self.run_image_job, state, data, scope, job, order
             )
             state.add_image_job(future, scope, job)
 
@@ -293,18 +287,13 @@ class Engine:
                 scope_jobs = [
                     None
                     if k is None
-                    else state.board.new_scope_job(k, state.units.scope_key(level, unit_scope))
+                    else state.board.new_scope_job(k, state.units.scope_key(level, unit_scope), due)
                     for k, (level, unit_scope) in zip(phases, signals, strict=True)
                 ]
                 # The closes run one after another in one thread, so that
                 # ["group", "all"] closes the group before everything.
                 closing = self.scope_pool.submit(
-                    self.close_units,
-                    state,
-                    signals,
-                    tokens,
-                    scope_jobs,
-                    job,
+                    order, self.close_units, state, signals, tokens, scope_jobs, job, order
                 )
                 state.add_future(closing)
                 # Closes cancelled before they ran clear their marks here, or a
@@ -422,10 +411,7 @@ class Engine:
             except KeyError:
                 pass  # deregistered by another thread meanwhile
         self.image_pool.shutdown(wait=wait)
-        self.scope_pool.shutdown(
-            wait=wait,
-            cancel_futures=not wait,
-        )
+        self.scope_pool.shutdown(wait=wait)
         self.workers.shutdown_all(now=not wait)
         logger.debug("Engine shutdown complete")
 
@@ -438,7 +424,7 @@ class Engine:
 
     # -- Closing units -------------------------------------------------
 
-    def close_units(self, state, signals, tokens, jobs, submission_idx):
+    def close_units(self, state, signals, tokens, jobs, submission_idx, order):
         """Run a submit's closes one after another, each ``(level, scope)``.
 
         Each close must complete before the next starts, so that
@@ -448,7 +434,7 @@ class Engine:
         """
         for (level, scope), token, job in zip(signals, tokens, jobs, strict=True):
             try:
-                self.close_unit(state, level, scope, submission_idx, job)
+                self.close_unit(state, level, scope, submission_idx, job, order)
             except Exception as e:
                 logger.error("Closing level '%s' failed: %s", level, e)
                 if job is not None:
@@ -458,7 +444,7 @@ class Engine:
 
     # -- Image jobs ----------------------------------------------------
 
-    def run_image_job(self, state, input_data, scope, submission_idx):
+    def run_image_job(self, state, input_data, scope, submission_idx, order):
         """Execute Phase 0 (immediate steps) for one image job. The job's id
         is its submission index."""
         phase = state.phases[0]
@@ -488,7 +474,13 @@ class Engine:
                     "save": state.board.step_folder(submission_idx, index, step.name),
                 }
                 summary = self.run_step(
-                    state, step, None if folder else pipeline_data, submission_idx, files, steps
+                    state,
+                    step,
+                    None if folder else pipeline_data,
+                    submission_idx,
+                    files,
+                    steps,
+                    order,
                 )
                 folder = files["save"]
 
@@ -545,7 +537,7 @@ class Engine:
                 add(step, record)
         return {"submissions": sorted(submissions), "failed": failed, "provenance": provenance}
 
-    def close_unit(self, state, level, scope, submission_idx, job):
+    def close_unit(self, state, level, scope, submission_idx, job, order):
         """Handle a scope completion signal for scope job *job*.
 
         Waits for the unit's Phase 0 jobs submitted up to this signal to
@@ -593,7 +585,17 @@ class Engine:
         steps = []
         try:
             folder, summary = self.run_scoped_phase(
-                state, phase_idx, results, failures, scope, level, unit or {}, job, lineage, steps
+                state,
+                phase_idx,
+                results,
+                failures,
+                scope,
+                level,
+                unit or {},
+                job,
+                lineage,
+                steps,
+                order,
             )
 
             # Store for next phase if there is one
@@ -628,6 +630,7 @@ class Engine:
         job,
         lineage,
         steps,
+        order,
     ):
         """Execute a scoped phase over the folders of its unit's results.
         ``unit`` is the unit being closed, widest level first, ``{}`` for
@@ -665,7 +668,7 @@ class Engine:
             }
             try:
                 summary = self.run_step(
-                    state, step, None if folder else pipeline_data, job, files, steps
+                    state, step, None if folder else pipeline_data, job, files, steps, order
                 )
             except Exception as e:
                 e.step = step.name
@@ -676,7 +679,7 @@ class Engine:
 
     # -- Steps ---------------------------------------------------------
 
-    def run_step(self, state, step_config, pipeline_data, job, files, steps):
+    def run_step(self, state, step_config, pipeline_data, job, files, steps, order):
         """Run one step of *job* in a worker.
 
         The board shows the job queued at this step, and running once a
@@ -701,6 +704,7 @@ class Engine:
             owner=state,
             files=files,
             started=lambda: state.board.job_running(job),
+            order=order,
         )
         end = datetime.now().isoformat(timespec="milliseconds")
         where = summary["provenance"].get(step_config.name, {})

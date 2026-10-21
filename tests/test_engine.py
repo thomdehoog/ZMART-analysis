@@ -31,6 +31,7 @@ Usage
     python -m pytest tests/test_engine.py -v
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -607,7 +608,7 @@ class TestPool:
     def test_a_steps_concurrency_is_its_own_at_each_width(self):
         """Two pipelines sharing a step file may run it at different widths.
 
-        The semaphore used to be created once per step file with whichever
+        The step's gate used to be created once per step file with whichever
         width was seen first, so a pipeline that asked for eight got one, or
         the other way round, depending on registration order.
         """
@@ -615,11 +616,11 @@ class TestPool:
 
         pool = WorkerPool()
         try:
-            one = pool._get_semaphore("/steps/detect.py", 1)
-            eight = pool._get_semaphore("/steps/detect.py", 8)
+            one = pool.gate_for("/steps/detect.py", 1)
+            eight = pool.gate_for("/steps/detect.py", 8)
             assert one is not eight
-            assert pool._get_semaphore("/steps/detect.py", 8) is eight
-            assert eight._value == 8
+            assert pool.gate_for("/steps/detect.py", 8) is eight
+            assert eight.width == 8
         finally:
             pool.shutdown_all(now=True)
 
@@ -1371,112 +1372,133 @@ class TestEngineMultiPipeline:
         assert rb[0]["from"] == "b"
 
 
-# ---- Engine (priority) -----------------------------------------------
+# ---- Engine (deadline) -----------------------------------------------
 
 
-class TestEnginePriority:
-    """Optional priority parameter orders pending jobs."""
+def _order_step(name):
+    """A step that waits at an optional gate, then writes its mark to a log.
 
-    def test_higher_priority_runs_before_lower(self, tmp_path):
-        """High-priority pending jobs execute before low-priority pending ones.
-
-        The board lists outputs by job id, which is submission order, so the
-        step counts its own runs in its state dict to show the order they ran in.
-        The blocker holds the only thread until the test opens its gate, so the
-        other four are all waiting however slow the computer is.
+    The log is one file the steps of every worker append to, so it shows the
+    order the jobs ran in across workers and pipelines.
+    """
+    return _temp_step(
         """
-        gate = tmp_path / "gate"
+        import os, time
+        def run(pd, state, **p):
+            gate = pd["input"].get("gate")
+            while gate and not os.path.exists(gate):
+                time.sleep(0.01)
+            with open(pd["input"]["log"], "a") as f:
+                f.write(pd["input"]["mark"] + "\\n")
+            return pd
+    """,
+        name=name,
+    )
+
+
+def _marks(log):
+    return Path(log).read_text().split()
+
+
+class TestEngineDeadline:
+    """A submit's deadline orders the jobs that wait."""
+
+    def test_a_nearer_deadline_starts_first(self, tmp_path):
+        """No deadline comes last; among equals, the earlier submit."""
+        gate, log = tmp_path / "gate", str(tmp_path / "log")
+        _order_step("deadline_step")
+        yaml = _temp_yaml("wf:\n  - deadline_step:")
+        from zmart_analysis import Engine
+
+        with Engine(max_concurrent=1) as e:
+            e.register("test", yaml, fresh_output())
+            # The blocker takes the only thread and waits at the gate.
+            e.submit("test", {"mark": "blocker", "gate": str(gate), "log": log})
+            try:
+                time.sleep(0.05)
+                e.submit("test", {"mark": "none_a", "log": log})
+                e.submit("test", {"mark": "far", "log": log}, deadline=600)
+                e.submit("test", {"mark": "near", "log": log}, deadline=60)
+                e.submit("test", {"mark": "none_b", "log": log})
+            finally:
+                gate.touch()
+            _wait_for_results(e, "test", 5, timeout=10)
+
+        assert _marks(log) == ["blocker", "near", "far", "none_a", "none_b"]
+
+    def test_without_deadlines_jobs_start_in_submission_order_across_pipelines(self, tmp_path):
+        """Job ids count per pipeline; the order counts over the engine."""
+        gate, log = tmp_path / "gate", str(tmp_path / "log")
+        _order_step("across_step")
+        yaml = _temp_yaml("wf:\n  - across_step:")
+        from zmart_analysis import Engine
+
+        with Engine(max_concurrent=1) as e:
+            e.register("one", yaml, fresh_output())
+            e.register("two", yaml, fresh_output())
+            e.submit("one", {"mark": "blocker", "gate": str(gate), "log": log})
+            try:
+                time.sleep(0.05)
+                e.submit("one", {"mark": "first", "log": log})  # job 2 of "one"
+                e.submit("two", {"mark": "second", "log": log})  # job 1 of "two"
+            finally:
+                gate.touch()
+            _wait_for_results(e, "one", 2, timeout=10)
+            _wait_for_results(e, "two", 1, timeout=10)
+
+        assert _marks(log) == ["blocker", "first", "second"]
+
+    def test_the_order_holds_while_jobs_wait_for_a_steps_worker(self, tmp_path):
+        """Threads to spare, one worker for the step: the nearer deadline
+        gets the worker first."""
+        gate, log = tmp_path / "gate", str(tmp_path / "log")
+        _order_step("one_worker_step")
+        yaml = _temp_yaml("wf:\n  - one_worker_step:")
+        from zmart_analysis import Engine
+
+        with Engine(max_concurrent=4) as e:
+            e.register("test", yaml, fresh_output())
+            e.submit("test", {"mark": "blocker", "gate": str(gate), "log": log})
+            try:
+                time.sleep(0.3)
+                e.submit("test", {"mark": "none", "log": log})
+                time.sleep(0.3)
+                e.submit("test", {"mark": "near", "log": log}, deadline=60)
+                time.sleep(0.3)
+            finally:
+                gate.touch()
+            _wait_for_results(e, "test", 3, timeout=10)
+
+        assert _marks(log) == ["blocker", "near", "none"]
+
+    def test_scope_jobs_start_by_deadline(self, tmp_path):
+        """The closes of units wait in the same order."""
+        gate, log = tmp_path / "gate", str(tmp_path / "log")
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                return pd
+        """,
+            name="unit_image",
+        )
         _temp_step(
             """
             import os, time
             def run(pd, state, **p):
-                gate = pd["input"].get("gate")
+                given = pd["results"][0]["input"]
+                gate = given.get("gate")
                 while gate and not os.path.exists(gate):
                     time.sleep(0.01)
-                state["runs"] = state.get("runs", 0) + 1
-                pd["ran"] = state["runs"]
-                pd["mark"] = pd["input"]["mark"]
-                return pd
+                with open(given["log"], "a") as f:
+                    f.write(given["mark"] + "\\n")
+                return {"done": True}
         """,
-            name="prio_step",
-        )
-        yaml = _temp_yaml("wf:\n  - prio_step:")
-        from zmart_analysis import Engine
-
-        with Engine(max_concurrent=1) as e:
-            e.register("test", yaml, fresh_output())
-            # First submit takes the only thread and waits at the gate.
-            e.submit("test", {"mark": "blocker", "gate": str(gate)})
-            time.sleep(0.05)
-            # The next 4 queue up while blocker is mid-flight.
-            e.submit("test", {"mark": "low_a"}, priority=0)
-            e.submit("test", {"mark": "low_b"}, priority=0)
-            e.submit("test", {"mark": "high_a"}, priority=10)
-            e.submit("test", {"mark": "high_b"}, priority=10)
-            gate.touch()
-            results = _wait_for_results(e, "test", 5, timeout=10)
-
-        marks = [r["mark"] for r in sorted(results, key=lambda r: r["ran"])]
-        assert len(marks) == 5
-        assert sorted(r["ran"] for r in results) == [1, 2, 3, 4, 5]
-        assert marks[0] == "blocker"
-        # High-priority pending jobs come before low-priority pending ones.
-        idx = {m: i for i, m in enumerate(marks)}
-        assert idx["high_a"] < idx["low_a"]
-        assert idx["high_a"] < idx["low_b"]
-        assert idx["high_b"] < idx["low_a"]
-        assert idx["high_b"] < idx["low_b"]
-        # FIFO within same priority.
-        assert idx["high_a"] < idx["high_b"]
-        assert idx["low_a"] < idx["low_b"]
-
-    def test_default_priority_preserves_fifo(self):
-        """No priority specified -> submission order is preserved. The step
-        counts its runs, as above, since the board's order is the job id's."""
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                state["runs"] = state.get("runs", 0) + 1
-                pd["ran"] = state["runs"]
-                pd["i"] = pd["input"]["i"]
-                return pd
-        """,
-            name="fifo_step",
-        )
-        yaml = _temp_yaml("wf:\n  - fifo_step:")
-        from zmart_analysis import Engine
-
-        with Engine(max_concurrent=1) as e:
-            e.register("test", yaml, fresh_output())
-            for i in range(5):
-                e.submit("test", {"i": i})
-            results = _wait_for_results(e, "test", 5, timeout=10)
-
-        order = [r["i"] for r in sorted(results, key=lambda r: r["ran"])]
-        assert order == [0, 1, 2, 3, 4]
-        assert sorted(r["ran"] for r in results) == [1, 2, 3, 4, 5]
-
-    def test_scope_completion_does_not_block_lower_priority_phase0(self):
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["value"] = pd["input"]["value"]
-                return pd
-        """,
-            name="priority_scoped_input",
-        )
-        _temp_step(
-            """
-            def run(pd, state, **p):
-                pd["total"] = sum(item["value"] for item in pd["results"])
-                return pd
-        """,
-            name="priority_scoped_collect",
+            name="unit_close",
         )
         yaml = _temp_yaml("""
             wf:
-              - priority_scoped_input:
-              - priority_scoped_collect:
+              - unit_image:
+              - unit_close:
                   scope: group
         """)
         from zmart_analysis import Engine
@@ -1485,11 +1507,98 @@ class TestEnginePriority:
             e.register("test", yaml, fresh_output())
             e.submit(
                 "test",
-                {"value": 7},
-                scope={"group": "G"},
-                priority=-10,
+                {"mark": "blocker", "gate": str(gate), "log": log},
+                scope={"group": "A"},
                 complete="group",
             )
+            try:
+                time.sleep(0.5)
+                e.submit(
+                    "test", {"mark": "none", "log": log}, scope={"group": "B"}, complete="group"
+                )
+                e.submit(
+                    "test",
+                    {"mark": "near", "log": log},
+                    scope={"group": "C"},
+                    complete="group",
+                    deadline=60,
+                )
+                time.sleep(0.5)
+            finally:
+                gate.touch()
+            _wait_for_results(e, "test", 6, timeout=20)
+
+        assert _marks(log) == ["blocker", "near", "none"]
+
+    def test_a_job_that_ends_after_its_deadline_is_late(self, tmp_path):
+        _temp_step(
+            """
+            import time
+            def run(pd, state, **p):
+                time.sleep(0.3)
+                return pd
+        """,
+            name="slow_step",
+        )
+        yaml = _temp_yaml("wf:\n  - slow_step:")
+        output = fresh_output()
+        from zmart_analysis import Engine
+
+        with Engine() as e:
+            e.register("test", yaml, output)
+            late = e.submit("test", {}, deadline=0.05)
+            in_time = e.submit("test", {}, deadline=60)
+            without = e.submit("test", {})
+            board = e.deregister("test")
+
+        assert board[late]["late"] is True
+        assert board[in_time]["late"] is False
+        assert "deadline" in board[late] and "deadline" in board[in_time]
+        assert "deadline" not in board[without] and "late" not in board[without]
+        ends = {
+            line["job"]: line
+            for line in map(json.loads, (Path(output) / "analysis/test/run.jsonl").open())
+            if line["event"] == "end"
+        }
+        assert ends[late]["late"] is True and ends[late]["deadline"]
+        assert ends[in_time]["late"] is False
+        assert "late" not in ends[without]
+
+    def test_priority_is_gone(self):
+        from zmart_analysis import Engine
+
+        with Engine() as e, pytest.raises(TypeError):
+            e.submit("test", {}, priority=10)
+
+    def test_a_scope_close_does_not_block_the_image_job_it_waits_for(self):
+        """With one thread, the close and its image job still both run."""
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["value"] = pd["input"]["value"]
+                return pd
+        """,
+            name="close_input",
+        )
+        _temp_step(
+            """
+            def run(pd, state, **p):
+                pd["total"] = sum(item["value"] for item in pd["results"])
+                return pd
+        """,
+            name="close_collect",
+        )
+        yaml = _temp_yaml("""
+            wf:
+              - close_input:
+              - close_collect:
+                  scope: group
+        """)
+        from zmart_analysis import Engine
+
+        with Engine(max_concurrent=1) as e:
+            e.register("test", yaml, fresh_output())
+            e.submit("test", {"value": 7}, scope={"group": "G"}, complete="group")
             results = _wait_for_results(e, "test", 2, timeout=5)
 
         scoped = [result for result in results if phase_of(result) == 1]

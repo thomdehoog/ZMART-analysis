@@ -15,6 +15,11 @@ a scope job), its state and, once done, its output:
 A job is ``queued`` at a step until a worker takes that step, so between
 two steps it is queued again at the next one.
 
+A job submitted with a deadline also shows ``deadline``, the time by which
+the microscope needs it, and once it has ended ``late``: whether it ended
+after that time. The engine does not stop a late job; the acquisition
+decides what a late answer is worth.
+
 The id doubles as the submission index of units.py: ids only grow, so
 "submitted up to and including this one" is still a comparison of numbers.
 
@@ -41,6 +46,7 @@ import os
 import shutil
 import socket
 import threading
+import time
 import weakref
 from datetime import datetime
 from pathlib import Path
@@ -116,6 +122,11 @@ def plain_key(key):
     return key if isinstance(key, (str, int, float, bool)) or key is None else repr(key)
 
 
+def clock_time(moment):
+    """A ``time.time()`` moment as the local clock reads it."""
+    return datetime.fromtimestamp(moment).isoformat(timespec="milliseconds")
+
+
 class Board:
     """The job board, the run record and the hand-over folders of one
     registered pipeline.
@@ -138,9 +149,12 @@ class Board:
         self.closed = False
 
         self.lock = threading.Lock()
-        #: The board: job id -> {step, scope, state, output[, error]}.
+        #: The board: job id -> {step, scope, state, output[, error]
+        #: [, deadline, late]}.
         self.jobs = {}
         self.next_job = 1
+        #: The deadlines of the jobs that have one, as ``time.time()`` gives it.
+        self.deadlines = {}
 
     # -- The pipeline's folder ---------------------------------------------
 
@@ -188,21 +202,26 @@ class Board:
 
     # -- Jobs --------------------------------------------------------------
 
-    def new_job(self, step, scope, state):
+    def new_job(self, step, scope, state, deadline_at=None):
         """Put a new job on the board and return its id."""
         with self.lock:
             job = self.next_job
             self.next_job += 1
             self.jobs[job] = {"step": step, "scope": dict(scope), "state": state, "output": None}
+            if deadline_at is not None:
+                self.deadlines[job] = deadline_at
+                self.jobs[job]["deadline"] = clock_time(deadline_at)
             return job
 
-    def new_image_job(self, scope):
+    def new_image_job(self, scope, deadline_at=None):
         """An image job, queued at the first step of the pipeline."""
-        return self.new_job(self.phases[0].steps[0].name, scope, "queued")
+        return self.new_job(self.phases[0].steps[0].name, scope, "queued", deadline_at)
 
-    def new_scope_job(self, phase_idx, unit):
+    def new_scope_job(self, phase_idx, unit, deadline_at=None):
         """A scope job for *unit*, waiting at the first step of its phase."""
-        return self.new_job(self.phases[phase_idx].steps[0].name, unit or {}, "waiting")
+        return self.new_job(
+            self.phases[phase_idx].steps[0].name, unit or {}, "waiting", deadline_at
+        )
 
     def job_at(self, job, step):
         """The job is at *step* and waits for a worker to run it."""
@@ -242,9 +261,13 @@ class Board:
         self.clear_job(job)
 
     def write_end(self, job, state, steps, error=None, jobs=None):
-        """The record's line for a job that ended."""
+        """The record's line for a job that ended; a job with a deadline is
+        marked late, or not, here."""
         with self.lock:
+            if job in self.deadlines:
+                self.jobs[job]["late"] = time.time() > self.deadlines[job]
             entry = dict(self.jobs[job])
+        timing = {key: entry[key] for key in ("deadline", "late") if key in entry}
         self.record.write(
             "end",
             job=job,
@@ -254,6 +277,7 @@ class Board:
             steps=list(steps),
             error=error,
             jobs=jobs,
+            **timing,
         )
 
     # -- Reading the board -------------------------------------------------

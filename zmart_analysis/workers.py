@@ -6,7 +6,7 @@ conda environment with ``conda run``, talking to the engine over a local
 socket. A worker starts once and stays running, so a model it loaded for
 the first image is still there for the next. This module holds one worker
 (Worker), the pool that keeps workers per environment (WorkerPool, with one
-_EnvPool per environment and a semaphore per step for ``max_workers``), and
+_EnvPool per environment and an ordered gate per step for ``max_workers``), and
 the errors a worker can raise:
 
     WorkerError
@@ -37,6 +37,7 @@ from multiprocessing.connection import Listener
 from pathlib import Path
 
 from .conda import CONDA_CMD, get_conda_info
+from .job_queue import OrderedGate
 
 logger = logging.getLogger(__name__)
 
@@ -643,8 +644,9 @@ class WorkerPool:
         self._env_pools = {}
         self._pool_lock = threading.Lock()
 
-        self._step_semaphores = {}
-        self._sem_lock = threading.Lock()
+        #: One gate per step file and width, for ``max_workers``.
+        self.gates = {}
+        self.gates_lock = threading.Lock()
 
         #: Owners whose steps were killed. Their later steps are refused.
         self._killed = weakref.WeakSet()
@@ -661,12 +663,14 @@ class WorkerPool:
         owner=None,
         files=None,
         started=None,
+        order=None,
     ):
         """
         Execute a step in a worker subprocess.
 
         Blocks until a worker is available (respecting per-step concurrency)
-        and the step completes.
+        and the step completes. Callers waiting for the same step are let
+        in by their order key (job_queue.py).
 
         Parameters
         ----------
@@ -689,9 +693,12 @@ class WorkerPool:
         started : callable, optional
             Called once a worker has taken the step, just before it runs.
             Until then the step only waits, for its turn or for a worker.
+        order : tuple, optional
+            The job's order key; without one, the call waits behind every
+            keyed one.
         """
-        sem = self._get_semaphore(step_path, max_workers)
-        sem.acquire()
+        gate = self.gate_for(step_path, max_workers)
+        gate.acquire(order)
         try:
             while True:
                 pool = self._get_env_pool(environment)
@@ -720,7 +727,7 @@ class WorkerPool:
             finally:
                 pool.release(worker)
         finally:
-            sem.release()
+            gate.release()
 
     def _get_env_pool(self, environment):
         """Get or create the pool for an environment."""
@@ -733,18 +740,18 @@ class WorkerPool:
                 self._env_pools[environment] = _EnvPool(environment, self.connect_timeout)
             return self._env_pools[environment]
 
-    def _get_semaphore(self, step_path, max_workers):
-        """Get or create a concurrency semaphore for a step at this width.
+    def gate_for(self, step_path, max_workers):
+        """The gate of a step at this width, for its ``max_workers``.
 
         Keyed by the width as well as the file: two pipelines that share a
         step file and ask for different widths each get their own, rather
         than whichever width was registered first.
         """
         key = (step_path, int(max_workers))
-        with self._sem_lock:
-            if key not in self._step_semaphores:
-                self._step_semaphores[key] = threading.Semaphore(max_workers)
-            return self._step_semaphores[key]
+        with self.gates_lock:
+            if key not in self.gates:
+                self.gates[key] = OrderedGate(max_workers)
+            return self.gates[key]
 
     # -- Ending part of the pool ---------------------------------------
 
