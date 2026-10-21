@@ -783,7 +783,7 @@ class TestEngineRegister:
 
             # Exactly one registration wins; every other thread sees ValueError.
             assert sum(errors) == 7
-            assert "dup" in e._pipelines
+            assert "dup" in e.pipelines
 
     def test_every_result_records_where_each_step_ran(self):
         """Provenance: each step's result names its environment, the Python
@@ -956,7 +956,7 @@ class TestEngineConcurrency:
 
         with Engine() as e:
             e.register("test", yaml, fresh_output())
-            assert e._pipelines["test"].step_settings["wide"]["max_workers"] == 3
+            assert e.pipelines["test"].step_settings["wide"]["max_workers"] == 3
 
     def test_many_concurrent_jobs(self):
         _temp_step(
@@ -1215,7 +1215,7 @@ class TestEngineLifecycle:
         assert time.monotonic() - t0 < 2.0
 
         assert e.status() == {}
-        assert e._pool.status["workers"] == []
+        assert e.workers.status["workers"] == []
 
 
 # ---- Engine (status) -------------------------------------------------

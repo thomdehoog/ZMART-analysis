@@ -122,7 +122,7 @@ def test_shutdown_rejects_many_inflight_distinct_registrations(tmp_path):
     assert len(errors) == registration_count
     assert all(isinstance(error, RuntimeError) for error in errors)
     assert engine.status() == {}
-    assert engine._registering == set()
+    assert engine.registering == set()
 
 
 @pytest.mark.parametrize("attempts", [10])
@@ -139,5 +139,5 @@ def test_repeated_parse_failure_never_leaks_name_reservations(tmp_path, attempts
         engine.register(name, valid_yaml, fresh_output())
 
     assert len(engine.status()) == attempts
-    assert engine._registering == set()
+    assert engine.registering == set()
     engine.shutdown()

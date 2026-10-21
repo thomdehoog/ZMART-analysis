@@ -23,22 +23,23 @@ API
 Architecture
 ------------
     engine.py         the Engine: register, submit, status, deregister, shutdown
-    pipeline.py       reads a pipeline, splits it into phases, tracks scopes,
-                      keeps the job board
-    priority_pool.py  the thread pool that starts the most urgent job first
+    pipeline.py       reads a pipeline into phases; a registered pipeline has
+                      its units and its board
+    units.py          which images belong together, and when a unit is complete
+    board.py          the job board, the run record and the hand-over folders
+    job_queue.py      the order in which waiting jobs start
     workers.py        the worker processes that run the steps, and their errors
     worker_script.py  runs inside a step's conda environment; imports nothing
                       from the engine but handover.py, so it works in any
                       environment
     handover.py       how one step's output reaches the next, through a folder
-    record.py         the run record, run.jsonl
     conda.py          finds conda and the environments it knows
     environments.py   creates or removes a workflow's environments, for its
                       setup_env.py and clean_env.py
 """
 
 from .engine import Engine
-from .pipeline import ScopeError
+from .units import ScopeError
 from .workers import (
     StepExecutionError,
     WorkerCrashedError,

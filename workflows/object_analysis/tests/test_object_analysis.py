@@ -173,10 +173,10 @@ def test_the_pipelines_register(tmp_path):
         engine.register("cellpose", str(CELLPOSE_YAML), fresh_output())
         engine.register("watershed", str(WATERSHED_YAML), fresh_output())
         placed = {
-            "cellpose": engine._pipelines["cellpose"].step_settings["segment_cellpose"][
+            "cellpose": engine.pipelines["cellpose"].step_settings["segment_cellpose"][
                 "environment"
             ],
-            "watershed": engine._pipelines["watershed"].step_settings["segment_watershed"][
+            "watershed": engine.pipelines["watershed"].step_settings["segment_watershed"][
                 "environment"
             ],
         }

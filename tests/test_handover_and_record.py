@@ -466,7 +466,7 @@ def test_a_leftover_of_a_dead_registration_is_cleared(engine_factory):
 
 
 def test_a_registration_that_fails_leaves_nothing_behind(engine_factory):
-    from zmart_analysis.pipeline import LIVE
+    from zmart_analysis.board import LIVE
 
     output = fresh_output()
     (Path(output) / "analysis" / "p" / "pipeline.yaml").mkdir(parents=True)  # cannot be written
