@@ -33,16 +33,34 @@ import os
 import socket
 import sys
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from .board import described
 from .job_queue import Order, OrderedThreadPool, deadline_at
-from .pipeline import PipelineState, parse_yaml, split_phases
+from .pipeline import PipelineState, check_phases, parse_yaml, split_phases
 from .units import Stored
 from .workers import WorkerPool
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class Close:
+    """The close of one unit: which pipeline and phase, the unit, the scope
+    job that runs it, and the submit and order it came with."""
+
+    state: PipelineState
+    phase_idx: int
+    level: str
+    #: The scope of the submit that closed the unit.
+    scope: dict
+    #: The unit, widest level first; ``{}`` for everything.
+    unit: dict
+    job: int
+    submission_idx: int
+    order: tuple
 
 
 class Engine:
@@ -127,6 +145,7 @@ class Engine:
                     "metadata 'levels' must be a list of distinct level "
                     f"names, widest first, got {levels!r}"
                 )
+            check_phases(phases, levels)
 
             # Read METADATA from all step files
             step_settings, step_hashes = {}, {}
@@ -266,8 +285,13 @@ class Engine:
                 "submit", job=job, scope=scope, complete=complete, data=described(data)
             )
 
+            # A position closes itself when its image is done.
+            position_job = None
+            if state.position_phase:
+                unit = state.units.scope_key("position", scope)
+                position_job = state.board.new_scope_job(1, unit, due)
             future = self.image_pool.submit(
-                order, self.run_image_job, state, data, scope, job, order
+                order, self.run_image_job, state, data, scope, job, order, position_job
             )
             state.add_image_job(future, scope, job)
 
@@ -291,22 +315,7 @@ class Engine:
                     else state.board.new_scope_job(k, state.units.scope_key(level, unit_scope), due)
                     for k, (level, unit_scope) in zip(phases, signals, strict=True)
                 ]
-                # The closes run one after another in one thread, so that
-                # ["group", "all"] closes the group before everything.
-                closing = self.scope_pool.submit(
-                    order, self.close_units, state, signals, tokens, scope_jobs, job, order
-                )
-                state.add_future(closing)
-                # Closes cancelled before they ran clear their marks here, or a
-                # waiter would hang, and their scope jobs are cancelled.
-                closing.add_done_callback(
-                    lambda done: (
-                        [state.units.end_scoped(t) for t in tokens]
-                        + [state.board.job_cancelled(j) for j in scope_jobs if j is not None]
-                        if done.cancelled()
-                        else None
-                    )
-                )
+                self.queue_closes(state, signals, tokens, scope_jobs, job, order)
         return job
 
     def status(self, name=None):
@@ -370,7 +379,15 @@ class Engine:
             for future in list(state.futures):
                 future.cancel()
             self.workers.kill_owner(state)
-        concurrent.futures.wait(list(state.futures))
+        # A finished image job may queue its position's close, and a finished
+        # window starts the one held for it: wait until nothing is left.
+        unfinished = state.unfinished()
+        while unfinished:
+            concurrent.futures.wait(unfinished)
+            unfinished = state.unfinished()
+        # A window whose timepoint before never ended does not run.
+        for job in state.units.windows.still_held():
+            state.board.job_cancelled(job)
         try:
             board = state.board.final() if keep_board else None
         finally:
@@ -425,6 +442,24 @@ class Engine:
 
     # -- Closing units -------------------------------------------------
 
+    def queue_closes(self, state, signals, tokens, jobs, submission_idx, order):
+        """Queue a submit's closes, to run one after another in one thread,
+        so that ["group", "all"] closes the group before everything."""
+        closing = self.scope_pool.submit(
+            order, self.close_units, state, signals, tokens, jobs, submission_idx, order
+        )
+        state.add_future(closing)
+        # Closes cancelled before they ran clear their marks here, or a
+        # waiter would hang, and their scope jobs are cancelled.
+        closing.add_done_callback(
+            lambda done: (
+                [state.units.end_scoped(t) for t in tokens]
+                + [state.board.job_cancelled(j) for j in jobs if j is not None]
+                if done.cancelled()
+                else None
+            )
+        )
+
     def close_units(self, state, signals, tokens, jobs, submission_idx, order):
         """Run a submit's closes one after another, each ``(level, scope)``.
 
@@ -445,9 +480,10 @@ class Engine:
 
     # -- Image jobs ----------------------------------------------------
 
-    def run_image_job(self, state, input_data, scope, submission_idx, order):
+    def run_image_job(self, state, input_data, scope, submission_idx, order, position_job):
         """Execute Phase 0 (immediate steps) for one image job. The job's id
-        is its submission index."""
+        is its submission index. Done or failed, it then queues the close of
+        its position, when the pipeline has a position step."""
         phase = state.phases[0]
 
         pipeline_data = {
@@ -504,6 +540,11 @@ class Engine:
                 e,
             )
             raise
+        finally:
+            if position_job is not None:
+                token = state.units.begin_scoped(None, scope, submission_idx)
+                signal = ("position", scope)
+                self.queue_closes(state, [signal], [token], [position_job], submission_idx, order)
 
     @staticmethod
     def lineage_of(stored, failures):
@@ -577,81 +618,105 @@ class Engine:
             state.job_failed(job, f"no images in this {level}")
             return
 
-        # Clean up consumed job entries
         state.units.forget_entries(unit, submission_idx)
+        close = Close(state, phase_idx, level, scope, unit or {}, job, submission_idx, order)
 
+        if state.phases[phase_idx].window:
+            windows = state.units.windows
+            waits_for = windows.turn(
+                phase_idx, unit, stored, job, lambda: self.run_window(close, failures)
+            )
+            if waits_for is None:
+                self.run_window(close, failures)
+            else:
+                state.board.job_waits(job, waits_for)
+            return
+
+        self.run_unit(close, stored, failures, {"parts": [item[:3] for item in stored]})
+
+    def run_window(self, close, failures):
+        """Run a window at its timepoint, then the run held for this one.
+
+        The run that ends a timepoint starts the next one of its place, in
+        this thread: no thread waits for another.
+        """
+        windows = close.state.units.windows
+        groups, previous = windows.given(close.phase_idx, close.unit)
+        stored = [item for _, items in groups for item in items]
+        given = {
+            "windows": [(t, [item[:3] for item in items]) for t, items in groups],
+            "previous": previous,
+        }
+        folder = None
+        try:
+            folder = self.run_unit(close, stored, failures, given)
+        finally:
+            held = windows.finished(close.phase_idx, close.unit, folder)
+        if held is not None:
+            held()
+
+    def run_unit(self, close, stored, failures, given):
+        """Run the scoped phase of one unit, and put the outcome on the board.
+
+        *given* is what its first step reads its parts from. Returns the
+        output's folder, or None if it failed.
+        """
+        state = close.state
         # The lineage comes from what was stored, and the worker adds it to
         # the phase's last output, so a step that builds a new dict cannot
         # drop it.
         lineage = self.lineage_of(stored, failures)
         steps = []
         try:
-            folder, summary = self.run_scoped_phase(
-                state,
-                phase_idx,
-                stored,
-                failures,
-                scope,
-                level,
-                unit or {},
-                job,
-                lineage,
-                steps,
-                order,
-            )
-
-            # Store for next phase if there is one
-            next_phase = phase_idx + 1
-            if next_phase < len(state.phases):
-                done = Stored(folder, job, unit or {}, summary)
-                state.units.store_result(phase_idx, done, scope, submission_idx)
-
-            state.board.job_done(job, folder, steps, jobs=lineage["submissions"])
-
+            folder, summary = self.run_scoped_phase(close, failures, lineage, steps, given)
         except Exception as e:
             step_name = getattr(e, "step", None)
-            failed = (job, unit or {})
-            state.units.record_failure(failed, step_name, str(e), phase_idx, scope, submission_idx)
-            state.job_failed(job, str(e), step_name, steps)
+            state.units.record_failure(
+                (close.job, close.unit),
+                step_name,
+                str(e),
+                close.phase_idx,
+                close.scope,
+                close.submission_idx,
+            )
+            state.job_failed(close.job, str(e), step_name, steps)
             logger.error(
                 "Phase %d failed in '%s' (submission %d, step %s): %s",
-                phase_idx,
+                close.phase_idx,
                 state.name,
-                submission_idx,
+                close.submission_idx,
                 step_name,
                 e,
             )
+            return None
 
-    def run_scoped_phase(
-        self,
-        state,
-        phase_idx,
-        stored,
-        failures,
-        scope,
-        scope_level,
-        unit,
-        job,
-        lineage,
-        steps,
-        order,
-    ):
+        if close.phase_idx + 1 < len(state.phases):
+            done = Stored(folder, close.job, close.unit, summary)
+            state.units.store_result(close.phase_idx, done, close.scope, close.submission_idx)
+        state.board.job_done(close.job, folder, steps, jobs=lineage["submissions"])
+        return folder
+
+    def run_scoped_phase(self, close, failures, lineage, steps, given):
         """Execute a scoped phase over the parts of its unit.
-        ``unit`` is the unit being closed, widest level first, ``{}`` for
-        everything. An exception from a step carries the step's name as
-        ``.step``. Returns the last step's folder and summary."""
-        phase = state.phases[phase_idx]
+
+        *given* tells the first step where its parts are: ``parts``, or for
+        a window ``windows`` and ``previous``. An exception from a step
+        carries the step's name as ``.step``. Returns the last step's folder
+        and summary.
+        """
+        state = close.state
+        phase = state.phases[close.phase_idx]
 
         metadata = {
             "datetime": datetime.now().strftime("%Y%m%d-%H%M%S"),
             "workflow_name": state.workflow_name,
             "yaml_filename": state.yaml_path.name,
             "steps": [s.name for s in phase.steps],
-            "phase": phase_idx,
-            "scope_level": scope_level,
-            "scope": scope,
-            "unit": unit,
-            "n_accumulated": len(stored),
+            "phase": close.phase_idx,
+            "scope_level": close.level,
+            "scope": close.scope,
+            "unit": close.unit,
+            "n_accumulated": len(lineage["submissions"]),
             "n_failures": len(failures),
             "verbose": state.verbose,
             "output": str(state.board.folder),
@@ -665,14 +730,20 @@ class Engine:
         for index, step in enumerate(phase.steps):
             files = {
                 "load": folder,
-                "parts": None if folder else [item[:3] for item in stored],
-                "save": state.board.step_folder(job, index, step.name),
+                **({} if folder else given),
+                "save": state.board.step_folder(close.job, index, step.name),
                 "metadata": metadata,
                 "lineage": lineage if index == len(phase.steps) - 1 else None,
             }
             try:
                 summary = self.run_step(
-                    state, step, None if folder else pipeline_data, job, files, steps, order
+                    state,
+                    step,
+                    None if folder else pipeline_data,
+                    close.job,
+                    files,
+                    steps,
+                    close.order,
                 )
             except Exception as e:
                 e.step = step.name

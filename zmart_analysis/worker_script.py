@@ -21,7 +21,9 @@ Files
 -----
 ``files`` says how the data goes through folders (see handover.py):
 ``load`` names the folder of the step before, ``parts`` the
-``(folder, id, scope)`` of every part a scoped step works over, and
+``(folder, id, scope)`` of every part a scoped step works over (for a
+window, ``windows`` holds them by timepoint and ``previous`` the folder of
+its output at the timepoint before), and
 ``save`` the folder to write the output to;
 with ``save`` the reply is a short summary instead of the output.
 ``metadata`` is added to an output that has none, and ``lineage`` is set
@@ -73,9 +75,9 @@ from multiprocessing.connection import Client
 # Run as a script in a step's environment, handover.py is beside it; imported
 # as part of the package (by a test), it is a sibling module.
 if __package__:
-    from .handover import Parts, read_folder, summary_of, write_folder
+    from .handover import Parts, output_of, read_folder, summary_of, write_folder
 else:
-    from handover import Parts, read_folder, summary_of, write_folder
+    from handover import Parts, output_of, read_folder, summary_of, write_folder
 
 #: How the messages on the socket are encoded. Protocol 5 is what every
 #: Python from 3.8 on reads, and it carries a large image in one piece
@@ -164,6 +166,12 @@ def run_step(module, pipeline_data, state, params, files):
         pipeline_data = read_folder(files["load"])
     if files.get("parts") is not None:
         pipeline_data["parts"] = Parts(files["parts"])
+    if files.get("windows") is not None:
+        pipeline_data["parts"] = [
+            {"timepoint": t, "parts": Parts(refs)} for t, refs in files["windows"]
+        ]
+        previous = files.get("previous")
+        pipeline_data["previous"] = None if previous is None else output_of(previous)
     return module.run(pipeline_data, state, **params)
 
 

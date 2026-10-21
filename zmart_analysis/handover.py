@@ -101,6 +101,12 @@ def summary_of(result):
     return {"lineage": result.get("lineage"), "provenance": result.get("provenance") or {}}
 
 
+def output_of(folder):
+    """What the steps left in *folder*, without the engine's own keys."""
+    data = read_folder(folder)
+    return {key: value for key, value in data.items() if key not in ENGINE_KEYS}
+
+
 def part_of(ref, read=None):
     """The part a stored output is, from its ``(folder, id, scope)``.
 

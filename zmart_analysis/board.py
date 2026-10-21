@@ -15,6 +15,9 @@ a scope job), its state and, once done, its output:
 A job is ``queued`` at a step until a worker takes that step, so between
 two steps it is queued again at the next one.
 
+A window held until its timepoint before has ended stays ``waiting``,
+with ``after`` naming that timepoint.
+
 A job submitted with a deadline also shows ``deadline``, the time by which
 the microscope needs it, and once it has ended ``late``: whether it ended
 after that time. The engine does not stop a late job; the acquisition
@@ -223,10 +226,16 @@ class Board:
             self.phases[phase_idx].steps[0].name, unit or {}, "waiting", deadline_at
         )
 
+    def job_waits(self, job, after):
+        """A window waits for its timepoint before, *after*, to end."""
+        with self.lock:
+            self.jobs[job]["after"] = after
+
     def job_at(self, job, step):
         """The job is at *step* and waits for a worker to run it."""
         with self.lock:
             self.jobs[job].update(step=step, state="queued")
+            self.jobs[job].pop("after", None)
 
     def job_running(self, job):
         """A worker has taken the job's step and runs it."""

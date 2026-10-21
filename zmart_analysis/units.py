@@ -42,6 +42,22 @@ submitted into it until it is closed; a later image opens it again. Which
 levels are narrower comes from the pipeline's ``levels`` (widest first, the
 experiment above all), or else from the order of its scoped steps.
 
+Time
+----
+An image may name its ``timepoint``, a whole number the acquisition gives;
+the engine never counts. A unit is then its place at that timepoint: the
+key gets the timepoint too, so compartment 3 at timepoint 4 and at
+timepoint 5 stay apart. A step over everything is one unit per timepoint.
+``complete="timepoint"`` closes the round: every open unit of that
+timepoint, narrowest first. ``complete`` of a level the images do not name
+(the experiment) still closes everything open, each unit at its own
+timepoint. A position closes itself when its image is done, so it is never
+open and never closed by a signal.
+
+A phase over N timepoints (a window, ``Windows`` below) sees its place at
+this timepoint and the ones before it within N, and runs in timepoint order
+per place.
+
 Order and identity
 ------------------
 What is kept for the next phase is a ``Stored``: the folder of the output,
@@ -135,6 +151,8 @@ class Units:
         self.failures = []
         #: The units still open, per scoped level: unit key -> unit.
         self.open = defaultdict(dict)
+        #: The phases over several timepoints, and what they keep.
+        self.windows = Windows(phases)
 
     # -- Levels ----------------------------------------------------------
 
@@ -146,8 +164,9 @@ class Units:
         return None
 
     def scoped_levels(self):
-        """The levels this pipeline has a step for, narrowest first."""
-        return [phase.scope for phase in self.phases if phase.scope]
+        """The levels this pipeline closes, narrowest first: every scoped
+        level but ``position``, which closes itself with its image."""
+        return [phase.scope for phase in self.phases if phase.scope not in (None, "position")]
 
     def wider_levels(self, level):
         """The levels wider than *level*, widest first: from the pipeline's
@@ -179,12 +198,17 @@ class Units:
         the level's own value. Completing compartment 3 of
         {"carrier": 1, "compartment": 3} is compartment 3 *of carrier 1*.
         ``None`` when the scope does not name the level, which collects
-        everything (the "all" case).
+        everything (the "all" case). A scope with a ``timepoint`` adds it:
+        the unit is its place at that timepoint, and everything is one unit
+        per timepoint.
         """
-        if level not in scope:
-            return None
-        key = {w: scope[w] for w in self.wider_levels(level) if w in scope}
-        key[level] = scope[level]
+        if level in scope:
+            key = {w: scope[w] for w in self.wider_levels(level) if w in scope}
+            key[level] = scope[level]
+        else:
+            key = None
+        if "timepoint" in scope:
+            key = {**(key or {}), "timepoint": scope["timepoint"]}
         return key
 
     # -- Submits and close signals ---------------------------------------
@@ -194,8 +218,19 @@ class Units:
 
         A level that is a scope in this pipeline, left out of a scope that
         earlier submits did name, would match every unit of that level.
+        ``complete="timepoint"`` needs the timepoint it closes, and a
+        pipeline that looks over timepoints needs every image's timepoint.
         Raises ScopeError. Then remembers this submit's keys.
         """
+        if "timepoint" not in scope and ("timepoint" in levels or self.windows.phases):
+            raise ScopeError(
+                f"scope {scope!r} names no 'timepoint', which "
+                + (
+                    "complete='timepoint' closes"
+                    if "timepoint" in levels
+                    else "this pipeline's windows need"
+                )
+            )
         with self.lock:
             for level in levels:
                 if (
@@ -211,12 +246,17 @@ class Units:
             self.seen_scope_keys.update(scope)
 
     def note_open(self, scope):
-        """An image was submitted: every unit it belongs to is open."""
+        """An image was submitted: every unit it belongs to is open, and its
+        timepoint is one its place has, for the windows."""
         with self.lock:
             for level in self.scoped_levels():
                 unit = self.scope_key(level, scope)
                 if unit is not None:
                     self.open[level][tuple(unit.items())] = unit
+        for phase_idx, phase in self.windows.phases.items():
+            unit = self.scope_key(phase.scope, scope)
+            if unit is not None and phase.scope in unit:
+                self.windows.opened(phase_idx, unit)
 
     def close_signals(self, levels, scope):
         """What a submit's ``complete`` closes, in the order to close it.
@@ -227,15 +267,30 @@ class Units:
         on the way. A unit is closed once per submit.
         """
         signals, closed = [], set()
+
+        def close_open(level, unit):
+            for key, inner in list(self.open[level].items()):
+                if matches(inner, unit):
+                    del self.open[level][key]
+                    closed.add((level, key))
+                    signals.append((level, dict(inner)))
+
         with self.lock:
             for level in levels:
-                unit = self.scope_key(level, scope)
+                if level == "timepoint":
+                    # The round: every open unit of this timepoint.
+                    for narrower in self.scoped_levels():
+                        close_open(narrower, {"timepoint": scope["timepoint"]})
+                    continue
+                # A level the scope does not name is everything, at every
+                # timepoint; one it names is its unit at this timepoint.
+                unit = self.scope_key(level, scope) if level in scope else None
                 for narrower in self.narrower_levels(level):
-                    for key, inner in list(self.open[narrower].items()):
-                        if matches(inner, unit):
-                            del self.open[narrower][key]
-                            closed.add((narrower, key))
-                            signals.append((narrower, dict(inner)))
+                    close_open(narrower, unit)
+                if level not in scope and self.open[level]:
+                    # Everything, kept per timepoint: each its own close.
+                    close_open(level, None)
+                    continue
                 key = None if unit is None else tuple(unit.items())
                 if key is not None and (level, key) in closed:
                     continue
@@ -401,3 +456,111 @@ class Units:
             ]
         for done in waiting:
             done.wait()
+
+
+class Windows:
+    """The phases that look at several timepoints of their place.
+
+    A window phase at timepoint t sees its place's parts of the timepoints it
+    has within ``t - N + 1 ... t`` (a skipped round is missing, not empty),
+    and its own output at the timepoint before: the latest earlier timepoint
+    the place has. The runs of one place go in timepoint order: a run whose
+    timepoint before has not finished is held, and the run that finishes it
+    starts it. No thread waits for another.
+
+    What a window no longer needs is let go: the parts of a place older than
+    the next window can see, and every output but the last.
+    """
+
+    def __init__(self, phases):
+        #: The window phases, by index.
+        self.phases = {i: phase for i, phase in enumerate(phases) if phase.window}
+        self.lock = threading.Lock()
+        #: (phase_idx, place) -> the timepoints the place has.
+        self.timepoints = defaultdict(set)
+        #: (phase_idx, place) -> {timepoint: [Stored]}, the parts kept.
+        self.parts = defaultdict(dict)
+        #: (phase_idx, place) -> {timepoint: folder or None}: the last output.
+        self.outputs = defaultdict(dict)
+        #: (phase_idx, place) -> the timepoints whose run has ended.
+        self.ended = defaultdict(set)
+        #: (phase_idx, place) -> {timepoint: (job, run)}, the runs held.
+        self.held = defaultdict(dict)
+
+    @staticmethod
+    def place_of(phase_idx, unit):
+        """The window a unit belongs to, and its timepoint."""
+        place = tuple((k, v) for k, v in unit.items() if k != "timepoint")
+        return (phase_idx, place), unit["timepoint"]
+
+    def opened(self, phase_idx, unit):
+        """The place of *unit* has its timepoint."""
+        window, t = self.place_of(phase_idx, unit)
+        with self.lock:
+            self.timepoints[window].add(t)
+
+    def before(self, window, t):
+        """The latest timepoint of the window earlier than *t*, or None."""
+        earlier = [tp for tp in self.timepoints[window] if tp < t]
+        return max(earlier) if earlier else None
+
+    def turn(self, phase_idx, unit, stored, job, run):
+        """Keep the parts of *unit*; whether its run may start now.
+
+        When its timepoint before has not finished yet, *run* is held and
+        started by the run that finishes it. Returns the timepoint it waits
+        for, or None when it may start now.
+        """
+        window, t = self.place_of(phase_idx, unit)
+        with self.lock:
+            self.parts[window][t] = list(stored)
+            earlier = self.before(window, t)
+            if earlier is None or earlier in self.ended[window]:
+                return None
+            self.held[window][t] = (job, run)
+            return earlier
+
+    def given(self, phase_idx, unit):
+        """What the run of *unit* sees: its parts by timepoint, oldest first,
+        and the output folder of its timepoint before (None without one)."""
+        window, t = self.place_of(phase_idx, unit)
+        n = self.phases[phase_idx].timepoints
+        with self.lock:
+            groups = [
+                (tp, self.parts[window][tp])
+                for tp in sorted(self.parts[window])
+                if t - n + 1 <= tp <= t
+            ]
+            earlier = self.before(window, t)
+            previous = None if earlier is None else self.outputs[window].get(earlier)
+        return groups, previous
+
+    def finished(self, phase_idx, unit, folder):
+        """The run of *unit* ended with *folder* (None if it failed).
+
+        Lets go of what no later window needs, and returns the held run that
+        was waiting for this one, or None.
+        """
+        window, t = self.place_of(phase_idx, unit)
+        n = self.phases[phase_idx].timepoints
+        with self.lock:
+            self.ended[window].add(t)
+            self.outputs[window] = {t: folder}
+            self.parts[window] = {
+                tp: stored for tp, stored in self.parts[window].items() if tp >= t - n + 2
+            }
+            for later, (_, run) in sorted(self.held[window].items()):
+                if self.before(window, later) == t:
+                    del self.held[window][later]
+                    return run
+        return None
+
+    def kept(self):
+        """How many timepoints of parts are kept, over every place."""
+        with self.lock:
+            return sum(len(parts) for parts in self.parts.values())
+
+    def still_held(self):
+        """The jobs of runs still held: their timepoint before never ended."""
+        with self.lock:
+            return [job for held in self.held.values() for job, _ in held.values()]

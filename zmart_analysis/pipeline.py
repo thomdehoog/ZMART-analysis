@@ -11,6 +11,11 @@ its level.
     -- scope: all --
     Phase 2 (scoped):      normalize                   [runs once for all]
 
+A scoped phase may also say how many ``timepoints`` it looks at: 1 (the
+default) for its unit at one timepoint, or N for that timepoint and the
+N-1 before it (a window; see units.py). ``check_phases`` refuses, at
+register, what this version does not do.
+
 A registered pipeline is a ``PipelineState``: its phases and step settings,
 its ``units`` (units.py: what belongs together, and what is complete) and
 its ``board`` (board.py: the jobs, the run record and the hand-over
@@ -63,6 +68,13 @@ class Phase:
 
     steps: list[StepConfig]
     scope: str | None = None
+    #: How many timepoints of its unit the phase looks at.
+    timepoints: int = 1
+
+    @property
+    def window(self):
+        """Whether the phase looks back at earlier timepoints."""
+        return self.timepoints > 1
 
 
 # -- YAML parsing ------------------------------------------------------
@@ -106,18 +118,26 @@ def split_phases(steps_config):
     first scope are Phase 0 (immediate). Each subsequent scope starts
     a new phase.
 
-    ``scope`` and ``max_workers`` are the engine's keys on a step and are
-    taken off before the rest reaches the step as its params. An
+    ``scope``, ``timepoints`` and ``max_workers`` are the engine's keys on
+    a step and are taken off before the rest reaches the step as its
+    params. ``timepoints`` belongs to the phase its scoped step starts. An
     ``environment`` key is refused: the step file owns its environment.
     """
     phases = []
     current_steps = []
     current_scope = None
+    current_timepoints = 1
 
     for step_dict in steps_config:
         name = list(step_dict.keys())[0]
         raw_params = dict(step_dict[name] or {})
         scope = raw_params.pop("scope", None)
+        timepoints = raw_params.pop("timepoints", None)
+        if timepoints is not None and scope is None:
+            raise ValueError(
+                f"Step '{name}' sets 'timepoints' without a 'scope': only a scoped "
+                "step looks at a unit over time."
+            )
         if "environment" in raw_params:
             raise ValueError(
                 f"Step '{name}' sets 'environment' in the pipeline YAML. The "
@@ -134,9 +154,10 @@ def split_phases(steps_config):
 
         if scope is not None:
             if current_steps:
-                phases.append(Phase(steps=current_steps, scope=current_scope))
+                phases.append(Phase(current_steps, current_scope, current_timepoints))
             current_steps = []
             current_scope = scope
+            current_timepoints = checked_timepoints(name, 1 if timepoints is None else timepoints)
 
         current_steps.append(
             StepConfig(
@@ -147,9 +168,57 @@ def split_phases(steps_config):
         )
 
     if current_steps:
-        phases.append(Phase(steps=current_steps, scope=current_scope))
+        phases.append(Phase(current_steps, current_scope, current_timepoints))
 
     return phases
+
+
+def checked_timepoints(name, timepoints):
+    """``timepoints`` as a whole number of 1 or more, or the reason it is not."""
+    if timepoints == "all":
+        raise ValueError(f"Step '{name}': 'timepoints: all' is not in this version; give a number.")
+    if isinstance(timepoints, bool) or not isinstance(timepoints, int) or timepoints < 1:
+        raise ValueError(
+            f"Step '{name}': 'timepoints' must be a whole number of 1 or more, got {timepoints!r}"
+        )
+    return timepoints
+
+
+def check_phases(phases, levels):
+    """Refuse, at register, what a pipeline over time cannot do in this version.
+
+    A window (``timepoints`` of 2 or more) is the last scoped phase: a phase
+    after it would wait, in a thread, on a window held for its timepoint
+    before. ``scope: position`` is the first scoped phase, runs as soon as
+    its image is done, and needs ``position`` in ``levels`` so that position
+    7 of one well is not position 7 of another; one position at one
+    timepoint is one image, so it is only scoped over several timepoints.
+    """
+    scoped = [phase for phase in phases if phase.scope]
+    for i, phase in enumerate(scoped):
+        name = phase.steps[0].name
+        if phase.window and i != len(scoped) - 1:
+            raise ValueError(
+                f"Step '{name}' looks at {phase.timepoints} timepoints, so it must "
+                "be the last scoped step of the pipeline."
+            )
+        if phase.scope == "position":
+            if i != 0:
+                raise ValueError(
+                    f"Step '{name}' has scope 'position', so it must be the first "
+                    "scoped step of the pipeline."
+                )
+            if not phase.window:
+                raise ValueError(
+                    f"Step '{name}' has scope 'position' at one timepoint, which is one "
+                    "image: run it per image, or give it 'timepoints' of 2 or more."
+                )
+            if not levels or "position" not in levels:
+                raise ValueError(
+                    f"Step '{name}' has scope 'position': add 'position' to the "
+                    "pipeline's metadata 'levels', so the same position in two "
+                    "wells stays two places."
+                )
 
 
 # -- A registered pipeline -------------------------------------------
@@ -191,6 +260,11 @@ class PipelineState:
         self.cancelling = False
 
     @property
+    def position_phase(self):
+        """Whether the pipeline's first scoped phase is over positions."""
+        return len(self.phases) > 1 and self.phases[1].scope == "position"
+
+    @property
     def environments(self):
         """The environments this pipeline's steps run in."""
         return {settings["environment"] for settings in self.step_settings.values()}
@@ -209,6 +283,11 @@ class PipelineState:
         """Keep a scope close's future, for deregister."""
         with self.lock:
             self.futures.append(future)
+
+    def unfinished(self):
+        """The futures of this pipeline that have not finished."""
+        with self.lock:
+            return [future for future in self.futures if not future.done()]
 
     def job_failed(self, job, error, step=None, steps=()):
         """The job failed; a job stopped by deregister is cancelled instead."""
