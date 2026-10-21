@@ -668,8 +668,8 @@ class Engine:
     def _execute_step(self, state, step_config, pipeline_data, job, files, steps):
         """Execute a single step of *job* via the worker pool.
 
-        The board shows the job at this step from here on. A pipeline being
-        cancelled starts no further step. The step's times and provenance
+        The board shows the job queued at this step, and running once a
+        worker has taken it. A pipeline being cancelled starts no further step. The step's times and provenance
         are added to *steps*, for the record. Returns the output's summary.
         """
         if state.cancelling:
@@ -688,6 +688,7 @@ class Engine:
             timeout=self.execution_timeout,
             owner=state,
             files=files,
+            started=lambda: state.job_running(job),
         )
         end = datetime.now().isoformat(timespec="milliseconds")
         where = summary["provenance"].get(step_config.name, {})

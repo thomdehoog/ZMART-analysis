@@ -189,6 +189,28 @@ def test_a_job_is_queued_then_running_at_its_step_then_done(engine_factory):
     assert wait_for_state(engine, "wf", second, {"done"})["state"] == "done"
 
 
+def test_a_job_waiting_for_its_steps_worker_is_queued_not_running(engine_factory):
+    """With threads to spare, a job that waits for the step's only worker is queued."""
+    pipeline = write_yaml("wf:\n  - gated:\n  - board_pass:")
+    engine = engine_factory(max_concurrent=4)
+    engine.register("wf", pipeline, fresh_output())
+    started, gate = a_file(), a_file()
+
+    first = engine.submit(pipeline="wf", data={"started": started, "gate": gate})
+    second = engine.submit(pipeline="wf", data={})
+    try:
+        wait_for_file(started)
+        time.sleep(0.3)
+        board = engine.status("wf")
+    finally:
+        open_gate(gate)
+
+    assert board[first]["state"] == "running"
+    assert board[second]["state"] == "queued"
+    assert board[second]["step"] == "gated"
+    assert wait_for_state(engine, "wf", second, {"done"})["state"] == "done"
+
+
 def test_a_failing_step_fails_its_job_with_the_error(engine_factory):
     pipeline = write_yaml("wf:\n  - board_pass:\n  - board_break:")
     engine = engine_factory()

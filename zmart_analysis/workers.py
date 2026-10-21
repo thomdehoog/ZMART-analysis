@@ -633,6 +633,7 @@ class WorkerPool:
         timeout=300.0,
         owner=None,
         files=None,
+        started=None,
     ):
         """
         Execute a step in a worker subprocess.
@@ -658,6 +659,9 @@ class WorkerPool:
             Who the step runs for; :meth:`kill_owner` stops its steps.
         files : dict, optional
             How the data goes through folders (see worker_script.py).
+        started : callable, optional
+            Called once a worker has taken the step, just before it runs.
+            Until then the step only waits, for its turn or for a worker.
         """
         sem = self._get_semaphore(step_path, max_workers)
         sem.acquire()
@@ -681,6 +685,8 @@ class WorkerPool:
                     refused = owner is not None and owner in self._killed
                 if refused:
                     raise WorkerCrashedError("Step not started: its pipeline was cancelled")
+                if started is not None:
+                    started()
                 return worker.execute(
                     step_path, pipeline_data, params, timeout=timeout, files=files
                 )

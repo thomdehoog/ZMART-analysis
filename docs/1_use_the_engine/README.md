@@ -206,8 +206,8 @@ The states:
 
 | State | Meaning |
 |---|---|
-| `queued` | Submitted, not started. |
-| `running` | A step is running. |
+| `queued` | Waiting for a worker to take its step. |
+| `running` | A worker runs its step. |
 | `waiting` | A scoped job waits for the images of its unit to finish. |
 | `done` | Finished. The output is there. |
 | `failed` | A step raised an error. |
@@ -326,7 +326,8 @@ of a wider level closes it again, on the new images only.
 
 Completing a unit adds a new job to the board: the scoped job. It has its
 own id, the step it runs, and the unit as its `scope`. It is `waiting` until
-the images of the unit have finished, then `running`, then `done`.
+the images of the unit have finished, then `queued` until a worker takes it,
+then `running`, then `done`.
 
 ```
 {7: {'step': 'summarise', 'scope': {'carrier': 1, 'compartment': 3},

@@ -16,6 +16,9 @@ a scope job), its state and, once done, its output:
     waiting -> running -> done | failed         a scope job
     any state before done -> cancelled          deregister(wait=False)
 
+A job is ``queued`` at a step until a worker takes that step, so between
+two steps it is queued again at the next one.
+
 The id doubles as the submission index below: ids only grow, so "submitted
 up to and including this one" is still a comparison of numbers.
 
@@ -432,9 +435,14 @@ class PipelineState:
         return self.new_job(self.phases[phase_idx].steps[0].name, unit or {}, "waiting")
 
     def job_at(self, job, step):
-        """The job is running *step*."""
+        """The job is at *step* and waits for a worker to run it."""
         with self._lock:
-            self._jobs[job].update(step=step, state="running")
+            self._jobs[job].update(step=step, state="queued")
+
+    def job_running(self, job):
+        """A worker has taken the job's step and runs it."""
+        with self._lock:
+            self._jobs[job]["state"] = "running"
 
     def job_done(self, job, folder, steps, jobs=None):
         """The job is done; *folder* holds its output. Its other step folders go."""

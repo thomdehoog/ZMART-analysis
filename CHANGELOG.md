@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.5.0rc5 (2026-10-21) -- the two workflows we use
+## 0.5.0rc6 (2026-10-21) -- the two workflows we use
+
+rc5 had everything below except the board fix.
 
 - **`alignment` is now `focus`.** It holds `focus.yaml` (`read_images` ->
   `score_focus`), the pipeline the operator page runs for every point of a
@@ -18,6 +20,9 @@
 - The README says what ships and shows a first example. The status is early
   alpha everywhere. The guides and tutorials name `focus`; the tutorials are
   run, with their output.
+- **The board says `running` only while a worker runs the step.** A job that
+  waits for a worker, because its step has `max_workers: 1` and another job
+  has it, is `queued` at that step. It used to show `running` already.
 - Tests: the priority test holds its first job at a gate until the others are
   queued, so a slow computer no longer runs a low-priority job first. CI also
   runs on `release-candidate`.
