@@ -7,7 +7,7 @@ outside its folder.
 
 | Workflow | What it does | What it needs |
 |---|---|---|
-| [`alignment`](#alignment) | Finds the sharp height in a z-stack, how the camera is turned, and how two objectives line up. | One environment. No GPU. |
+| [`focus`](#focus) | Finds the sharpest plane of a z-stack, and its height. | One environment. No GPU. |
 | [`object_analysis`](#object_analysis) | Detects objects, measures them, and lays out a population. | Up to three environments. A GPU for Cellpose. |
 
 Every pipeline that works on images starts with `read_images`: it opens the
@@ -16,23 +16,19 @@ files and hands on the pixels, so no step after it opens a file.
 How to run a workflow is in [part 1](../1_use_the_engine/README.md). How to
 write one is in [part 2](../2_implement_an_analysis_step/README.md).
 
-## alignment
+## focus
 
-What a microscope must know before it can steer by what it sees, measured
-from pictures alone, so the same steps work on every microscope.
+Scores how sharp every plane of a z-stack is, and returns the height of the
+sharpest.
 
 ```text
-focus.yaml:         read_images -> score_focus           the sharp height of a z-stack
-orientation.yaml:   read_images -> measure_orientation   how the camera is turned, and the pixel size
-registration.yaml:  read_images -> measure_registration  how far apart two objectives look and focus
+focus.yaml:   read_images -> score_focus   the sharp height of a z-stack
 ```
 
-The operator page runs `focus` for every point of a focus map. A driver's
-set-up takes the pictures for `orientation` and `registration`.
+The operator page runs `focus` for every point of a focus map.
 
-→ [`workflows/alignment/README.md`](../../workflows/alignment/README.md)
-explains how to choose a sharpness measure and which pictures each
-measurement needs.
+→ [`workflows/focus/README.md`](../../workflows/focus/README.md)
+explains how to choose a sharpness measure.
 
 ## object_analysis
 

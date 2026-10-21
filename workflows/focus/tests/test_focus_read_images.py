@@ -1,4 +1,4 @@
-"""read_images of the alignment workflow: what it hands on for each kind of input."""
+"""read_images of the focus workflow: what it hands on for each kind of input."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import pytest
 import tifffile
 from helpers import load_step
 
-read_images = load_step("alignment", "read_images")
+read_images = load_step("focus", "read_images")
 
 
 def _read(given, **params):
@@ -69,27 +69,16 @@ def test_a_file_holding_several_positions_is_refused(tmp_path):
         writer.write(np.zeros((4, 4), dtype=np.uint16))
 
     with pytest.raises(ValueError, match="positions"):
-        _read({"home": str(path), "plus_x": str(path), "plus_y": str(path)})
+        _read({"image_paths": [str(path), str(path)]})
 
 
-def test_a_channel_last_array_is_refused():
-    rgb = np.zeros((32, 32, 3))
-    with pytest.raises(ValueError, match="channel-last"):
-        _read({"home": rgb, "plus_x": rgb, "plus_y": rgb})
+def test_an_input_without_a_focus_stack_is_refused():
+    """Only a focus stack is read; pictures under other names are not."""
+    picture = np.zeros((8, 8))
+    with pytest.raises(ValueError, match="found no focus stack") as refused:
+        _read({"home": picture, "plus_x": picture, "plus_y": picture})
 
-
-def test_a_lens_reads_its_picture_on_the_channel_and_its_stack_on_channel_0():
-    picture = np.stack([np.zeros((8, 8)), np.ones((8, 8))])
-    plane = np.stack([np.full((8, 8), 5.0), np.full((8, 8), 7.0)])
-    lens = {"image": picture, "pixel_um": 0.5, "stack": [plane, plane], "z_um": [1.0, 2.0]}
-
-    read = _read({"reference": lens, "target": lens}, channel=1)
-
-    assert read["reference"]["image"].max() == 1.0
-    assert read["reference"]["stack"].shape == (2, 8, 8)
-    assert read["reference"]["stack"].max() == 5.0
-    assert read["reference"]["pixel_um"] == 0.5 and read["reference"]["z_um"] == [1.0, 2.0]
-    assert read["channel"] == 1
+    assert "orientation" not in str(refused.value)
 
 
 def test_an_ome_zarr_level_is_found_by_number_from_either_end_and_by_name(tmp_path):

@@ -1,8 +1,7 @@
-"""Create the conda environment for the alignment workflow.
+"""Create the conda environment for the focus workflow.
 
-One environment, ``ZMART--alignment--main``, for focus, orientation and
-registration: numpy and scipy for the measures, scikit-image for the
-registration, and the image readers. No cellpose, no torch, no GPU.
+One environment, ``ZMART--focus--main``: numpy and scipy for the sharpness
+measures, and the image readers. No cellpose, no torch, no GPU.
 """
 
 from __future__ import annotations
@@ -16,14 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from zmart_analysis.environments import setup_workflow_env  # noqa: E402
 
-WORKFLOW = "alignment"
+WORKFLOW = "focus"
 PYTHON_VERSION = "3.12"
 
 PIP_PACKAGES = [
     "pyyaml",
     "numpy",
-    "scipy",  # the DCT of the focus measure, and zoom for the registration
-    "scikit-image>=0.23",  # phase_cross_correlation, match_template
+    "scipy",  # the DCT of the focus measure
     # Before 2026.6.1 tifffile imports a name zarr 3.3 moved, and the first
     # read fails with a misleading "zarr 3.3.0 < 3 is not supported".
     "tifffile>=2026.6.1",
@@ -55,19 +53,6 @@ DIAGNOSTICS = [
         "data = read_images.run(dict(input=dict(image_path=str(d)), metadata=dict(verbose=0)), dict()); "
         "peak = score_focus.run(data, dict(), skip_ends=0)['score_focus']['peak_index']; "
         "print('OK' if abs(peak - 2) < 0.5 else 'FAIL peak=' + str(peak))",
-    ),
-    (
-        "orientation of a test field",
-        "import sys, numpy as np; sys.path.insert(0, r'__STEPS__'); "
-        "import read_images, measure_orientation; "
-        "from scipy.ndimage import gaussian_filter; "
-        "rng = np.random.default_rng(0); "
-        "field = gaussian_filter(rng.random((256, 256)), 2); "
-        "home = field[64:192, 64:192]; plus_x = field[64:192, 74:202]; plus_y = field[74:202, 64:192]; "
-        "data = read_images.run(dict(input=dict(home=home, plus_x=plus_x, plus_y=plus_y, "
-        "stage_move_um=10.0), metadata=dict(verbose=0)), dict()); "
-        "out = measure_orientation.run(data, dict())['measure_orientation']; "
-        "print('OK' if out['accepted'] else 'FAIL ' + str(out))",
     ),
 ]
 

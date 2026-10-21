@@ -105,7 +105,7 @@ run the step:
 METADATA = {
     "description": "Score plane sharpness in a z-stack and find the peak",
     "version": "1.0",
-    "environment": "ZMART--alignment--main",
+    "environment": "ZMART--focus--main",
     "max_workers": 1,
 }
 ```
@@ -174,7 +174,7 @@ environment and picks one from `--step`.
 ### Make it
 
 ```bash
-python workflows/alignment/environments/setup_env.py               # makes ZMART--alignment--main
+python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main
 python workflows/object_analysis/environments/setup_env.py --step classical
 ```
 
@@ -295,7 +295,7 @@ from segment_cellpose import segment
 The first step of every pipeline that works on images is `read_images`. It
 opens the files and hands on the pixels, so no step after it opens a file.
 
-To add a workflow, copy `alignment`. It is the smaller one. Then:
+To add a workflow, copy `focus`. It is the smaller one. Then:
 
 1. Write the steps.
 2. Name each environment and list its packages in `setup_env.py`.
@@ -334,11 +334,11 @@ so you can leave them out:
 
 ```bash
 pytest -m "not cellpose and not conda_env and not pooch"   # what CI runs
-pytest workflows/alignment                                  # one workflow
+pytest workflows/focus                                      # one workflow
 ```
 
-`workflows/alignment/tests/test_score_focus.py` shows the pattern. It scores
-a made-up z-stack directly and then, if `ZMART--alignment--main` exists, once
+`workflows/focus/tests/test_score_focus.py` shows the pattern. It scores
+a made-up z-stack directly and then, if `ZMART--focus--main` exists, once
 more through the engine. The `*real_samples.py` tests in each workflow run the
 pipelines on real microscopy from scikit-image's sample data.
 

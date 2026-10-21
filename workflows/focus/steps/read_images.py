@@ -1,23 +1,18 @@
-"""read_images -- read the pictures an alignment step measures.
+"""read_images -- read the planes of a focus stack.
 
-The first step of every alignment pipeline. It reads every picture the input
-names, so the measuring steps after it never open a file. A picture may be a
-file path (TIFF, OME-TIFF or an OME-Zarr position) or an array already in
-memory; an array of three axes is read as channels first (C, Y, X).
+The first step of the focus pipeline. It reads the stack the input names, so
+score_focus never opens a file. A plane is read from a TIFF, an OME-TIFF or
+an OME-Zarr position.
 
-What the input may name, and what is handed on in its place:
+What the input may name:
 
     image_paths, z_um      a focus stack, one file per plane, in z order
     image_path             a focus stack in one position that has a z axis
-    home, plus_x, plus_y   the three orientation pictures
-    reference, target      the two lenses of a registration: an ``image`` and,
-                           optionally, a ``stack`` with its ``z_um``
 
-Publishes under ``pipeline_data["read_images"]`` the same names, with pixels
-in place of paths, in the file's own data type. A focus stack becomes
-``stack`` (planes, rows, columns) with ``z_um`` (given, or taken from the
+Publishes under ``pipeline_data["read_images"]`` the ``stack`` (planes, rows,
+columns) in the file's own data type, with ``z_um`` (given, or taken from the
 file; None when neither says) and ``source``, ``level``, ``t``. ``channel``
-says which channel was read. A registration stack is read on channel 0.
+says which channel was read.
 """
 
 from __future__ import annotations
@@ -27,10 +22,10 @@ from pathlib import Path
 import numpy as np
 
 METADATA = {
-    "description": "Read the pictures an alignment step measures",
+    "description": "Read the planes of a focus stack",
     "version": "1.0",
     "max_workers": 1,
-    "environment": "ZMART--alignment--main",
+    "environment": "ZMART--focus--main",
 }
 
 #: Metric length units in metres, to put a z step in the unit of the pixel width.
@@ -56,28 +51,14 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     t = params.get("t", 0)
 
-    images = {}
-
     # A focus stack: one file per plane, or one position with a z axis
-    if given.get("image_paths") or given.get("image_path"):
-        images.update(_focus_stack(given, channel, level, t))
-
-    # The three pictures that tell how the camera is turned
-    for name in ("home", "plus_x", "plus_y"):
-        if name in given:
-            images[name] = _picture(given[name], channel)
-
-    # The two lenses of a registration
-    for side in ("reference", "target"):
-        if side in given:
-            images[side] = _lens(given[side], channel)
-
-    if not images:
+    if not (given.get("image_paths") or given.get("image_path")):
         raise ValueError(
-            "read_images found no picture in the input. Give image_paths or "
-            "image_path (a focus stack), home, plus_x and plus_y (orientation), "
-            "or reference and target (registration)."
+            "read_images found no focus stack in the input. Give image_paths "
+            "(one file per plane) or image_path (one position with a z axis)."
         )
+
+    images = _focus_stack(given, channel, level, t)
 
     images["channel"] = channel
 
@@ -153,48 +134,6 @@ def _heights_from(metadata: dict, depth: int) -> list[float] | None:
     origin = metadata["origin"].get("z", 0.0) or 0.0
 
     return [float(origin) + index * float(spacing) for index in range(depth)]
-
-
-def _lens(side: dict, channel) -> dict:
-    """One lens of a registration: its picture, and its focus stack if it has one."""
-
-    read = {**side, "image": _picture(side["image"], channel)}
-
-    if side.get("stack") is not None and len(side["stack"]):
-        read["stack"] = np.stack([_picture(plane, 0) for plane in side["stack"]])
-
-    return read
-
-
-def _picture(source, channel) -> np.ndarray:
-    """One 2-D picture, from a file path or from an array already in memory.
-
-    A 3-D array is read as channels first (C, Y, X). A channel-last RGB
-    frame is refused: slicing it would hand back a plane of the wrong thing.
-    """
-
-    if not isinstance(source, np.ndarray):
-        return _load_plane(source, c=channel)[0]
-
-    if source.ndim == 2:
-        return source
-
-    if source.ndim == 3 and source.shape[-1] in (3, 4) and source.shape[0] > 4:
-        raise ValueError(
-            f"got a channel-last array of shape {source.shape}; pass channels "
-            f"first (C, Y, X), or one 2-D plane."
-        )
-
-    if source.ndim == 3:
-        if channel >= source.shape[0]:
-            raise ValueError(
-                f"channel {channel} asked for, but the array has "
-                f"{source.shape[0]} channels (shape {source.shape})."
-            )
-
-        return source[channel]
-
-    raise ValueError(f"expected a 2-D plane or a (C, Y, X) stack, got shape {source.shape}.")
 
 
 def _load_plane(source, level=0, t=0, c=0, z="mid") -> tuple[np.ndarray, dict]:

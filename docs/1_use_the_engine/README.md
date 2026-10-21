@@ -85,16 +85,16 @@ A pipeline looks like this:
 
 ```yaml
 metadata:
-  purpose: "Focus scoring for a z-stack"
+  purpose: "Objects per image, and a summary per group"
   version: "1.0"
   functions_dir: "../steps"
   verbose: 1
 
-focus:
-  - read_images:
-  - score_focus:
-      metric: brenner
-      skip_ends: 2
+my_pipeline:
+  - segment:
+      diameter: 30
+  - summarise:
+      scope: group
 ```
 
 The `metadata` block describes the pipeline:
@@ -106,8 +106,8 @@ The `metadata` block describes the pipeline:
 | `verbose` | `0` is silent. Above that, the steps print progress. Default `2`. |
 | `levels` | Only for pipelines with scoped steps. See [Steps that wait for a group of images](#steps-that-wait-for-a-group-of-images). |
 
-The other top-level key, here `focus`, holds the steps in the order they
-run. A step is named after its file: `score_focus` is `score_focus.py`.
+The other top-level key, here `my_pipeline`, holds the steps in the order
+they run. A step is named after its file: `segment` is `segment.py`.
 
 Everything under a step is a parameter for that step, except two keys that
 the engine reads itself:

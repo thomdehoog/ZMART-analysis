@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-title: "ZMART Analysis: reproducible, environment-isolated image analysis pipelines for live adaptive microscopy"
+title: "ZMART Analysis: reproducible, environment-isolated image analysis pipelines for smart microscopy"
 message: "If you use this software in research, please cite it as below."
 type: software
 authors:
@@ -7,8 +7,8 @@ authors:
     given-names: Thom
     affiliation: "Center for Microscopy and Image Analysis (ZMB), University of Zurich"
 repository-code: "https://github.com/ZMB-UZH/ZMART-analysis"
-version: 0.5.0rc4
-date-released: 2026-10-16
+version: 0.5.0
+date-released: 2026-10-21
 license: MIT
 keywords:
   - microscopy
@@ -26,6 +26,6 @@ abstract: >-
   YAML pipelines of small Python steps; each step runs in its own conda
   environment inside a worker that stays warm, so analysis keeps pace with
   a microscope that is still acquiring, and steps can be scoped to run once
-  per group of images, per compartment or per carrier. Ships two workflows: alignment (focus,
-  orientation and the registration of two objectives) and object analysis
-  (detection, measurement and population plots).
+  per group of images, per compartment or per carrier. Ships two workflows:
+  focus (the sharpest plane of a z-stack) and object analysis (detection,
+  measurement and population plots).

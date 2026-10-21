@@ -1,8 +1,7 @@
-"""The alignment pipelines on real microscopy, from scikit-image's sample data.
+"""The focus pipeline on real microscopy, from scikit-image's sample data.
 
 - ``cells3d``: a confocal stack of nuclei, 60 planes 0.29 um apart.
 - ``kidney``: a confocal stack of a kidney section, 16 planes.
-- ``human_mitosis``: a field of nuclei, for orientation.
 
 The samples are downloaded on first use and cached; without a network the
 tests are skipped.
@@ -14,11 +13,8 @@ import numpy as np
 import pytest
 import score_focus
 from helpers import load_step
-from scipy.ndimage import zoom
 
-read_images = load_step("alignment", "read_images")
-measure_orientation = load_step("alignment", "measure_orientation")
-measure_registration = load_step("alignment", "measure_registration")
+read_images = load_step("focus", "read_images")
 
 pytestmark = pytest.mark.pooch
 
@@ -98,58 +94,3 @@ def test_the_kidney_stack_is_sharpest_near_its_middle(tmp_path):
 
     assert found["found"] is True
     assert found["peak_z_um"] == pytest.approx(6.98, abs=0.5)
-
-
-@pytest.mark.parametrize("rotation_deg", [0, 90, 180, 270])
-@pytest.mark.parametrize("reflection", [False, True])
-def test_every_layout_is_found_on_real_nuclei(rotation_deg, reflection):
-    field = _sample("human_mitosis").astype(np.float64)
-    move_px, pixel_um = 24, 0.5
-
-    def recorded(rows, cols):
-        """What a camera turned this way records of one window of the field."""
-        window = np.rot90(field[rows, cols], k=rotation_deg // 90)
-        return np.ascontiguousarray(np.fliplr(window) if reflection else window)
-
-    given = {
-        "home": recorded(slice(100, 356), slice(100, 356)),
-        "plus_x": recorded(slice(100, 356), slice(100 + move_px, 356 + move_px)),
-        "plus_y": recorded(slice(100 + move_px, 356 + move_px), slice(100, 356)),
-        "stage_move_um": move_px * pixel_um,
-    }
-
-    found = _through(measure_orientation, given)["measure_orientation"]
-
-    assert found["accepted"], found["why"]
-    assert found["orientation"]["rotation_deg"] == rotation_deg
-    assert found["orientation"]["reflection"] is reflection
-    assert found["pixel_um"]["mean"] == pytest.approx(pixel_um, abs=0.01)
-
-
-def test_two_lenses_on_real_nuclei_are_registered_in_x_y_and_z():
-    """The target lens has half the pixel size, looks 12 by 8 pixels away, and its stack reads 1 um higher."""
-    nuclei = _sample("cells3d")[:, 1].astype(np.float64)
-    reference = nuclei[30]
-    target = zoom(np.roll(reference, (-8, -12), axis=(0, 1))[64:192, 64:192], 2.0, order=1)
-    heights = [0.29 * z for z in range(20, 41)]
-    given = {
-        "reference": {
-            "image": reference,
-            "pixel_um": 0.26,
-            "stack": [nuclei[z] for z in range(20, 41)],
-            "z_um": heights,
-        },
-        "target": {
-            "image": target,
-            "pixel_um": 0.13,
-            "stack": [zoom(nuclei[z][64:192, 64:192], 2.0, order=1) for z in range(20, 41)],
-            "z_um": [height + 1.0 for height in heights],
-        },
-    }
-
-    found = _through(measure_registration, given)["measure_registration"]
-
-    assert found["accepted"], found["why"]
-    assert found["translation_um"]["x"] == pytest.approx(12 * 0.26, abs=0.05)
-    assert found["translation_um"]["y"] == pytest.approx(8 * 0.26, abs=0.05)
-    assert found["translation_um"]["z"] == pytest.approx(1.0, abs=0.3)

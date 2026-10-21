@@ -36,7 +36,8 @@ Submit one tile at a time:
 }
 ```
 
-These keys are optional. The operator page in ZMART Microscopy sends them
+These keys are optional. The operator page in
+[ZMART Interface](https://github.com/ZMB-UZH/ZMART-interface) sends them
 when it has them:
 
 | Key | What it is |

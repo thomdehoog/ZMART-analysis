@@ -148,7 +148,10 @@ print("cuda" if torch.cuda.is_available() else "cpu")
     except OSError as exc:
         # The environment's folder is there but its interpreter is not: say so,
         # and let the tests that need it skip, rather than ending the whole run.
-        _CELLPOSE_RUNTIME_CACHE = False, f"the {CELLPOSE_ENVIRONMENT} environment has no interpreter: {exc}"
+        _CELLPOSE_RUNTIME_CACHE = (
+            False,
+            f"the {CELLPOSE_ENVIRONMENT} environment has no interpreter: {exc}",
+        )
         return _CELLPOSE_RUNTIME_CACHE
 
     if result.returncode == 0:

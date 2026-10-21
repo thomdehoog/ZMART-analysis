@@ -1377,17 +1377,22 @@ class TestEngineMultiPipeline:
 class TestEnginePriority:
     """Optional priority parameter orders pending jobs."""
 
-    def test_higher_priority_runs_before_lower(self):
+    def test_higher_priority_runs_before_lower(self, tmp_path):
         """High-priority pending jobs execute before low-priority pending ones.
 
         The board lists outputs by job id, which is submission order, so the
         step counts its own runs in its state dict to show the order they ran in.
+        The blocker holds the only thread until the test opens its gate, so the
+        other four are all waiting however slow the computer is.
         """
+        gate = tmp_path / "gate"
         _temp_step(
             """
-            import time
+            import os, time
             def run(pd, state, **p):
-                time.sleep(0.15)
+                gate = pd["input"].get("gate")
+                while gate and not os.path.exists(gate):
+                    time.sleep(0.01)
                 state["runs"] = state.get("runs", 0) + 1
                 pd["ran"] = state["runs"]
                 pd["mark"] = pd["input"]["mark"]
@@ -1400,14 +1405,15 @@ class TestEnginePriority:
 
         with Engine(max_concurrent=1) as e:
             e.register("test", yaml, fresh_output())
-            # First submit grabs the only worker thread immediately.
-            e.submit("test", {"mark": "blocker"})
+            # First submit takes the only thread and waits at the gate.
+            e.submit("test", {"mark": "blocker", "gate": str(gate)})
             time.sleep(0.05)
             # The next 4 queue up while blocker is mid-flight.
             e.submit("test", {"mark": "low_a"}, priority=0)
             e.submit("test", {"mark": "low_b"}, priority=0)
             e.submit("test", {"mark": "high_a"}, priority=10)
             e.submit("test", {"mark": "high_b"}, priority=10)
+            gate.touch()
             results = _wait_for_results(e, "test", 5, timeout=10)
 
         marks = [r["mark"] for r in sorted(results, key=lambda r: r["ran"])]
@@ -1513,7 +1519,7 @@ class TestPackageAPI:
     def test_version(self):
         import zmart_analysis
 
-        assert zmart_analysis.__version__ == "0.5.0rc4"
+        assert zmart_analysis.__version__ == "0.5.0"
 
     def test_engine_in_all(self):
         import zmart_analysis

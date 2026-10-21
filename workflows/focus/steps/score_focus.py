@@ -37,7 +37,7 @@ METADATA = {
     "description": "Score plane sharpness in a z-stack and find the peak",
     "version": "1.0",
     "max_workers": 1,
-    "environment": "ZMART--alignment--main",
+    "environment": "ZMART--focus--main",
 }
 
 
@@ -108,7 +108,6 @@ def brenner(plane: np.ndarray) -> float:
     """The mean squared difference between pixels two apart, along both axes.
 
     Both axes, because structure in tissue has no preferred direction.
-    ``measure_registration`` uses this too.
     """
 
     across = plane[:, 2:] - plane[:, :-2]

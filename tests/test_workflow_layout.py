@@ -60,7 +60,7 @@ def test_there_are_two_workflows_and_nothing_shared():
     assert sorted(
         path.name for path in WORKFLOWS.iterdir() if path.is_dir() and path.name != "__pycache__"
     ) == [
-        "alignment",
+        "focus",
         "object_analysis",
     ]
 

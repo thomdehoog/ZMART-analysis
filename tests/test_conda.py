@@ -80,10 +80,10 @@ class TestListEnvsByPrefix:
 
 def test_env_exists_and_list_envs_read_the_names_from_the_paths():
     """No conda needed: the two helpers only look at the paths conda lists."""
-    info = {"envs": ["/opt/conda", "/opt/conda/envs/ZMART--alignment--main", "/x/envs/other"]}
-    assert env_exists(info, "ZMART--alignment--main")
+    info = {"envs": ["/opt/conda", "/opt/conda/envs/ZMART--focus--main", "/x/envs/other"]}
+    assert env_exists(info, "ZMART--focus--main")
     assert not env_exists(info, "ZMART--focus")
-    assert list_envs_by_prefix(info, "ZMART--") == ["ZMART--alignment--main"]
+    assert list_envs_by_prefix(info, "ZMART--") == ["ZMART--focus--main"]
 
 
 def test_conda_is_found_beside_the_running_python(tmp_path):

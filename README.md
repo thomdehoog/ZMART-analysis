@@ -72,6 +72,42 @@ possible.
    Multiple workers can be initialized. They stay active and accept tasks as
    soon as they are free.
 
+## What ships with it
+
+Two workflows, the ones we use on our microscopes:
+
+- **[Focus](workflows/focus/README.md)** finds the sharpest plane of a
+  z-stack.
+- **[Object analysis](workflows/object_analysis/README.md)** finds cells
+  with Cellpose or a watershed, measures them, and returns one table row
+  per object, plus a PCA or UMAP of the population.
+
+## An example
+
+A pipeline is a YAML file. This is the steps part of `focus.yaml`:
+
+```yaml
+focus:
+  - read_images:
+      channel: 0
+  - score_focus:
+      metric: brenner
+      skip_ends: 2
+```
+
+Register it, submit a z-stack, and read the sharp height from the job board:
+
+```python
+from zmart_analysis import Engine
+
+with Engine() as engine:
+    engine.register("focus", "workflows/focus/pipelines/focus.yaml", "runs/demo")
+    job = engine.submit(pipeline="focus", data={"image_path": "stack.ome.tif"})
+    board = engine.deregister("focus")  # waits for the job and returns the board
+
+print(board[job]["output"]["score_focus"]["peak_z_um"])
+```
+
 ## Want to give it a try?
 
 1. **[Use the engine](docs/1_use_the_engine/README.md)**
@@ -88,19 +124,17 @@ steps run in.
 git clone https://github.com/ZMB-UZH/ZMART-analysis.git
 cd ZMART-analysis
 pip install -e .
-python workflows/alignment/environments/setup_env.py   # once for each workflow you use
+python workflows/focus/environments/setup_env.py   # once for each workflow you use
 ```
 
 The package installs as `zmart_analysis`: `from zmart_analysis import Engine`.
-Its old name, `engine`, still imports for the tools that use it. The
-tutorials are notebooks; `pip install jupyter` to run them.
+The tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status
 
-This is a release candidate. The step format, the pipeline layout and the
-`Engine` calls are settled in spirit, and small changes may still happen
-before 1.0. If you build a workflow on it, please open an issue so we can
-keep the contract honest together.
+This is an early alpha. The step format, the pipeline layout and the
+`Engine` calls may still change. If you build a workflow on it, please open
+an issue so we can keep the contract honest together.
 
 ## Author
 

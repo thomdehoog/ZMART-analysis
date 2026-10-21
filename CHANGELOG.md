@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.0 (2026-10-21) -- the two workflows we use
+
+- **`alignment` is now `focus`.** It holds `focus.yaml` (`read_images` ->
+  `score_focus`), the pipeline the operator page runs for every point of a
+  focus map. Its environment is `ZMART--focus--main`.
+- **Removed, because nothing called them:** `measure_orientation`,
+  `measure_registration`, `orientation.yaml` and `registration.yaml`. The
+  drivers measure orientation with their own code. `read_images` of `focus`
+  reads only a focus stack (`image_paths` or `image_path`) and refuses any
+  other input.
+- On a microscope PC: run `python workflows/focus/environments/setup_env.py`.
+  A `ZMART--focus--main` left from an older version is kept as it is; check
+  it with `--check`, and if the check fails, remove it with `clean_env.py`
+  and run the set-up again. `ZMART--alignment--main` is no longer used:
+  `conda env remove -n ZMART--alignment--main`.
+- The README says what ships and shows a first example. The status is early
+  alpha everywhere. The guides and tutorials name `focus`; the tutorials are
+  run, with their output.
+- Tests: the priority test holds its first job at a gate until the others are
+  queued, so a slow computer no longer runs a low-priority job first. CI also
+  runs on `release-candidate`.
+
 ## 0.5.0rc4 (2026-10-18) -- numbered as what it is
 
 - The version is **0.5.0rc4**, the release candidate after 5.0.0rc3. ZMART

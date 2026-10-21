@@ -16,7 +16,7 @@ import score_focus
 import tifffile
 from helpers import fresh_output, load_step
 
-read_images = load_step("alignment", "read_images")
+read_images = load_step("focus", "read_images")
 
 SHARP_AT = 4
 N_PLANES = 9
@@ -36,8 +36,8 @@ def _mitosis_field() -> np.ndarray:
         pytest.skip(f"skimage sample image human_mitosis unavailable: {exc}")
 
 
-def _require_alignment_environment() -> None:
-    """Skip unless conda and the ZMART--alignment--main environment both exist.
+def _require_focus_environment() -> None:
+    """Skip unless conda and the ZMART--focus--main environment both exist.
 
     The engine runs the focus pipeline inside that environment, which
     environments/setup_env.py creates. Without it the test is skipped, not
@@ -49,8 +49,8 @@ def _require_alignment_environment() -> None:
         info = get_conda_info()
     except Exception:
         pytest.skip("conda is not installed")
-    if not env_exists(info, "ZMART--alignment--main"):
-        pytest.skip("ZMART--alignment--main not found; run alignment/environments/setup_env.py")
+    if not env_exists(info, "ZMART--focus--main"):
+        pytest.skip("ZMART--focus--main not found; run focus/environments/setup_env.py")
 
 
 def _blurred(image: np.ndarray, radius: int) -> np.ndarray:
@@ -242,7 +242,7 @@ def test_a_plane_list_must_say_where_it_starts_and_ends(tmp_path):
     """One path is not a stack, and no path at all is not an input."""
     paths = _planes_written_one_per_file(tmp_path, lambda z: abs(z - SHARP_AT))
 
-    with pytest.raises(ValueError, match="found no picture"):
+    with pytest.raises(ValueError, match="found no focus stack"):
         _focus({"input": {}})
     with pytest.raises(ValueError, match="one plane cannot be focused"):
         _focus({"input": {"image_paths": paths[:1]}})
@@ -402,7 +402,7 @@ def test_the_pipeline_runs_through_the_engine(tmp_path, engine_factory, wait_for
     survive the trip back from a worker subprocess. This is the one that says
     the YAML is usable.
     """
-    _require_alignment_environment()
+    _require_focus_environment()
     stack = np.stack(
         [
             np.full((32, 32), 100, dtype=np.uint16)

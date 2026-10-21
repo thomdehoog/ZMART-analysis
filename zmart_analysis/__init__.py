@@ -47,7 +47,7 @@ from .workers import (
     WorkerTimeoutError,
 )
 
-__version__ = "0.5.0rc4"
+__version__ = "0.5.0"
 __all__ = [
     "Engine",
     "WorkerError",
