@@ -2,8 +2,9 @@
 
 Status: PLAN, not built. Written 2026-10-21 from the engine at 0.5.0rc7
 (ZMB `release-candidate`, 8926aa6). Decisions D1–D6 settled with Thom the
-same day. Revised after review A (12 findings) and review B (14 findings),
-all taken in; see the end.
+same day. Revised after review A (12 findings), review B (14 findings) and a final
+review C over both (9 findings, verdict "ready after small fixes"), all
+taken in; see the end.
 
 ## Goal
 
@@ -112,24 +113,35 @@ The engine never guesses; the acquisition says what is complete.
 
 ### A phase over N timepoints
 
-- Its first step receives its parts grouped by timepoint, oldest first:
+- **"The timepoint before"** is the latest earlier timepoint this place
+  has opened. The engine never counts, so a skipped round is simply not
+  there: after 2 comes 4.
+- Its first step receives the parts of the timepoints this place opened
+  within `t−N+1 … t`, grouped by timepoint, oldest first:
   `pipeline_data["parts"] = [{"timepoint": 3, "parts": [...]}, {"timepoint": 4, "parts": [...]}]`.
-  A timepoint the place never had (the first timepoints of a series, a
-  skipped round) is missing from the list, not empty.
+  A timepoint the place never had is missing from the list, not empty.
 - **`previous`:** the first step also receives `pipeline_data["previous"]`:
   the output of this phase (its last step) for the same place at the
-  timepoint before, read from its folder; `None` at the first timepoint,
-  or when that run failed (its failure is in `failures`).
+  timepoint before (as above), read from its folder; `None` when there is
+  none, or when that run failed (its failure is in `failures`).
+- `previous` and the order per place are for `timepoints: N` with N ≥ 2
+  only; a `timepoints: 1` phase runs per unit as today.
 - **In order per place, without blocking:** the phase of position 7 at
   timepoint 4 is started only when the phase at its timepoint before has
   ended (done or failed). The engine does not park a thread to wait: when
   timepoint 3 ends, it starts timepoint 4 if that one is ready, and when
-  timepoint 4 becomes ready first, it is held as "waiting for timepoint
-  3" on the board. No thread waits on another, so `max_concurrent`
-  cannot fill up with waiters.
+  timepoint 4 becomes ready first, it stays `waiting` on the board, with
+  `after: 3` naming the run it waits for. No thread waits on another, so
+  `max_concurrent` cannot fill up with waiters.
+- **Kept simple in 0.6:** a window phase is the last scoped phase of its
+  pipeline, and `scope: position` is the first. Register refuses a scoped
+  phase after a window phase (it would have to wait, in a thread, on a
+  window that is held) and a `scope: position` phase after another scoped
+  phase. Tracking needs neither.
 - **What is kept:** the engine keeps the references to the phase-before's
-  results of a place for its last N−1 timepoints, instead of taking them
-  once. They are small (a folder name, an id, a scope). The folders
+  results of a place for its last N−1 timepoints, in a store of their own
+  per place (not in the results a wider close collects, where they would
+  read as "never closed"). They are small (a folder name, an id, a scope). The folders
   themselves stay until deregister, as every board output does today
   (the board keeps every output; see "Out of scope").
 
@@ -138,7 +150,9 @@ The engine never guesses; the acquisition says what is complete.
 - `submit(..., deadline=90)`: the microscope needs this image's answer
   within 90 seconds. The engine stores it as an absolute time.
 - **Order:** the job with the nearest deadline starts first; a job without
-  a deadline comes after those with one; ties go by submission order.
+  a deadline comes after those with one; ties go by the order of
+  submission across the whole engine (one counter, as today; job ids are
+  counted per pipeline and cannot order jobs of two pipelines).
 - The order holds everywhere a job waits:
   - for an engine thread (the image jobs' queue);
   - **for a scope job's thread** (today a plain first-come
@@ -209,14 +223,18 @@ no job id). The engine knows them and hands them over:
   and the scope jobs of a submit are numbered after its image. So the
   number used for that order stays the closing submit's index, and the
   part's identity is stored beside it: each stored result is
-  `(order, match_scope, (folder, id, part_scope))`. For an image `id` is
+  `(order, match_scope, (folder, id, part_scope), summary)`. The summary
+  stays because the `lineage` is built from it, as today; its
+  `submissions` are taken from the stored ids, not from a step's
+  `metadata` (which a step returning a new dictionary drops). For an image `id` is
   its job and `part_scope` its scope; for a unit `id` is the **scope
   job** and `part_scope` the **unit**. (Storing the scope job's id as the
   order would make a well drop out of its own carrier when one submit
   completes both.)
 - Failures likewise keep `submission_idx` for the order and add `id` for
   the part.
-- `files["results"]` becomes a list of `(folder, id, part_scope)`, and the
+- `files["results"]` is renamed `files["parts"]` and becomes a list of
+  `(folder, id, part_scope)`, and the
   worker's `parts` sequence reads each folder when the step reaches it and
   builds the part. A scoped step that hands its input on in what it
   returns is stored with the same triples (the `RESULTS` marker in
@@ -289,9 +307,12 @@ CHANGELOG.
   the phase's `metadata` for the next step), without the write; `lineage`
   is added to the last output only. Only the chain's last output is
   written.
-- **`max_workers` counts chains.** The wait for a worker is keyed by the
-  chain (its step files and its width), so a chain's limit holds across
-  pipelines as a step's does today. Guide 2 says so.
+- **Each step keeps its own limit.** A chain takes the gate of each of
+  its steps (step file and width, as today), in a fixed order so two
+  chains can never hold each other up, and lets them go when it ends. A
+  `max_workers: 1` step never runs twice at once, whichever chain it is
+  in. The gate takes the job's order key, so the wait for a worker is
+  ordered too.
 - **The trade, stated:** steps with `max_workers: 1` that used to overlap
   (job 2's `read_images` while job 1's `score_focus` runs) now run as one
   chain per job. Each job writes less; a batch of jobs at once can be
@@ -362,12 +383,8 @@ array comes back as a fresh copy; passed in memory, neither happens. So:
   `<run>/analysis/tiles` (`output_dir`), not to the hand-over, and do not
   move.
 - **The interface** passes `handover=` (its one change in 0.6): a local
-  data disk on the microscope PC, set where it creates the engine.
-- **`score_focus` stops handing on the stack.** Its output is the focus
-  result; the stack it scored is dropped from what it returns, as
-  `build_object_table` already drops its heavy data. Today every focus
-  job's final output holds its whole stack until deregister, and the
-  interface does not deregister during a session.
+  data disk on the microscope PC, from a setting of its own (never a
+  folder in the user's profile), where it creates the engine.
 
 ### Tests for the hand-over
 
@@ -375,7 +392,8 @@ array comes back as a fresh copy; passed in memory, neither happens. So:
 - steps with different resolved environments or `max_workers` (including
   a pipeline override) are not chained; a step listed twice is placed per
   occurrence;
-- `max_workers: 1` on a chain holds across two pipelines using it;
+- a `max_workers: 1` step never runs twice at once, also when it sits in
+  two different chains or two pipelines;
 - the board shows each step of a chain in turn, with the job `running`;
 - a failure in the middle of a chain names that step on the board and in
   the error; the steps after it do not run; the steps before it are in
@@ -391,7 +409,6 @@ array comes back as a fresh copy; passed in memory, neither happens. So:
   (a foreign folder in the hand-over folder survives);
 - the shipped pipelines give the same outputs with and without chaining
   on the sample images;
-- `score_focus`'s output no longer holds the stack.
 
 Measured after the build, to report: the watershed and Cellpose pipelines
 on a 2048×2048 tile and on a 100-plane, 4-channel stack, one job and a
@@ -407,7 +424,7 @@ immediately from the outside how everything clicks together."
 
 ### Rules for the build
 
-- **One way to do each thing.** One order (deadline, then id), in two
+- **One way to do each thing.** One order (deadline, then submission), in two
   small pieces built on it: an ordered thread pool (image jobs, scope
   jobs) and an ordered gate (the wait for a chain's worker). One
   unit key, for place and time. One part builder, at read time. No second
@@ -426,13 +443,14 @@ immediately from the outside how everything clicks together."
 Today `pipeline.py` (790 lines) holds three things: reading a pipeline,
 the job board with its record and folders, and the bookkeeping of units.
 0.6 adds time to the third and would push it past 1,000 lines. It is split
-by what each part is, and two short files are folded in:
+by what each part is; `record.py` (57 lines) is folded in and
+`priority_pool.py` renamed:
 
 | File | Holds | About |
 |---|---|---|
 | `engine.py` | `Engine`: register, submit, status, deregister, shutdown; running image jobs and scope jobs | as today |
-| `pipeline.py` | a pipeline: reading the YAML into phases, every check made at register, building chains from the resolved step settings, and the state of a registered pipeline, which holds its `Units` and its `Board` | ~300 |
-| `units.py` *(new)* | place and time: unit keys, open and close, the cascade, collecting a unit's parts and failures, windows and `previous`, and the job futures and the `cancelling` flag | ~450 |
+| `pipeline.py` | a pipeline: reading the YAML into phases, every check made at register, building chains from the resolved step settings, and the state of a registered pipeline: its `Units`, its `Board`, its job futures and the `cancelling` flag | ~300 |
+| `units.py` *(new)* | place and time: unit keys, open and close, the cascade, collecting a unit's parts and failures, windows and `previous` | ~450 |
 | `board.py` *(new; takes in `record.py`)* | what a run shows and leaves: the job board, the run record, the hand-over folders and their clean-up | ~300 |
 | `job_queue.py` *(was `priority_pool.py`)* | the order: an ordered thread pool and an ordered gate | ~120 |
 | `handover.py` | the folder format, and `parts`: the lazy sequence a scoped step reads | ~200 |
@@ -445,7 +463,9 @@ From the outside: **`Engine` takes a `pipeline`; a pipeline has `units`
 `handover`.** The module docstring of `engine.py` says this in five lines.
 
 `Units` and `Board` each have their own lock and never call each other;
-the pipeline state composes them, and the engine talks to both. Nothing
+the pipeline state composes them and holds what both depend on (the job
+futures, whose cancel marks the board, and `cancelling`, which the board
+reads when a job fails); the engine talks to the pipeline state. Nothing
 today needs the two updated together under one lock. `board.py` owns the
 hand-over folders' life (make, clean, leftover) because `handover.py`
 must stay standard-library only and loaded by file in every step
@@ -489,7 +509,8 @@ All in `zmart_analysis/`; no new dependency. After the move commit (see
    `complete="timepoint"` closes the open units of that timepoint,
    narrowest first.
 4. **units.py — what is stored.** `(order, match_scope, (folder, id,
-   part_scope))` per result; failures with `submission_idx` and `id`.
+   part_scope), summary)` per result; failures with `submission_idx` and
+   `id`; the lineage's `submissions` from the stored ids.
 5. **units.py — windows and position.** Per place: the last N−1
    timepoints' references are kept; window phases run in timepoint order
    by continuation, never by a blocking wait; each run's output folder is
@@ -498,7 +519,10 @@ All in `zmart_analysis/`; no new dependency. After the move commit (see
 6. **board.py.** The board, the run record (from `record.py`), the
    step-only mark for "at step X", per-step records into the record, and
    the hand-over folders under `Engine(handover=...)` or the run folder,
-   with the safe clean-up.
+   with the safe clean-up. `process_alive` (in `worker_script.py`) answers
+   "alive" when Windows refuses to open a process (another user's) instead
+   of "gone". A chain writes to `<first index>-<last step>`, so a folder
+   still says where in the phase it is.
 7. **handover.py, worker_script.py.** `parts` replaces `StoredResults`;
    the `RESULTS` marker holds the triples. The worker runs a chain in one
    call: `finish` without the write between its steps, a step message and
@@ -506,15 +530,20 @@ All in `zmart_analysis/`; no new dependency. After the move commit (see
    its folder.
 8. **workers.py.** `answer_arrives` reads the step messages, restarts the
    step timeout at each, and remembers the step for `.step` on errors.
-   `WorkerPool.execute` waits at the ordered gate, keyed by the chain.
+   `WorkerPool.execute` takes the job's order key and waits at each of
+   the chain's steps' gates, in a fixed order.
 9. **job_queue.py** (was `priority_pool.py`). The order `(deadline or
-   +inf, id)`: an ordered thread pool for image jobs and one for scope
+   +inf, the engine's submission counter)`: an ordered thread pool for image jobs and one for scope
    jobs (they stay two pools, so a scope job never takes the last thread
    its images need), and an ordered gate for the worker wait.
 10. **engine.py.** `Engine(..., handover=None)`; `submit(pipeline, data,
     scope=None, deadline=None, complete=None)`; `deadline` and `late` on
-    the board and in the record; scope jobs inherit the nearest deadline;
-    `_handle_scope_complete_chain` renamed `close_units`.
+    the board and in the record; a scope job takes the nearest deadline
+    of the images that completed it, and a submit that closes several
+    units is queued by the nearest of theirs; `_handle_scope_complete_chain`
+    renamed `close_units`. `complete="timepoint"` without a `timepoint` in
+    the scope raises `ScopeError`; it does not touch position units, which
+    close themselves.
 
 ## Tests first
 
@@ -531,7 +560,13 @@ New `tests/test_time.py`:
   other;
 - a `timepoints: 2` phase gets the parts of this timepoint and the one
   before, oldest first; at the first timepoint only this one;
-- a skipped timepoint is missing from the window, not empty;
+- a skipped timepoint is missing from the window, not empty; after a
+  skipped round the next timepoint follows the last one there (order and
+  `previous`);
+- register refuses a scoped phase after a window phase, and `scope:
+  position` after another scoped phase;
+- a unit's lineage lists its images' ids also when a per-image step
+  returned a new dictionary;
 - position 7 of well 3 and of well 4 are separate tracks;
 - the window phases of one place run in timepoint order, even when
   timepoint 4's image finishes before timepoint 3's, **and with
@@ -564,7 +599,8 @@ New `tests/test_parts.py`:
 
 In `tests/test_engine.py`, the priority tests become deadline tests:
 
-- a nearer deadline starts first; no deadline comes last; ties by id;
+- a nearer deadline starts first; no deadline comes last; ties by the
+  engine's submission order, also across two pipelines;
 - the order holds for scope jobs and while jobs wait for a
   `max_workers: 1` step;
 - a job that ends after its deadline is `late` on the board and in the
@@ -663,10 +699,10 @@ The scoped steps in the existing tests move from `results` to `parts`:
    read → a folder of the engine's own; unreadable names are left alone.
 2. Storing a unit under its scope job's id breaks "up to the closing
    submit" → order and identity kept apart.
-3. Defaulting the hand-over to the profile's temp folder would fill the
-   28 GB profile, and the focus output holds whole stacks → default stays
-   the run folder; `handover=` opt-in, passed by the interface;
-   `score_focus` drops the stack.
+3. Defaulting the hand-over to the profile's temp folder could fill the
+   28 GB profile → default stays the run folder; `handover=` opt-in,
+   passed by the interface. (B also asked `score_focus` to drop the
+   stack; review C found it already does, so nothing changes there.)
 4. One summary per chain loses per-step times and provenance → the worker
    sends a record per step.
 5. "At step X" would flip a running job to queued, and a crash named the
@@ -686,6 +722,32 @@ The scoped steps in the existing tests move from `results` to `parts`:
     locks; futures and `cancelling` in `units.py`.
 14. "Chain" meant two things; "one queue" was two pieces → the old chain
     renamed; the order described as a pool and a gate.
+
+## Review C (2026-10-21), the final check over A and B
+
+Verdict: ready after small fixes; all taken in.
+
+1. The stored result dropped the summary the lineage is built from → kept;
+   `submissions` from the stored ids.
+2. Ties by per-pipeline job id would reorder two pipelines → ties by the
+   engine's submission counter.
+3. A scoped phase after a window could still block a thread on a held
+   window, and a position phase had no token at submit → refused at
+   register in 0.6 (window last, position first).
+4. "The timepoint before" was undefined after a skipped round → the latest
+   earlier timepoint the place opened.
+5. `score_focus` already drops the stack → that change and its test
+   removed; B3 corrected.
+6. `Units` and `Board` would call each other through the futures and
+   `cancelling` → those stay on the pipeline state.
+7. Window references in the collected results would read as "never
+   closed" → a store of their own.
+8. A gate per chain loosened a step's own limit → a chain takes each
+   step's gate, in a fixed order, with the order key.
+9. Smaller points settled: `process_alive` and "access denied"; `previous`
+   only for N ≥ 2; a multi-unit submit's queue key; `complete="timepoint"`
+   rules; `waiting` with `after:` on the board; the chain's folder name;
+   `files["parts"]`; the interface's setting; "two short files" corrected.
 
 ## Where the work lands
 
