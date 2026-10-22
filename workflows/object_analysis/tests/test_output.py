@@ -155,6 +155,27 @@ def test_a_position_store_files_its_checkpoint_where_the_caller_says(tmp_path):
     assert record["image_sha256"] == file_sha256(store)
 
 
+def test_an_ome_zarr_alone_files_its_checkpoint_too(tmp_path):
+    """An OME-Zarr image is enough: the record keeps what the caller gave, and no more.
+
+    Where the tile lies, its pixel size and its turn come from the store's own
+    metadata, in build_object_table; the record does not ask for them.
+    """
+    import json
+
+    import numpy as np
+
+    store = _a_position_store(tmp_path / "positions" / "overview")
+    masks = np.zeros((8, 8), dtype="int32")
+    masks[2:5, 2:5] = 1
+    inp = {"image_path": str(store), "output_dir": str(tmp_path / "analysis")}
+    artifacts = write_detection_checkpoint(_detection(masks), masks, inp, {})
+
+    record = json.loads(Path(artifacts["detection_checkpoint_json"]).read_text())
+    assert record["image_path"] == str(store)
+    assert record["tile_id"] is None and record["source_pixel_size_um"] is None
+
+
 # --------------------------------------------------------------------------
 # What segment_cellpose does with it when the caller names no output_dir
 # --------------------------------------------------------------------------
