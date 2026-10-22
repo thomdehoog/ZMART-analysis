@@ -149,56 +149,39 @@ has to load PyTorch.
 
 ### Describe it
 
-Each workflow has a short script, `environments/setup_env.py`, that lists
-what the environment needs:
+Each environment is a conda environment file in the workflow's
+`environments/` folder, named after the environment, with a lock file beside
+it that holds every package at one version:
 
-```python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from zmart_analysis.environments import setup_workflow_env
-
-if __name__ == "__main__":
-    setup_workflow_env(
-        workflow="intensity",              # the workflow folder's name
-        pip_packages=["numpy"],            # as pip spells them, e.g. "cellpose>=4,<5"
-        diagnostics=[("numpy imports", "import numpy; print(numpy.__version__)")],
-        install_torch=False,               # True installs PyTorch for the detected GPU
-    )
+```yaml
+# environments/main.yml
+name: ZMART--intensity--main
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - -r main.txt
 ```
 
-`diagnostics` are small checks that run inside the new environment. Each is
-a label and one line of Python that prints a short result.
-
-Three more parameters are optional: `python_version` (default `"3.12"`),
-`default_step` (the environment made when `--step` is not given, default
-`"main"`) and `steps_dir`. With `steps_dir` set to the workflow's `steps/`
-folder, `__STEPS__` in a check is replaced by that folder, so the check can
-import a step.
-
-A workflow with several environments keeps one package list per
-environment and picks one from `--step`.
-`workflows/object_analysis/environments/setup_env.py` is the example.
+To make the lock file, install the packages your steps need in a new
+environment, check it with the workflow's tests, and write down what it
+holds with `pip freeze > main.txt`. To move to newer packages later, do the
+same again: the lock file changes on purpose, not by itself.
+`workflows/object_analysis/environments/` is the example, with three
+environments.
 
 ### Make it
 
 ```bash
-python workflows/focus/environments/setup_env.py                   # makes ZMART--focus--main
-python workflows/object_analysis/environments/setup_env.py --step classical
+conda env create -f workflows/focus/environments/main.yml                  # makes ZMART--focus--main
+conda env create -f workflows/object_analysis/environments/classical.yml
 ```
 
-| Option | What it does |
-|---|---|
-| `--step <name>` | Which of the workflow's environments to make. |
-| `--python <version>` | The Python version. Default 3.12. |
-| `--gpu cu128\|cu124\|cu121\|mps\|cpu` | Which PyTorch build to install, for workflows that use it. By default the script detects your GPU. |
-| `--check` | Run the checks on an existing environment. Nothing is installed. |
-| `--dry-run` | Print the commands without running them. |
-
-The environment is built from conda-forge, and the packages are installed
-with pip inside it. An environment that already exists is left alone. To
-rebuild one, remove it first with `clean_env.py --step <name>`.
+`conda env remove -n ZMART--focus--main` removes one again. The workflow's
+tests check an environment: they run its steps.
 
 ## Keep a model loaded
 
@@ -337,8 +320,8 @@ workflows/object_analysis/
 ├── pipelines/             the pipelines (YAML)
 ├── steps/                 one Python file per step
 ├── environments/
-│   ├── setup_env.py       makes the environments
-│   └── clean_env.py       removes them again
+│   ├── main.yml           one conda environment file per environment
+│   └── main.txt           its lock file: every package at one version
 └── tests/
 ```
 
@@ -361,7 +344,7 @@ opens the files and hands on the pixels, so no step after it opens a file.
 To add a workflow, copy `focus`. It is the smaller one. Then:
 
 1. Write the steps.
-2. Name each environment and list its packages in `setup_env.py`.
+2. Name each environment in a conda environment file, with its lock file.
 3. Write a pipeline that holds every parameter, each with a comment.
 4. Add tests and a short `README.md`.
 
@@ -397,7 +380,7 @@ so you can leave them out:
 | Marker | Needs |
 |---|---|
 | `cellpose` | The `ZMART--object_analysis--cellpose` environment, with Cellpose and its model. |
-| `conda_env` | The conda environments that a workflow's `setup_env.py` makes. |
+| `conda_env` | The conda environments that a workflow's environment files make. |
 | `pooch` | Public sample images, downloaded on first use. |
 | `slow` | More than about five seconds. |
 

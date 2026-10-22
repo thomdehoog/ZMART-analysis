@@ -1,0 +1,19 @@
+# The environment of segment_cellpose: PyTorch and Cellpose.
+# conda-forge's pytorch takes the CUDA build by itself when the computer has
+# an NVIDIA GPU, and the CPU build otherwise. Not locked yet: the PyTorch
+# build depends on the graphics card. conda-forge only.
+name: ZMART--object_analysis--cellpose
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pip
+  - pytorch
+  - pip:
+      - pyyaml
+      - numpy
+      - tifffile
+      # Pinned to the network the masks are made with, cpsam: 4.2 made
+      # cpsam_v2 the default, and the masks change with the network.
+      - cellpose>=4,<4.2

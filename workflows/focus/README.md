@@ -41,5 +41,5 @@ Both steps run in `ZMART--focus--main`: numpy, scipy and the image
 readers. No PyTorch, no GPU. Create it once with:
 
 ```bash
-python workflows/focus/environments/setup_env.py
+conda env create -f workflows/focus/environments/main.yml
 ```

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0rc4 (2026-10-22) -- environments are conda environment files
+
+- **A workflow describes its environments as conda environment files.**
+  `environments/<name>.yml` names the environment its steps use and installs
+  from the lock file beside it: `conda env create -f classical.yml`. The
+  `setup_env.py` and `clean_env.py` scripts are gone, and with them
+  `zmart_analysis.environments` (`setup_workflow_env`,
+  `clean_workflow_envs`, the lock-file support of 0.6.0rc3) and the conda
+  helpers only they used (`get_conda_exe`, `list_envs_by_prefix`). Making an
+  environment is conda's job; the engine runs steps in it. The checks the
+  scripts ran are the workflows' tests.
+- The examples have `focus/main.yml`, `object_analysis/classical.yml` and
+  `umap.yml`, each from its lock file, and `cellpose.yml`, not locked:
+  conda-forge's `pytorch` takes the CUDA build by itself on a computer with
+  an NVIDIA GPU, so the build differs between computers.
+
 ## 0.6.0rc3 (2026-10-22) -- the package is the engine; a step's environment comes from a lock file
 
 - **The package is the engine again.** 0.6.0rc2 put the workflows inside

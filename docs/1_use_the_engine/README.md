@@ -428,7 +428,7 @@ board: the job's `state` is `failed`, and its `error` says what happened:
 | `StepExecutionError` | The step's `run` raised an error. The message holds that error's name and text. |
 | `WorkerTimeoutError` | The step ran longer than `execution_timeout`. |
 | `WorkerCrashedError` | The worker process died during the step. The engine starts a new worker for the next job. |
-| `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist yet. Run the workflow's `environments/setup_env.py`. |
+| `WorkerSpawnError` | The worker could not start. Usually the conda environment does not exist yet. Create it from the workflow's `environments/` file: `conda env create -f <name>.yml`. |
 
 A failed image job stays on the board. A scoped step over its unit is also
 told about it, under `lineage` in its output.

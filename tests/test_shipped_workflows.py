@@ -42,5 +42,5 @@ def test_the_wheel_is_the_engine_only(tmp_path):
     names = zipfile.ZipFile(wheel).namelist()
 
     assert "zmart_analysis/engine.py" in names
-    assert "zmart_analysis/environments.py" in names
+    assert "zmart_analysis/conda.py" in names
     assert not [name for name in names if "workflows/" in name]

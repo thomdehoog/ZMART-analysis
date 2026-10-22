@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 
 from zmart_analysis import conda
-from zmart_analysis.conda import env_exists, get_conda_exe, get_conda_info, list_envs_by_prefix
+from zmart_analysis.conda import env_exists, get_conda_info
 
 
 def _conda_available() -> bool:
@@ -51,14 +51,6 @@ class TestGetCondaInfo:
 
 
 @needs_conda
-class TestGetCondaExe:
-    def test_an_executable_that_exists_or_the_bare_name(self):
-        exe = get_conda_exe(get_conda_info())
-        assert isinstance(exe, str)
-        assert Path(exe).exists() or exe == "conda", f"Executable not found: {exe}"
-
-
-@needs_conda
 class TestEnvExists:
     def test_an_existing_environment_is_found(self):
         info = get_conda_info()
@@ -69,21 +61,11 @@ class TestEnvExists:
         assert not env_exists(get_conda_info(), "this_env_does_not_exist_12345")
 
 
-@needs_conda
-class TestListEnvsByPrefix:
-    def test_only_names_with_the_prefix_come_back(self):
-        info = get_conda_info()
-        assert list_envs_by_prefix(info, "ZZZZZ_NONEXISTENT_PREFIX_") == []
-        for name in list_envs_by_prefix(info, "ZMART--"):
-            assert name.startswith("ZMART--")
-
-
-def test_env_exists_and_list_envs_read_the_names_from_the_paths():
-    """No conda needed: the two helpers only look at the paths conda lists."""
+def test_env_exists_reads_the_names_from_the_paths():
+    """No conda needed: it only looks at the paths conda lists."""
     info = {"envs": ["/opt/conda", "/opt/conda/envs/ZMART--focus--main", "/x/envs/other"]}
     assert env_exists(info, "ZMART--focus--main")
     assert not env_exists(info, "ZMART--focus")
-    assert list_envs_by_prefix(info, "ZMART--") == ["ZMART--focus--main"]
 
 
 def test_conda_is_found_beside_the_running_python(tmp_path):

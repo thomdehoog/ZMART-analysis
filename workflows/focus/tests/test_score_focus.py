@@ -40,7 +40,7 @@ def _require_focus_environment() -> None:
     """Skip unless conda and the ZMART--focus--main environment both exist.
 
     The engine runs the focus pipeline inside that environment, which
-    environments/setup_env.py creates. Without it the test is skipped, not
+    environments/main.yml describes. Without it the test is skipped, not
     failed.
     """
     from zmart_analysis.conda import env_exists, get_conda_info
@@ -50,7 +50,7 @@ def _require_focus_environment() -> None:
     except Exception:
         pytest.skip("conda is not installed")
     if not env_exists(info, "ZMART--focus--main"):
-        pytest.skip("ZMART--focus--main not found; run focus/environments/setup_env.py")
+        pytest.skip("ZMART--focus--main not found; conda env create -f workflows/focus/environments/main.yml")
 
 
 def _blurred(image: np.ndarray, radius: int) -> np.ndarray:

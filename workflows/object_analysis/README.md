@@ -97,9 +97,11 @@ detection.
 | `ZMART--object_analysis--cellpose` | PyTorch and Cellpose | `segment_cellpose` |
 | `ZMART--object_analysis--umap` | pandas, scikit-learn and umap-learn | `reduce_dimensions` |
 
-Create each one with `python environments/setup_env.py --step <name>`, and
-check one that exists with `--check`. The check runs the environment's own
-steps on a small test image; for Cellpose it says which device it used.
+Create each one from its file in `environments/`, for example
+`conda env create -f environments/classical.yml`. The classical and UMAP
+environments come from lock files, every package at one version. Cellpose's
+has none yet: conda-forge's `pytorch` takes the CUDA build by itself when the
+computer has an NVIDIA GPU, so that build differs between computers.
 
 Each step file names its own environment, so a pipeline only starts the
 workers it needs. The watershed pipeline never loads PyTorch.
@@ -126,7 +128,7 @@ do not need.
    hands its own `find_objects` to `segment` in `segment_cellpose.py`, which
    does the binning, the filters and the record. Import the model inside the
    function that uses it.
-2. Give it its own environment in `environments/setup_env.py`.
+2. Give it its own environment: a file in `environments/`, with its lock file.
 3. Write a pipeline that runs it after `read_images`.
 
 ## Tuning notes

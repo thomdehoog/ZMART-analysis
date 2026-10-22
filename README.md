@@ -117,17 +117,17 @@ print(board[job]["output"]["score_focus"]["peak_z_um"])
 ## Install it
 
 Python 3.11 or newer and conda are needed. The engine itself needs only
-PyYAML; each workflow's `setup_env.py` makes the conda environment its
-steps run in.
+PyYAML; the steps run in conda environments that each workflow describes in
+its `environments/` folder.
 
 ```bash
-pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc3"
+pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc4"
 ```
 
 The package is the engine: `from zmart_analysis import Engine`. A pipeline
 plugs into it and lives with the workflow that uses it: its YAML, its steps,
-and a lock file for each step's environment, which the workflow's
-`setup_env.py` builds. The [`workflows`](workflows/) in this repository are
+and a conda environment file with a lock file for each step's environment
+(`conda env create -f`). The [`workflows`](workflows/) in this repository are
 examples to copy; they are not installed.
 The tutorials are notebooks; `pip install jupyter` to run them.
 

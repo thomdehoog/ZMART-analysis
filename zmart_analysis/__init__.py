@@ -35,8 +35,9 @@ Architecture
                       environment
     handover.py       how one step's output reaches the next, through a folder
     conda.py          finds conda and the environments it knows
-    environments.py   creates or removes a workflow's environments, for its
-                      setup_env.py and clean_env.py
+
+The environments themselves are conda environment files that each workflow
+keeps in its environments/ folder (conda env create -f <name>.yml).
 """
 
 from .engine import Engine
@@ -49,7 +50,7 @@ from .workers import (
     WorkerTimeoutError,
 )
 
-__version__ = "0.6.0rc3"
+__version__ = "0.6.0rc4"
 __all__ = [
     "Engine",
     "WorkerError",

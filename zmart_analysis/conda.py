@@ -3,8 +3,7 @@ Finding conda, and asking it which environments exist.
 
 The engine needs this at run time: a worker is started with ``conda run``
 inside the environment a step names, so the engine has to know where conda
-is and where that environment lives. The environment setup and cleanup
-scripts build on the same few functions (see ``environments.py``).
+is and where that environment lives.
 
 Only the standard library is used here, so this works in any Python that
 can reach conda.
@@ -80,27 +79,9 @@ def get_conda_info():
     )
 
 
-def get_conda_exe(conda_info):
-    """Get the conda executable path from conda info."""
-    conda_exe = conda_info.get("conda_exe")
-    if conda_exe and Path(conda_exe).exists():
-        return conda_exe
-    return CONDA_CMD
-
-
 def env_exists(conda_info, env_name):
     """Check if a conda environment exists."""
     for env_path in conda_info.get("envs", []):
         if Path(env_path).name == env_name:
             return True
     return False
-
-
-def list_envs_by_prefix(conda_info, prefix):
-    """List all conda envs whose name starts with prefix."""
-    matching = []
-    for env_path in conda_info.get("envs", []):
-        name = Path(env_path).name
-        if name.startswith(prefix):
-            matching.append(name)
-    return matching
