@@ -20,8 +20,6 @@ API
     engine.deregister("analysis")           # its jobs finish, its workers stop
     engine.shutdown()
 
-    pipeline_file("object_analysis_watershed")   # a shipped pipeline, by name
-
 Architecture
 ------------
     engine.py         the Engine: register, submit, status, deregister, shutdown
@@ -42,7 +40,6 @@ Architecture
 """
 
 from .engine import Engine
-from .pipeline import pipeline_file
 from .units import ScopeError
 from .workers import (
     StepExecutionError,
@@ -52,10 +49,9 @@ from .workers import (
     WorkerTimeoutError,
 )
 
-__version__ = "0.6.0rc2"
+__version__ = "0.6.0rc3"
 __all__ = [
     "Engine",
-    "pipeline_file",
     "WorkerError",
     "WorkerSpawnError",
     "WorkerCrashedError",

@@ -65,5 +65,6 @@ if __name__ == "__main__":
         python_version=PYTHON_VERSION,
         install_torch=False,
         steps_dir=Path(__file__).resolve().parents[1] / "steps",
+        locks_dir=Path(__file__).resolve().parent,
         default_step="main",
     )

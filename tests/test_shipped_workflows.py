@@ -1,61 +1,46 @@
-"""The workflows travel with the package, so an install from GitHub can run them.
+"""The package is the engine: an install brings no workflows.
 
-A pipeline is found by its name, and a workflow's step environment is made by
-naming the workflow, wherever the package is installed.
+A pipeline, its steps and its lock files live with the workflow that uses
+them; the workflows in this repository are examples to copy, not installed.
 """
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
-from unittest import mock
 
 import pytest
-
-from zmart_analysis import environments, pipeline_file
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-def test_a_shipped_pipeline_is_found_by_its_name():
-    path = pipeline_file("object_analysis_watershed")
-
-    assert path.is_file()
-    assert path.name == "object_analysis_watershed.yaml"
-    assert path.parent.parent.name == "object_analysis"
-
-
-def test_an_unknown_pipeline_names_the_ones_there():
-    with pytest.raises(ValueError, match="object_analysis_watershed"):
-        pipeline_file("no_such_pipeline")
-
-
-def test_a_workflow_environment_is_made_by_naming_the_workflow():
-    """``python -m zmart_analysis.environments object_analysis --step classical`` runs its setup_env.py."""
-    with mock.patch("runpy.run_path") as run:
-        environments.main(["object_analysis", "--step", "classical"])
-
-    script = Path(run.call_args.args[0])
-    assert script.name == "setup_env.py"
-    assert script.parent.parent.name == "object_analysis"
-    assert run.call_args.kwargs["run_name"] == "__main__"
+def _clean_copy(target: Path) -> Path:
+    """The tracked files only, as a clone has them: no build/ left over from an earlier build."""
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=REPO, check=True, capture_output=True, text=True
+    ).stdout.splitlines()
+    for name in tracked:
+        source = REPO / name
+        if source.is_file():
+            (target / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target / name)
+    return target
 
 
 @pytest.mark.slow
-def test_the_wheel_carries_the_workflows(tmp_path):
+def test_the_wheel_is_the_engine_only(tmp_path):
+    source = _clean_copy(tmp_path / "source")
     subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(REPO), "--no-deps", "--no-build-isolation",
-         "-w", str(tmp_path), "-q"],
+        [sys.executable, "-m", "pip", "wheel", str(source), "--no-deps", "--no-build-isolation",
+         "-w", str(tmp_path / "wheel"), "-q"],
         check=True,
     )
-    wheel = next(tmp_path.glob("zmart_analysis-*.whl"))
+    wheel = next((tmp_path / "wheel").glob("zmart_analysis-*.whl"))
     names = zipfile.ZipFile(wheel).namelist()
 
-    for shipped in (
-        "zmart_analysis/workflows/object_analysis/pipelines/object_analysis_watershed.yaml",
-        "zmart_analysis/workflows/object_analysis/steps/build_object_table.py",
-        "zmart_analysis/workflows/object_analysis/environments/setup_env.py",
-    ):
-        assert shipped in names, shipped
+    assert "zmart_analysis/engine.py" in names
+    assert "zmart_analysis/environments.py" in names
+    assert not [name for name in names if "workflows/" in name]

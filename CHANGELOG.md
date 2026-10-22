@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0rc3 (2026-10-22) -- the package is the engine; a step's environment comes from a lock file
+
+- **The package is the engine again.** 0.6.0rc2 put the workflows inside
+  the package; they come out again, with `pipeline_file()` and
+  `python -m zmart_analysis.environments`. A pipeline plugs into the engine
+  and lives with the workflow that uses it. The workflows in this
+  repository are examples to copy.
+- **A step's environment comes from its lock file.** When a workflow's
+  `environments/` holds `<step>.txt`, `setup_env.py --step <step>` installs
+  exactly those versions, so the step runs the same on every computer and
+  in every year. `--unpinned` installs the loose list instead, to make a
+  new lock file (`pip freeze` in the checked environment). The examples'
+  `focus/main`, `object_analysis/classical` and `object_analysis/umap` have
+  lock files; Cellpose's environment has none yet, since its PyTorch build
+  depends on the graphics card.
+
 ## 0.6.0rc2 (2026-10-22) -- an installed package runs its workflows, and an image says where it is
 
 - **The workflows ship with the package.** `pip install` from GitHub now

@@ -7,6 +7,7 @@ check what the script would do, not whether conda is installed.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -61,7 +62,7 @@ def test_a_check_that_crashes_stops_the_setup():
         _diagnose(_Ran(returncode=1, stdout="", stderr="ModuleNotFoundError: sklearn"))
 
 
-def _setup(argv, envs, envs_after=None):
+def _setup(argv, envs, envs_after=None, locks_dir=None):
     """Run setup_workflow_env with a pretend conda; return the commands it ran.
 
     ``envs_after`` is what conda lists once the environment is created.
@@ -96,6 +97,7 @@ def _setup(argv, envs, envs_after=None):
             pip_packages=["numpy"],
             diagnostics=[("numpy", "import numpy")],
             install_torch=False,
+            locks_dir=locks_dir,
         )
     return ran
 
@@ -155,3 +157,51 @@ def test_an_environment_created_without_its_interpreter_stops_the_setup(tmp_path
 def test_a_dry_run_prints_the_commands_and_runs_none():
     ran = _setup(["--dry-run"], envs=[])
     assert ran == []
+
+
+def _interpreter(tmp_path):
+    prefix = tmp_path / "ZMART--demo--main"
+    prefix.mkdir()
+    (prefix / "python.exe").write_text("")
+    return prefix, str(prefix / "python.exe")
+
+
+def test_a_locked_step_installs_exactly_its_lock_file(tmp_path):
+    """The step's lock file names every package at one version, so a rebuild is the same environment."""
+    lock = tmp_path / "main.txt"
+    lock.write_text("numpy==2.3.4\n")
+    prefix, python = _interpreter(tmp_path)
+
+    ran = _setup([], envs=[], envs_after=[str(prefix)], locks_dir=tmp_path)
+
+    install = next(cmd for cmd in ran if "install" in cmd)
+    assert install[install.index(python) :] == [python, "-m", "pip", "install", "-r", str(lock)]
+
+
+def test_unpinned_builds_from_the_loose_list_to_make_a_new_lock(tmp_path):
+    (tmp_path / "main.txt").write_text("numpy==2.3.4\n")
+    prefix, python = _interpreter(tmp_path)
+
+    ran = _setup(["--unpinned"], envs=[], envs_after=[str(prefix)], locks_dir=tmp_path)
+
+    install = next(cmd for cmd in ran if "install" in cmd)
+    assert install[install.index(python) :] == [python, "-m", "pip", "install", "numpy"]
+
+
+@pytest.mark.parametrize(
+    "workflow, step",
+    [("focus", "main"), ("object_analysis", "classical"), ("object_analysis", "umap")],
+)
+def test_the_shipped_steps_are_locked(workflow, step):
+    """Every package of the step at exactly one version: ``name==version`` on every line."""
+    import re
+
+    lock = Path(__file__).resolve().parents[1] / "workflows" / workflow / "environments" / f"{step}.txt"
+    lines = [
+        line.strip()
+        for line in lock.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert lines
+    for line in lines:
+        assert re.fullmatch(r"[A-Za-z0-9_.\-]+==[^=\s]+", line), line

@@ -152,8 +152,15 @@ def setup_workflow_env(
     install_torch: bool = True,
     default_step: str = "main",
     steps_dir: str | Path | None = None,
+    locks_dir: str | Path | None = None,
 ) -> None:
     """Create a ZMART--<workflow>--<step> conda environment and check it.
+
+    When *locks_dir* holds ``<step>.txt``, the step's lock file, the packages
+    come from it: every package at the one version it names, so the step
+    runs in the same environment on every computer and in every year.
+    ``--unpinned`` installs *pip_packages* instead, the loose list a new lock
+    file is made from (``pip freeze`` in the checked environment).
 
     *diagnostics* are ``(label, python one-liner)`` pairs run inside the new
     environment; each should print a short result. When *steps_dir* is given,
@@ -191,9 +198,21 @@ def setup_workflow_env(
         action="store_true",
         help="Run the checks on an environment that already exists, installing nothing",
     )
+    parser.add_argument(
+        "--unpinned",
+        action="store_true",
+        help="Install the loose package list instead of the step's lock file, to make a new lock",
+    )
     args = parser.parse_args()
 
     env_name = f"ZMART--{workflow}--{args.step}"
+    here = f"python {sys.argv[0]} --step {args.step}"
+    lock = Path(locks_dir) / f"{args.step}.txt" if locks_dir is not None else None
+    if lock is not None and lock.is_file() and not args.unpinned:
+        install_args = ["-r", str(lock)]
+    else:
+        lock = None
+        install_args = list(pip_packages)
     gpu = (args.gpu or detect_gpu()) if install_torch else None
     t_start = time.time()
 
@@ -226,7 +245,7 @@ def setup_workflow_env(
     if args.check:
         if not exists:
             fail(f"Environment '{env_name}' does not exist yet.")
-            print(f"         Create it: python setup_env.py --step {args.step}")
+            print(f"         Create it: {here}")
             sys.exit(1)
         section(f"Checking {env_name}")
         _run_diagnostics(conda, env_name, _python_in(env_name) or "python", diagnostics)
@@ -234,7 +253,7 @@ def setup_workflow_env(
         return
     if exists:
         fail(f"Environment '{env_name}' already exists.")
-        print(f"         Check it:        python setup_env.py --step {args.step} --check")
+        print(f"         Check it:        {here} --check")
         print(f"         Or remove it first: python clean_env.py --step {args.step}")
         sys.exit(1)
 
@@ -318,8 +337,8 @@ def setup_workflow_env(
         "-m",
         "pip",
         "install",
-    ] + pip_packages
-    print(f"  Packages: {', '.join(pip_packages)}")
+    ] + install_args
+    print(f"  Packages: {'locked in ' + lock.name if lock else ', '.join(pip_packages)}")
     cmd_line(pip_cmd)
     if args.dry_run:
         skip("dry run")
@@ -328,7 +347,7 @@ def setup_workflow_env(
         if result.returncode != 0:
             fail("Package installation failed")
             sys.exit(1)
-        for pkg in pip_packages:
+        for pkg in [f"locked in {lock.name}"] if lock else pip_packages:
             ok(pkg)
 
     next_step += 1
@@ -346,12 +365,12 @@ def setup_workflow_env(
     info("GPU backend", gpu_label(gpu) if install_torch else "not used")
     info("Python", args.python)
     torch_packages = 2 if install_torch else 0
-    info("Packages", str(len(pip_packages) + torch_packages))
+    info("Packages", f"locked in {lock.name}" if lock else str(len(pip_packages) + torch_packages))
     info("Time", f"{elapsed:.0f}s")
 
     section("Next steps")
     print(f"  Activate:    conda activate {env_name}")
-    print(f"  Check:       python setup_env.py --step {args.step} --check")
+    print(f"  Check:       {here} --check")
     print(f"  Remove:      python clean_env.py --step {args.step}")
     print()
     print("=" * WIDTH)
@@ -562,29 +581,3 @@ def _run_torch_backend_check(conda: str, env_name: str, python: str, gpu: str) -
     if result.stderr.strip():
         print(result.stderr.strip())
     sys.exit(1)
-
-
-def main(argv: list[str] | None = None) -> None:
-    """Make a shipped workflow's step environment by naming the workflow.
-
-    ``python -m zmart_analysis.environments object_analysis --step classical``
-    runs that workflow's ``environments/setup_env.py`` with the options after
-    its name, wherever the package is installed.
-    """
-    import runpy
-
-    from .pipeline import workflows_folder
-
-    args = list(sys.argv[1:] if argv is None else argv)
-    if not args or args[0].startswith("-"):
-        sys.exit("Name a workflow: python -m zmart_analysis.environments object_analysis --step classical")
-    workflow, options = args[0], args[1:]
-    script = workflows_folder() / workflow / "environments" / "setup_env.py"
-    if not script.is_file():
-        sys.exit(f"No shipped workflow is called {workflow!r}.")
-    sys.argv = [str(script), *options]
-    runpy.run_path(str(script), run_name="__main__")
-
-
-if __name__ == "__main__":
-    main()
