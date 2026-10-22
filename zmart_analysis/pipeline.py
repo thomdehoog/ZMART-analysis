@@ -129,6 +129,27 @@ class Phase:
 # -- YAML parsing ------------------------------------------------------
 
 
+def workflows_folder():
+    """The folder of the workflows that ship with ZMART Analysis."""
+    from importlib.resources import files
+
+    return Path(str(files("zmart_analysis.workflows")))
+
+
+def pipeline_file(name):
+    """The shipped pipeline called *name*, whichever workflow holds it.
+
+    ``pipeline_file("object_analysis_watershed")`` is
+    ``<workflows>/object_analysis/pipelines/object_analysis_watershed.yaml``.
+    """
+    root = workflows_folder()
+    found = sorted(root.glob(f"*/pipelines/{name}.yaml"))
+    if not found:
+        names = sorted(path.stem for path in root.glob("*/pipelines/*.yaml"))
+        raise ValueError(f"no shipped pipeline is called {name!r}; there are: {', '.join(names)}")
+    return found[0]
+
+
 def parse_yaml(yaml_path):
     """
     Parse a pipeline YAML file.

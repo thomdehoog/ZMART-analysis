@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=69"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "zmart-analysis"
-version = "0.6.0rc1"
+version = "0.6.0rc2"
 description = "Reproducible, environment-isolated image analysis pipelines for smart microscopy"
 readme = "README.md"
 license = {text = "MIT"}
@@ -51,8 +51,17 @@ Repository = "https://github.com/ZMB-UZH/ZMART-analysis"
 Documentation = "https://github.com/ZMB-UZH/ZMART-analysis/tree/main/docs"
 Issues = "https://github.com/ZMB-UZH/ZMART-analysis/issues"
 
-[tool.setuptools.packages.find]
-include = ["zmart_analysis*", "engine*"]
+# The workflows ship inside the package as zmart_analysis.workflows, so an
+# install from GitHub can run them; in a checkout they stay in workflows/.
+[tool.setuptools]
+packages = ["zmart_analysis", "engine", "zmart_analysis.workflows"]
+package-dir = {"zmart_analysis.workflows" = "workflows"}
+
+[tool.setuptools.package-data]
+"zmart_analysis.workflows" = ["**/*.py", "**/*.yaml", "**/*.json", "**/*.md"]
+
+[tool.setuptools.exclude-package-data]
+"zmart_analysis.workflows" = ["**/tests/*", "**/__pycache__/*", "conftest.py"]
 
 [tool.ruff]
 target-version = "py311"

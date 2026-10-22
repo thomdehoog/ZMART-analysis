@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0rc2 (2026-10-22) -- an installed package runs its workflows, and an image says where it is
+
+- **The workflows ship with the package.** `pip install` from GitHub now
+  brings the pipelines, steps and environment scripts as
+  `zmart_analysis.workflows`; no checkout is needed to run them. A checkout
+  keeps them in `workflows/`, so what finds them there still does.
+- **`pipeline_file(name)`** finds a shipped pipeline by its name:
+  `pipeline_file("object_analysis_watershed")`.
+- **`python -m zmart_analysis.environments <workflow> --step <step>`** makes
+  a shipped workflow's step environment, wherever the package is installed.
+- **An OME-Zarr image alone is enough for the object table.** What a job
+  does not say comes from the image: the pixel size and where the tile lies
+  (OME-NGFF scale and translation), no turn (the driver has lined the image
+  up with the stage), and the file's name as the tile's. What a job gives
+  still wins. A TIFF still has to be told where it lies.
+
 ## 0.6.0rc1 (2026-10-21) -- scopes over time, parts, and less reading and writing
 
 Two changes break a script or a scoped step written for 0.5:

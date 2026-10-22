@@ -121,13 +121,13 @@ PyYAML; each workflow's `setup_env.py` makes the conda environment its
 steps run in.
 
 ```bash
-git clone https://github.com/ZMB-UZH/ZMART-analysis.git
-cd ZMART-analysis
-pip install -e .
-python workflows/focus/environments/setup_env.py   # once for each workflow you use
+pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc2"
+python -m zmart_analysis.environments focus   # once for each workflow you use
 ```
 
 The package installs as `zmart_analysis`: `from zmart_analysis import Engine`.
+The workflows come with it; `pipeline_file("focus")` finds a pipeline by name.
+To work on the workflows, clone the repository and `pip install -e .` in it.
 The tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status

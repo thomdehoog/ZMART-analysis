@@ -562,3 +562,29 @@ def _run_torch_backend_check(conda: str, env_name: str, python: str, gpu: str) -
     if result.stderr.strip():
         print(result.stderr.strip())
     sys.exit(1)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Make a shipped workflow's step environment by naming the workflow.
+
+    ``python -m zmart_analysis.environments object_analysis --step classical``
+    runs that workflow's ``environments/setup_env.py`` with the options after
+    its name, wherever the package is installed.
+    """
+    import runpy
+
+    from .pipeline import workflows_folder
+
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0].startswith("-"):
+        sys.exit("Name a workflow: python -m zmart_analysis.environments object_analysis --step classical")
+    workflow, options = args[0], args[1:]
+    script = workflows_folder() / workflow / "environments" / "setup_env.py"
+    if not script.is_file():
+        sys.exit(f"No shipped workflow is called {workflow!r}.")
+    sys.argv = [str(script), *options]
+    runpy.run_path(str(script), run_name="__main__")
+
+
+if __name__ == "__main__":
+    main()
