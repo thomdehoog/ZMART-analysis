@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0rc5 (2026-10-22) -- an OME-Zarr image alone is enough, with an output folder too
+
+- **An OME-Zarr image submitted on its own files its checkpoint.** The
+  segmentation's checkpoint read the tile's id, stage position, pixel size and
+  turn from the input, so an image inside a `data` folder, submitted with its
+  path alone, failed with `KeyError: 'tile_id'`. The checkpoint keeps the
+  geometry as the caller gave it; `build_object_table` takes it from the store.
+
 ## 0.6.0rc4 (2026-10-22) -- environments are conda environment files
 
 - **A workflow describes its environments as conda environment files.**

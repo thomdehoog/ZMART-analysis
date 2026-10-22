@@ -121,7 +121,7 @@ PyYAML; the steps run in conda environments that each workflow describes in
 its `environments/` folder.
 
 ```bash
-pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc4"
+pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc5"
 ```
 
 The package is the engine: `from zmart_analysis import Engine`. A pipeline
