@@ -82,7 +82,7 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     n_objects = len(props.get("label", []))
 
-    geometry = _geometry_from_input(given, pipeline_data["read_images"]["image_size_px"])
+    geometry = _geometry_from_input(given, pipeline_data["read_images"])
 
     _add_stage_columns(props, geometry)
 
@@ -120,22 +120,65 @@ def _map_feature_columns(props: dict) -> dict:
     return table
 
 
-def _geometry_from_input(given: dict, image_size_px: list) -> dict:
-    """Where the tile was taken: what turns an object's pixel position into a stage position."""
+def _geometry_from_input(given: dict, read: dict) -> dict:
+    """Where the tile was taken: what turns an object's pixel position into a stage position.
 
-    for name in ("tile_id", "tile_stage_xy_um", "source_pixel_size_um", "image_to_stage"):
-        if name not in given:
-            raise ValueError(f"input missing required geometry field {name!r}.")
+    What the caller gives wins. Anything left out comes from the image: an
+    OME-Zarr image records its pixel size and where its first pixel lies
+    (OME-NGFF), and the driver has already lined it up with the stage, so
+    the image alone is enough. The tile is then named after its file.
+    """
+
+    image_size_px = given.get("source_image_size_px", read["image_size_px"])
+
+    pixel_size_um = given.get("source_pixel_size_um", read.get("pixel_size_um"))
+
+    if pixel_size_um is None:
+        raise ValueError(
+            "input missing required geometry field 'source_pixel_size_um', and the image "
+            "does not record its pixel size."
+        )
+
+    stage_xy_um = given.get("tile_stage_xy_um")
+
+    if stage_xy_um is None:
+        stage_xy_um = _image_centre(read.get("first_pixel_xy_um"), image_size_px, pixel_size_um)
+
+    tile_id = given.get("tile_id")
+
+    if tile_id is None:
+        tile_id = [_file_stem(given["image_path"])]
 
     return {
-        "tile_id": given["tile_id"],
-        "tile_stage_xy_um": given["tile_stage_xy_um"],
+        "tile_id": tile_id,
+        "tile_stage_xy_um": stage_xy_um,
         # The capture height is a record only; a source that does not know it leaves it None
         "tile_z_um": given.get("tile_z_um"),
-        "source_pixel_size_um": given["source_pixel_size_um"],
-        "source_image_size_px": given.get("source_image_size_px", image_size_px),
-        "image_to_stage": given["image_to_stage"],
+        "source_pixel_size_um": pixel_size_um,
+        "source_image_size_px": image_size_px,
+        "image_to_stage": given.get("image_to_stage", [[1.0, 0.0], [0.0, 1.0]]),
     }
+
+
+def _image_centre(first_pixel_xy_um, image_size_px, pixel_size_um) -> list[float]:
+    """The stage position of the image's centre, from where its first pixel's centre lies."""
+
+    if first_pixel_xy_um is None:
+        raise ValueError(
+            "input missing required geometry field 'tile_stage_xy_um': only an OME-Zarr "
+            "image records where it lies on the stage."
+        )
+
+    return [
+        float(first_pixel_xy_um[axis]) + (float(image_size_px[axis]) - 1.0) / 2.0 * float(pixel_size_um[axis])
+        for axis in (0, 1)
+    ]
+
+
+def _file_stem(image_path) -> str:
+    """The image's file name without its extensions: ``overview0.ome.zarr`` becomes ``overview0``."""
+
+    return Path(str(image_path).rstrip("/\\")).name.split(".")[0]
 
 
 def _add_stage_columns(props: dict, geometry: dict) -> None:

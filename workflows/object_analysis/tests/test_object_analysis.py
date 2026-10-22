@@ -384,3 +384,76 @@ def test_a_pixel_is_placed_at_its_centre_on_the_stage():
     assert build_object_table._stage_position(0, 0, geometry) == pytest.approx((91.0, 41.0))
     assert build_object_table._stage_position(9, 9, geometry) == pytest.approx((109.0, 59.0))
     assert build_object_table._stage_position(4.5, 4.5, geometry) == pytest.approx((100.0, 50.0))
+
+
+def _write_synthetic_ome_zarr(tmp_path, centre_xy_um, pixel_um):
+    """The synthetic tile as an OME-Zarr image, centred on the stage at ``centre_xy_um``.
+
+    OME-NGFF places an image by the centre of its first pixel (the translation)
+    and sizes it by the pixel size (the scale), the way the drivers write it.
+    """
+    import ngio
+
+    image = np.zeros((40, 48), dtype=np.uint8)
+    image[5:11, 6:12] = 80
+    image[20:30, 25:35] = 160
+    ny, nx = image.shape
+    first_pixel_x = centre_xy_um[0] - (nx - 1) * pixel_um / 2
+    first_pixel_y = centre_xy_um[1] - (ny - 1) * pixel_um / 2
+    path = tmp_path / "overview0.ome.zarr"
+    ngio.create_ome_zarr_from_array(
+        str(path),
+        image,
+        pixelsize=pixel_um,
+        axes_names=("y", "x"),
+        translation=(first_pixel_y, first_pixel_x),
+        overwrite=True,
+    )
+    return path
+
+
+def _run_classical_on(image_path, payload):
+    pipeline_data = {"input": {"image_path": str(image_path), "gpu": False, **payload},
+                     "metadata": {"verbose": 0}}
+    pipeline_data = read_images.run(pipeline_data, {})
+    pipeline_data = segment_cellpose.run(pipeline_data, {"model": _StubCellposeModel()})
+    pipeline_data = measure_objects.run(pipeline_data, {})
+    return build_object_table.run(pipeline_data, {})
+
+
+def test_an_ome_zarr_image_alone_is_enough(tmp_path):
+    """Given only the image, the table takes where and how big from its OME-NGFF metadata.
+
+    The driver writes the pixel size, the position and an image already lined
+    up with the stage; nothing of that has to be said again when submitting.
+    """
+    path = _write_synthetic_ome_zarr(tmp_path, centre_xy_um=(100.0, 50.0), pixel_um=2.0)
+
+    tile = _run_classical_on(path, {})["object_analysis"]
+
+    assert tile["geometry"]["tile_stage_xy_um"] == pytest.approx([100.0, 50.0])
+    assert tile["geometry"]["source_pixel_size_um"] == pytest.approx([2.0, 2.0])
+    assert tile["geometry"]["image_to_stage"] == [[1.0, 0.0], [0.0, 1.0]]
+    assert tile["geometry"]["tile_id"] == ["overview0"]
+    assert tile["objects"]["properties"]["stage_x_um"] == pytest.approx([70.0, 112.0])
+    assert tile["objects"]["properties"]["stage_y_um"] == pytest.approx([26.0, 60.0])
+
+
+def test_what_is_given_wins_over_the_image_metadata(tmp_path):
+    """A caller that knows better (the interface's scan) still says where the tile was."""
+    path = _write_synthetic_ome_zarr(tmp_path, centre_xy_um=(100.0, 50.0), pixel_um=2.0)
+
+    tile = _run_classical_on(path, {"tile_stage_xy_um": [0.0, 0.0], "tile_id": ["R0", 3, 7]})[
+        "object_analysis"
+    ]
+
+    assert tile["geometry"]["tile_stage_xy_um"] == [0.0, 0.0]
+    assert tile["geometry"]["tile_id"] == ["R0", 3, 7]
+
+
+def test_a_tiff_without_a_position_says_what_is_missing(tmp_path):
+    """A TIFF records no placement the analysis can trust, so it must be told where the tile was."""
+    path = _write_synthetic_tile(tmp_path)
+
+    with pytest.raises(ValueError, match="tile_stage_xy_um"):
+        _run_classical_on(path, {"source_pixel_size_um": [2.0, 2.0]})

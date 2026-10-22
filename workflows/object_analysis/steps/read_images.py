@@ -18,6 +18,11 @@ Publishes under ``pipeline_data["read_images"]``::
     channels         the channels and z_selection as asked; they are part of
     z_selection      how the segmentation was made
     image_size_px    [width, height]
+    pixel_size_um    [x, y], when the file records it in micrometres
+    first_pixel_xy_um
+                     where the centre of the first pixel lies on the stage,
+                     [x, y], when the image is OME-Zarr: OME-NGFF defines this
+                     placement, a TIFF's recorded position does not
     sha256           a digest of the file or position, for the record
 
 ``load_plane`` is also how the ZMART interface reads its previews, so a
@@ -65,8 +70,8 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
 
     z_selection = given.get("z_selection", "mid")
 
-    # The channels the objects are found on
-    image = _load_channels(image_path, channels, z_selection)
+    # The channels the objects are found on, and what the file says about them
+    image, metadata = _load_channels(image_path, channels, z_selection)
 
     # The other colours, measured but not segmented
     extra_channels = _extra_channels(given, z_selection)
@@ -77,10 +82,25 @@ def run(pipeline_data: dict, state: dict, **params) -> dict:
         "channels": channels,
         "z_selection": z_selection,
         "image_size_px": [int(image.shape[1]), int(image.shape[0])],
+        "pixel_size_um": _xy_in_micrometres(metadata, "pixel_size"),
+        "first_pixel_xy_um": (
+            _xy_in_micrometres(metadata, "origin") if metadata["format"] == "ome-zarr" else None
+        ),
         "sha256": _sha256(image_path),
     }
 
     return pipeline_data
+
+
+def _xy_in_micrometres(metadata: dict, key: str) -> list[float] | None:
+    """``metadata[key]`` as [x, y] in micrometres; None when the file does not record both."""
+
+    values = metadata.get(key) or {}
+
+    if metadata.get("space_unit") != "micrometer" or "x" not in values or "y" not in values:
+        return None
+
+    return [float(values["x"]), float(values["y"])]
 
 
 def load_plane(source, level=0, t=0, c=0, z="mid", series=None):
@@ -108,13 +128,14 @@ def load_plane(source, level=0, t=0, c=0, z="mid", series=None):
     raise ValueError(f"{source} is neither an OME-Zarr position nor a TIFF.")
 
 
-def _load_channels(source, channels, z) -> np.ndarray:
+def _load_channels(source, channels, z) -> tuple[np.ndarray, dict]:
     """The channels to segment: one plane, or up to three stacked channels last.
 
     ``channels`` names them by index or by name; None takes the first three
     the image has. A single channel comes back as a plain 2-D plane. Each
     channel is its own lazy read, so a position costs only the channels
-    asked for.
+    asked for. The file's metadata, as :func:`load_plane` answers it, comes
+    with them.
     """
 
     first_index = 0 if channels is None else list(channels)[0]
@@ -138,11 +159,11 @@ def _load_channels(source, channels, z) -> np.ndarray:
             raise ValueError(f"at most {MAX_CHANNELS} channels, got {len(wanted)}: {wanted}")
 
     if len(wanted) == 1:
-        return first
+        return first, metadata
 
     planes = [first] + [load_plane(source, c=channel, z=z)[0] for channel in wanted[1:]]
 
-    return np.stack(planes, axis=-1)
+    return np.stack(planes, axis=-1), metadata
 
 
 def _extra_channels(given: dict, z_selection) -> list[np.ndarray]:
