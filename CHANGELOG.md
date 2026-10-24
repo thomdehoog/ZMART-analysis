@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0rc6 (2026-10-24) -- a Cellpose environment that works
+
+- **The Cellpose environment takes torchvision from conda-forge, beside its
+  PyTorch.** Made from `object_analysis/environments/cellpose.yml`, the
+  environment took PyTorch from conda-forge and torchvision from PyPI, which
+  cellpose asks for, and the two do not work together: every Cellpose step
+  failed with `operator torchvision::nms does not exist` before it could load
+  its network. Now both come from conda-forge, built for each other.
+- The tests run again on GitHub: five files are formatted as `ruff format`
+  asks, and the version test compares the package's version with the one in
+  `pyproject.toml`, so a version bump cannot leave it behind.
+- The engine is unchanged from 0.6.0rc5.
+
 ## 0.6.0rc5 (2026-10-22) -- an OME-Zarr image alone is enough, with an output folder too
 
 - **An OME-Zarr image submitted on its own files its checkpoint.** The

@@ -34,8 +34,18 @@ def _clean_copy(target: Path) -> Path:
 def test_the_wheel_is_the_engine_only(tmp_path):
     source = _clean_copy(tmp_path / "source")
     subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(source), "--no-deps", "--no-build-isolation",
-         "-w", str(tmp_path / "wheel"), "-q"],
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            str(source),
+            "--no-deps",
+            "--no-build-isolation",
+            "-w",
+            str(tmp_path / "wheel"),
+            "-q",
+        ],
         check=True,
     )
     wheel = next((tmp_path / "wheel").glob("zmart_analysis-*.whl"))
