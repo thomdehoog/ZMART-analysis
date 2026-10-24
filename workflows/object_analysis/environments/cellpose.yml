@@ -10,6 +10,10 @@ dependencies:
   - python=3.12
   - pip
   - pytorch
+  # torchvision from conda-forge too, built for the PyTorch above. Left to pip,
+  # cellpose brings PyPI's torchvision, which does not work with conda-forge's
+  # PyTorch: Cellpose then fails with "operator torchvision::nms does not exist".
+  - torchvision
   - pip:
       - pyyaml
       - numpy
