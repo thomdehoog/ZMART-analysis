@@ -1,11 +1,12 @@
 # The environment of segment_cellpose: PyTorch and Cellpose.
 # conda-forge's pytorch takes the CUDA build by itself when the computer has
 # an NVIDIA GPU, and the CPU build otherwise, but only among the builds of one
-# version. Left free, conda takes the newest version, and a new PyTorch is
-# often published for the CPU before its CUDA builds follow: a computer with a
-# GPU then gets the CPU build without a word. So PyTorch is pinned to a version
-# that has CUDA builds for Windows and Linux. Not locked yet: the PyTorch
-# build depends on the graphics card. conda-forge only.
+# version. Left free, conda takes the newest version, whose CUDA builds may
+# all need a newer NVIDIA driver than the computer has (PyTorch 2.14's need
+# CUDA 13): a computer with a GPU then gets the CPU build without a word. So
+# PyTorch is pinned to a version that also has CUDA 12 builds, for Windows and
+# Linux. Not locked yet: the PyTorch build depends on the graphics card.
+# conda-forge only.
 name: ZMART--object_analysis--cellpose
 channels:
   - conda-forge

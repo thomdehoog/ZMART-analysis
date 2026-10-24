@@ -102,9 +102,9 @@ Create each one from its file in `environments/`, for example
 environments come from lock files, every package at one version. Cellpose's
 has none yet: conda-forge's `pytorch` takes the CUDA build by itself when the
 computer has an NVIDIA GPU, so that build differs between computers. Its
-version is pinned to one that has CUDA builds, because the newest PyTorch is
-often published for the CPU first, and a computer with a GPU would then get
-the CPU build without a word.
+version is pinned to one that also has builds for CUDA 12, because the newest
+PyTorch's builds may all need a newer NVIDIA driver than a microscope PC has,
+and a computer with a GPU would then get the CPU build without a word.
 
 Each step file names its own environment, so a pipeline only starts the
 workers it needs. The watershed pipeline never loads PyTorch.
