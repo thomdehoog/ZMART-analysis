@@ -44,6 +44,9 @@ test = [
     "ngio>=1.0",
     "ome-types>=0.5",
     "pooch>=1.8",
+    # The wheel test builds the package without build isolation, so the
+    # build backend must be here: Python 3.13 environments come without it.
+    "setuptools>=61",
 ]
 
 [project.urls]
