@@ -413,8 +413,10 @@ def _write_synthetic_ome_zarr(tmp_path, centre_xy_um, pixel_um):
 
 
 def _run_classical_on(image_path, payload):
-    pipeline_data = {"input": {"image_path": str(image_path), "gpu": False, **payload},
-                     "metadata": {"verbose": 0}}
+    pipeline_data = {
+        "input": {"image_path": str(image_path), "gpu": False, **payload},
+        "metadata": {"verbose": 0},
+    }
     pipeline_data = read_images.run(pipeline_data, {})
     pipeline_data = segment_cellpose.run(pipeline_data, {"model": _StubCellposeModel()})
     pipeline_data = measure_objects.run(pipeline_data, {})

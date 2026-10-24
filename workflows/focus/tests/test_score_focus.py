@@ -50,7 +50,9 @@ def _require_focus_environment() -> None:
     except Exception:
         pytest.skip("conda is not installed")
     if not env_exists(info, "ZMART--focus--main"):
-        pytest.skip("ZMART--focus--main not found; conda env create -f workflows/focus/environments/main.yml")
+        pytest.skip(
+            "ZMART--focus--main not found; conda env create -f workflows/focus/environments/main.yml"
+        )
 
 
 def _blurred(image: np.ndarray, radius: int) -> np.ndarray:

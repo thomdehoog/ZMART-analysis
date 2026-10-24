@@ -21,7 +21,9 @@ STEPS = sorted(WORKFLOWS.glob("*/steps/*.py"))
 def _environment_of(step: Path) -> str:
     """The ``environment`` in a step file's ``METADATA``, read without importing the step."""
     for node in ast.parse(step.read_text(encoding="utf-8")).body:
-        if isinstance(node, ast.Assign) and any(getattr(t, "id", None) == "METADATA" for t in node.targets):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "METADATA" for t in node.targets
+        ):
             return ast.literal_eval(node.value)["environment"]
     raise AssertionError(f"{step} has no METADATA")
 

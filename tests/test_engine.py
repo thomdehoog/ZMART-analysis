@@ -1633,9 +1633,15 @@ class TestPackageAPI:
             assert hasattr(zmart_analysis, name), name
 
     def test_version(self):
+        """The package reports the version written in pyproject.toml, so the two never drift apart."""
+        import tomllib
+        from pathlib import Path
+
         import zmart_analysis
 
-        assert zmart_analysis.__version__ == "0.6.0rc4"
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        written = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        assert zmart_analysis.__version__ == written
 
     def test_engine_in_all(self):
         import zmart_analysis
