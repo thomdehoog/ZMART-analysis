@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.0rc7 (2026-10-24) -- Cellpose finds the GPU again
+
+- **The Cellpose environment takes PyTorch's CUDA build on a computer with an
+  NVIDIA GPU.** `object_analysis/environments/cellpose.yml` asked for
+  `pytorch` without a version. conda-forge takes the CUDA build by itself only
+  among the builds of one version, and the CUDA builds of its newest PyTorch,
+  2.14.1, all need CUDA 13, which older NVIDIA drivers do not offer. A computer
+  whose driver offers CUDA 12 therefore got the CPU build without a word:
+  `torch.cuda.is_available()` was `False`. PyTorch is now pinned to 2.13 and
+  torchvision to 0.28, which have builds for CUDA 12 and 13 on Windows and
+  Linux, and CPU builds for every system.
+- The engine is unchanged from 0.6.0rc6.
+
 ## 0.6.0rc6 (2026-10-24) -- a Cellpose environment that works
 
 - **The Cellpose environment takes torchvision from conda-forge, beside its
