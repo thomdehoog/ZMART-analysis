@@ -151,7 +151,7 @@ def load_step(workflow, name):
     """
     import importlib.util
 
-    path = Path(__file__).resolve().parents[1] / "workflows" / workflow / "steps" / f"{name}.py"
+    path = Path(__file__).resolve().parents[1] / "examples" / workflow / "steps" / f"{name}.py"
     module_name = f"{workflow}_{name}"
     spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)

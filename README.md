@@ -74,11 +74,15 @@ possible.
 
 ## What ships with it
 
-Two workflows, the ones we use on our microscopes:
+Two example workflows. They show how a real analysis is put together, and
+the engine's own tests run on them. They are not installed with the engine:
+the workflows we run on our microscopes live in
+[ZMART Microscopy](https://github.com/ZMB-UZH/ZMART-microscopy), which starts
+from copies of these.
 
-- **[Focus](workflows/focus/README.md)** finds the sharpest plane of a
+- **[Focus](examples/focus/README.md)** finds the sharpest plane of a
   z-stack.
-- **[Object analysis](workflows/object_analysis/README.md)** finds cells
+- **[Object analysis](examples/object_analysis/README.md)** finds cells
   with Cellpose or a watershed, measures them, and returns one table row
   per object, plus a PCA or UMAP of the population.
 
@@ -101,7 +105,7 @@ Register it, submit a z-stack, and read the sharp height from the job board:
 from zmart_analysis import Engine
 
 with Engine() as engine:
-    engine.register("focus", "workflows/focus/pipelines/focus.yaml", "runs/demo")
+    engine.register("focus", "examples/focus/pipelines/focus.yaml", "runs/demo")
     job = engine.submit(pipeline="focus", data={"image_path": "stack.ome.tif"})
     board = engine.deregister("focus")  # waits for the job and returns the board
 
@@ -112,7 +116,7 @@ print(board[job]["output"]["score_focus"]["peak_z_um"])
 
 1. **[Use the engine](docs/1_use_the_engine/README.md)**
 2. **[Implement an analysis step](docs/2_implement_an_analysis_step/README.md)**
-3. **[The workflows we use](docs/3_workflows_we_use/README.md)**
+3. **[The example workflows](docs/3_example_workflows/README.md)**
 
 ## Install it
 
@@ -121,14 +125,14 @@ PyYAML; the steps run in conda environments that each workflow describes in
 its `environments/` folder.
 
 ```bash
-pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc7"
+pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc8"
 ```
 
 The package is the engine: `from zmart_analysis import Engine`. A pipeline
 plugs into it and lives with the workflow that uses it: its YAML, its steps,
 and a conda environment file with a lock file for each step's environment
-(`conda env create -f`). The [`workflows`](workflows/) in this repository are
-examples to copy; they are not installed.
+(`conda env create -f`). The [`examples`](examples/) in this repository are
+workflows to read and copy from; they are not installed.
 The tutorials are notebooks; `pip install jupyter` to run them.
 
 ## Status

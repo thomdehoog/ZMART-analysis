@@ -51,7 +51,7 @@ def _require_focus_environment() -> None:
         pytest.skip("conda is not installed")
     if not env_exists(info, "ZMART--focus--main"):
         pytest.skip(
-            "ZMART--focus--main not found; conda env create -f workflows/focus/environments/main.yml"
+            "ZMART--focus--main not found; conda env create -f examples/focus/environments/main.yml"
         )
 
 

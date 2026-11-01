@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zmart-analysis"
-version = "0.6.0rc7"
+version = "0.6.0rc8"
 description = "Reproducible, environment-isolated image analysis pipelines for smart microscopy"
 readme = "README.md"
 license = {text = "MIT"}
@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 # What the orchestrator needs to run the shipped workflow tests in one
 # environment. Each workflow's own conda environment is created by its
-# workflows/<name>/environments/setup_env.py and carries the heavy tools
+# examples/<name>/environments/setup_env.py and carries the heavy tools
 # (cellpose, torch, umap) that stay out of here.
 test = [
     # 9.0 brings the subtests fixture the image reader's tests use.
@@ -54,8 +54,8 @@ Repository = "https://github.com/ZMB-UZH/ZMART-analysis"
 Documentation = "https://github.com/ZMB-UZH/ZMART-analysis/tree/main/docs"
 Issues = "https://github.com/ZMB-UZH/ZMART-analysis/issues"
 
-# The package is the engine. The workflows in workflows/ are examples to
-# copy into your own workflow; they are not installed.
+# The package is the engine. The example workflows in examples/ are there to
+# read and copy into your own workflow; they are not installed.
 [tool.setuptools.packages.find]
 include = ["zmart_analysis*", "engine*"]
 
@@ -70,10 +70,10 @@ extend-exclude = ["*.ipynb", "*.md"]
 select = ["E", "F", "W", "I", "B", "UP"]
 # Long lines are tolerated in tests and in the steps' parameter tables.
 ignore = ["E501"]
-per-file-ignores = {"tests/*" = ["B017", "B904", "B023"], "workflows/*/tests/*" = ["B017", "B904", "B023"]}
+per-file-ignores = {"tests/*" = ["B017", "B904", "B023"], "examples/*/tests/*" = ["B017", "B904", "B023"]}
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "workflows"]
+testpaths = ["tests", "examples"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]

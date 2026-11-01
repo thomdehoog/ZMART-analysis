@@ -490,4 +490,4 @@ queued jobs finish first. `shutdown(wait=False)` stops at once, like
   only run steps you trust.
 
 Next: [implement an analysis step](../2_implement_an_analysis_step/README.md),
-or [the workflows we use](../3_workflows_we_use/README.md).
+or [the example workflows](../3_example_workflows/README.md).

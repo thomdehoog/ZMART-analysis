@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
+WORKFLOWS = Path(__file__).resolve().parents[1] / "examples"
 
 STEP_FILES = sorted(WORKFLOWS.glob("*/steps/*.py"))
 

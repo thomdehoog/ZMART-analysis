@@ -170,14 +170,14 @@ To make the lock file, install the packages your steps need in a new
 environment, check it with the workflow's tests, and write down what it
 holds with `pip freeze > main.txt`. To move to newer packages later, do the
 same again: the lock file changes on purpose, not by itself.
-`workflows/object_analysis/environments/` is the example, with three
+`examples/object_analysis/environments/` is the example, with three
 environments.
 
 ### Make it
 
 ```bash
-conda env create -f workflows/focus/environments/main.yml                  # makes ZMART--focus--main
-conda env create -f workflows/object_analysis/environments/classical.yml
+conda env create -f examples/focus/environments/main.yml                  # makes ZMART--focus--main
+conda env create -f examples/object_analysis/environments/classical.yml
 ```
 
 `conda env remove -n ZMART--focus--main` removes one again. The workflow's
@@ -315,7 +315,7 @@ parameters can be overridden this way.
 ## The folder of a workflow
 
 ```text
-workflows/object_analysis/
+examples/object_analysis/
 ├── README.md              what the workflow does and how to choose its settings
 ├── pipelines/             the pipelines (YAML)
 ├── steps/                 one Python file per step
@@ -361,8 +361,8 @@ def test_double_it():
     assert out["double_it"]["value"] == 42
 ```
 
-Tests live in `workflows/<name>/tests/`. They can import a step by its
-name, because `workflows/conftest.py` puts every `steps/` folder on the
+Tests live in `examples/<name>/tests/`. They can import a step by its
+name, because `examples/conftest.py` puts every `steps/` folder on the
 search path.
 
 To test a scoped step, pass it its parts by hand:
@@ -386,10 +386,10 @@ so you can leave them out:
 
 ```bash
 pytest -m "not cellpose and not conda_env and not pooch"   # what CI runs
-pytest workflows/focus                                      # one workflow
+pytest examples/focus                                      # one workflow
 ```
 
-`workflows/focus/tests/test_score_focus.py` shows the pattern. It scores
+`examples/focus/tests/test_score_focus.py` shows the pattern. It scores
 a made-up z-stack directly and then, if `ZMART--focus--main` exists, once
 more through the engine. The `*real_samples.py` tests in each workflow run the
 pipelines on real microscopy from scikit-image's sample data.

@@ -1,7 +1,13 @@
-# 3. The workflows we use
+# 3. The example workflows
 
-Two workflows ship with ZMART Analysis. Each is a folder under
-[`workflows/`](../../workflows) with its pipelines, its steps, its environment
+ZMART Analysis comes with two example workflows. They are here to read and
+copy from, and the engine's own tests run on them; they are not installed
+with the engine. The workflows we run on our microscopes live in
+[ZMART Microscopy](https://github.com/ZMB-UZH/ZMART-microscopy), which started
+from copies of these.
+
+Each example is a folder under
+[`examples/`](../../examples) with its pipelines, its steps, its environment
 scripts, its tests and a README that explains its settings. Each needs nothing
 outside its folder.
 
@@ -27,7 +33,7 @@ focus.yaml:   read_images -> score_focus   the sharp height of a z-stack
 
 The operator page runs `focus` for every point of a focus map.
 
-→ [`workflows/focus/README.md`](../../workflows/focus/README.md)
+→ [`examples/focus/README.md`](../../examples/focus/README.md)
 explains how to choose a sharpness measure.
 
 ## object_analysis
@@ -45,6 +51,6 @@ reduce_dimensions.yaml:          reduce_dimensions: a PCA or UMAP of a populatio
 Read this workflow to see steps in separate environments and a model that
 stays loaded.
 
-→ [`workflows/object_analysis/README.md`](../../workflows/object_analysis/README.md)
+→ [`examples/object_analysis/README.md`](../../examples/object_analysis/README.md)
 describes the input, the output and the environments.
 

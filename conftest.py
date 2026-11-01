@@ -114,7 +114,7 @@ def _has_cellpose_runtime() -> tuple[bool, str]:
             False,
             (
                 f"the {CELLPOSE_ENVIRONMENT} environment is not set up; create it with "
-                "conda env create -f workflows/object_analysis/environments/cellpose.yml"
+                "conda env create -f examples/object_analysis/environments/cellpose.yml"
             ),
         )
         return _CELLPOSE_RUNTIME_CACHE

@@ -6,7 +6,7 @@ Builds synthetic OME-Zarr positions in both NGFF 0.4 (Zarr v2) and NGFF
 coordinates come back the same either way.
 
 Run from an environment with ngio installed:
-    python -m pytest workflows/object_analysis/tests/test_read_images.py -v
+    python -m pytest examples/object_analysis/tests/test_read_images.py -v
 """
 
 import shutil

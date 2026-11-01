@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-WORKFLOWS = Path(__file__).resolve().parents[1] / "workflows"
+WORKFLOWS = Path(__file__).resolve().parents[1] / "examples"
 STEPS = sorted(WORKFLOWS.glob("*/steps/*.py"))
 
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0rc8 (2026-11-01) -- the workflows here are examples
+
+- **`workflows/` is now `examples/`.** The two workflows in this repository,
+  `focus` and `object_analysis`, are examples: complete, working workflows to
+  read and copy from, and the ones the engine's own tests run on. They were
+  never installed with the engine, and the new name says so. The workflows we
+  run on our microscopes live in
+  [ZMART Microscopy](https://github.com/ZMB-UZH/ZMART-microscopy), which
+  starts from copies of these.
+- Part 3 of the documentation is now `docs/3_example_workflows/`, "The
+  example workflows".
+- **If you point at these folders from elsewhere**, change `workflows/` to
+  `examples/` in the path, for example
+  `examples/focus/pipelines/focus.yaml`. The ZMART interface did this through
+  `ZMART_ANALYSIS_WORKFLOWS`; its next release candidate follows the new name.
+- The test that the package holds only the engine now also checks that no
+  `examples/` folder is packaged.
+- The engine is unchanged from 0.6.0rc7.
+
 ## 0.6.0rc7 (2026-10-24) -- Cellpose finds the GPU again
 
 - **The Cellpose environment takes PyTorch's CUDA build on a computer with an

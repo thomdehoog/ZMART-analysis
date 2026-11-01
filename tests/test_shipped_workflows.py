@@ -1,7 +1,8 @@
 """The package is the engine: an install brings no workflows.
 
 A pipeline, its steps and its lock files live with the workflow that uses
-them; the workflows in this repository are examples to copy, not installed.
+them; the example workflows in this repository's examples/ folder are there
+to copy, and are not installed.
 """
 
 from __future__ import annotations
@@ -53,4 +54,4 @@ def test_the_wheel_is_the_engine_only(tmp_path):
 
     assert "zmart_analysis/engine.py" in names
     assert "zmart_analysis/conda.py" in names
-    assert not [name for name in names if "workflows/" in name]
+    assert not [name for name in names if "examples/" in name or "workflows/" in name]
