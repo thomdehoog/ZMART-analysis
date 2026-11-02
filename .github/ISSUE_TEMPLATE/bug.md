@@ -1,0 +1,21 @@
+---
+name: Bug
+about: Something does not work as the docs say
+---
+
+**What happened**
+
+**What you expected**
+
+**How to reproduce**
+The pipeline, the `submit` call, and a small input if you can.
+
+**Environment**
+- OS:
+- Python:
+- conda version:
+- ZMART Analysis version (`zmart_analysis.__version__`):
+
+**The failed job from `engine.status(name)` (its step and error)**
+```
+```
