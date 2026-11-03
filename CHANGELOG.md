@@ -3,8 +3,15 @@
 ## 0.6.0rc10 (2026-11-03) -- the example readers read OME-TIFF positions fully
 
 A ZMART run can now be saved as OME-TIFF as well as OME-Zarr, and the
-example workflows read both alike. Three fixes to their readers, each with a
+example workflows read both alike. Four changes to their readers, each with a
 test; the engine is unchanged from 0.6.0rc9.
+
+- **An OME-TIFF position that ZMART wrote is placed as its OME-Zarr twin
+  would be.** ZMART keeps the position's OME-Zarr description (each level's
+  scale, and the centre of its first voxel) in a note inside the file
+  (`zmart/position`). `object_analysis` reads the pixel size and origin from
+  that note, so detection on an OME-TIFF run says where each object lies on
+  the stage. An OME-TIFF without the note is read as before and is not placed.
 
 - **An OME-TIFF that keeps smaller copies of its picture inside it** (as Fiji,
   QuPath and ZMART's positions write it) is now read at full size. Both

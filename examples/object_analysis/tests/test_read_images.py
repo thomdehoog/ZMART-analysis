@@ -1025,3 +1025,86 @@ class TestForeignWriters:
         # and the position it points at does load
         plane, _ = load_plane(store / "1", z=0)
         np.testing.assert_array_equal(plane, self.array[0, 0, 0])
+
+
+class TestAnOmeTiffCarryingZmartsNote:
+    """An OME-TIFF that ZMART wrote is placed as its OME-Zarr twin would be.
+
+    ZMART writes, inside each OME-TIFF position, a note (a MapAnnotation in
+    the namespace ``zmart/position``) holding the OME-Zarr description the
+    same position would carry: every level's scale, and the centre of its
+    first voxel as its translation. The reader takes the pixel size and the
+    origin from there, so detection finds the objects where they are on the
+    stage. The OME-XML's own PositionX and PositionY are written far off here,
+    to show they are not what places the file.
+    """
+
+    @classmethod
+    def setup_class(cls):
+        import json
+
+        import tifffile
+
+        cls.tmpdir = Path(tempfile.mkdtemp(prefix="read_images_note_"))
+        rng = np.random.default_rng(1)
+        cls.full = rng.integers(0, 4096, (1, 1, 1, 64, 64), dtype=np.uint16)
+        cls.half = cls.full[..., ::2, ::2]
+        scales = [[1.0, 1.0, 1.0, 0.5, 0.5], [1.0, 1.0, 1.0, 1.0, 1.0]]
+        cls.translations = [[0.0, 0.0, 7.0, 2000.25, 1000.25], [0.0, 0.0, 7.0, 2000.5, 1000.5]]
+        multiscales = [{
+            "axes": [{"name": "t", "type": "time"}, {"name": "c", "type": "channel"}]
+            + [{"name": axis, "type": "space", "unit": "micrometer"} for axis in "zyx"],
+            "datasets": [
+                {"path": str(level), "coordinateTransformations": [
+                    {"type": "scale", "scale": scales[level]},
+                    {"type": "translation", "translation": cls.translations[level]},
+                ]}
+                for level in range(2)
+            ],
+        }]
+        note = json.dumps(multiscales).replace("&", "&amp;").replace("<", "&lt;")
+        description = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<OME xmlns="http://www.openmicroscopy.org/Schemas/OME/2016-06">'
+            '<Image ID="Image:0" Name="P1"><Pixels ID="Pixels:0" DimensionOrder="XYZCT" '
+            'Type="uint16" SizeX="64" SizeY="64" SizeZ="1" SizeC="1" SizeT="1" '
+            'PhysicalSizeX="0.5" PhysicalSizeXUnit="µm" PhysicalSizeY="0.5" PhysicalSizeYUnit="µm">'
+            '<Channel ID="Channel:0:0" SamplesPerPixel="1"/><TiffData PlaneCount="1"/>'
+            '<Plane TheT="0" TheC="0" TheZ="0" PositionX="999999" PositionXUnit="µm" '
+            'PositionY="999999" PositionYUnit="µm" PositionZ="7" PositionZUnit="µm"/>'
+            '</Pixels><AnnotationRef ID="Annotation:0"/></Image>'
+            '<StructuredAnnotations><MapAnnotation ID="Annotation:0" Namespace="zmart/position">'
+            f'<Value><M K="multiscales">{note}</M></Value></MapAnnotation></StructuredAnnotations>'
+            "</OME>"
+        ).encode()
+        cls.path = cls.tmpdir / "overview_P1.ome.tif"
+        with tifffile.TiffWriter(cls.path) as tif:
+            tif.write(cls.full[0, 0, 0], subifds=1, description=description,
+                      photometric="minisblack", tile=(32, 32), metadata=None)
+            tif.write(cls.half[0, 0, 0], subfiletype=1, photometric="minisblack",
+                      tile=(32, 32), metadata=None)
+
+    @classmethod
+    def teardown_class(cls):
+        shutil.rmtree(cls.tmpdir, ignore_errors=True)
+
+    def test_the_origin_and_pixel_size_come_from_the_note(self, subtests):
+        for level in (0, 1):
+            with subtests.test(level=level):
+                _, meta = load_plane(self.path, level=level)
+                t, c, z, y, x = self.translations[level]
+                assert meta["origin"] == {"t": t, "c": c, "z": z, "y": y, "x": x}
+                assert meta["pixel_size"]["x"] == pytest.approx(0.5 * 2**level)
+                assert meta["placed_by"] == "zmart/position"
+
+    def test_detection_is_told_where_the_first_pixel_lies(self):
+        pipeline_data = {"input": {"image_path": str(self.path), "channels": [0], "z_selection": 0}}
+        said = read_images.run(pipeline_data, {})["read_images"]
+        assert said["first_pixel_xy_um"] == [1000.25, 2000.25]
+        assert said["pixel_size_um"] == [0.5, 0.5]
+
+    def test_a_tiff_without_the_note_is_still_not_placed(self, tmp_path):
+        path = tmp_path / "position.ome.tif"
+        _make_ome_tiff(path, np.zeros(SHAPE, dtype=np.uint16))
+        _, meta = load_plane(path)
+        assert meta["placed_by"] is None
