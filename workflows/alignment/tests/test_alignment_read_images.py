@@ -134,3 +134,22 @@ def test_an_ome_tiff_that_keeps_smaller_copies_is_read_at_full_size(tmp_path):
 
     smaller = _read({"image_path": str(path)}, level=1)
     np.testing.assert_array_equal(smaller["stack"], stack[:, ::2, ::2])
+
+
+def test_an_ome_tiff_stack_is_at_the_heights_its_planes_were_taken(tmp_path):
+    """The heights start at the first plane's own height, as for an OME-Zarr
+    position, rather than at zero."""
+    path = tmp_path / "stack.ome.tif"
+    tifffile.imwrite(
+        path,
+        np.zeros((3, 8, 8), dtype=np.uint16),
+        photometric="minisblack",
+        metadata={
+            "axes": "ZYX",
+            "PhysicalSizeX": 0.5,
+            "PhysicalSizeZ": 2.0,
+            "Plane": {"PositionZ": [-4.0, -2.0, 0.0], "PositionZUnit": ["\u00b5m"] * 3},
+        },
+    )
+
+    assert _read({"image_path": str(path)})["z_um"] == [-4.0, -2.0, 0.0]
