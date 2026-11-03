@@ -386,7 +386,9 @@ def _load_tiff(source, level, t, c, z, series):
         levels = chosen_series.levels
 
         try:
-            dataset = levels[_bounded(int(level), len(levels), "level")]
+            chosen_level = _bounded(int(level), len(levels), "level")
+
+            dataset = levels[chosen_level]
 
         except (TypeError, ValueError):
             raise ValueError(
@@ -394,8 +396,10 @@ def _load_tiff(source, level, t, c, z, series):
                 f"has {len(levels)} level(s)."
             ) from None
 
-        # A Zarr view of the TIFF decodes only the tiles behind the plane
-        array = zarr.open(dataset.aszarr(), mode="r")
+        # A Zarr view of the TIFF decodes only the tiles behind the plane. It
+        # is asked of the series by level: when a file keeps smaller copies,
+        # the first level's own view holds every size, not one picture
+        array = zarr.open(chosen_series.aszarr(level=chosen_level), mode="r")
 
         axes = [letter.lower() for letter in dataset.axes]
 

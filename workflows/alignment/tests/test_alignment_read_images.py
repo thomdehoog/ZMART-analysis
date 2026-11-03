@@ -112,3 +112,25 @@ def test_an_ome_zarr_level_is_found_by_number_from_either_end_and_by_name(tmp_pa
     assert _read({"image_path": str(path)}, level="1")["stack"].shape == coarse
     with pytest.raises(ValueError, match="Levels"):
         _read({"image_path": str(path)}, level="nowhere")
+
+
+def test_an_ome_tiff_that_keeps_smaller_copies_is_read_at_full_size(tmp_path):
+    """A file with smaller copies stored inside it gives its full-size stack,
+    not the set of sizes, and a smaller copy when one is asked for."""
+    path = tmp_path / "pyramid.ome.tif"
+    stack = np.random.default_rng(5).integers(0, 4000, (3, 64, 64), dtype=np.uint16)
+    with tifffile.TiffWriter(path) as tif:
+        tif.write(
+            stack,
+            subifds=1,
+            tile=(32, 32),
+            photometric="minisblack",
+            metadata={"axes": "ZYX", "PhysicalSizeZ": 2.0},
+        )
+        tif.write(stack[:, ::2, ::2], subfiletype=1, tile=(32, 32), photometric="minisblack")
+
+    read = _read({"image_path": str(path)})
+    np.testing.assert_array_equal(read["stack"], stack)
+
+    smaller = _read({"image_path": str(path)}, level=1)
+    np.testing.assert_array_equal(smaller["stack"], stack[:, ::2, ::2])

@@ -402,6 +402,30 @@ class TestOtherInputs:
         np.testing.assert_array_equal(plane, stack[2])
         assert meta["index"] == {"z": 2}
 
+    def test_reads_every_size_of_an_ome_tiff_that_keeps_smaller_copies(self):
+        """A file with smaller copies stored inside it (as Fiji and QuPath
+        write, and as ZMART writes its positions) is read at each size."""
+        import tifffile
+
+        path = self.tmpdir / "pyramid.ome.tif"
+        stack = np.random.default_rng(4).integers(0, 4000, (2, 3, 64, 64), dtype=np.uint16)
+        with tifffile.TiffWriter(path) as tif:
+            tif.write(
+                stack,
+                subifds=1,
+                tile=(32, 32),
+                photometric="minisblack",
+                metadata={"axes": "CZYX", "Channel": {"Name": ["DAPI", "GFP"]}},
+            )
+            tif.write(stack[..., ::2, ::2], subfiletype=1, tile=(32, 32), photometric="minisblack")
+
+        full, meta = load_plane(path, c="GFP", z=1)
+        np.testing.assert_array_equal(full, stack[1, 1])
+        assert meta["format"] == "ome-tiff"
+
+        smaller, _ = load_plane(path, level=1, c="GFP", z=1)
+        np.testing.assert_array_equal(smaller, stack[1, 1, ::2, ::2])
+
     def test_rejects_an_rgb_file(self):
         from skimage.io import imsave
 

@@ -280,9 +280,13 @@ def _tiff_plane(source, level, t, c, z) -> tuple[np.ndarray, dict]:
 
         levels = tif.series[0].levels
 
-        dataset = levels[_bounded(level, len(levels), "level")]
+        chosen = _bounded(level, len(levels), "level")
 
-        array = zarr.open(dataset.aszarr(), mode="r")
+        dataset = levels[chosen]
+
+        # Asked of the series by level: when a file keeps smaller copies,
+        # the first level's own view holds every size, not one picture
+        array = zarr.open(tif.series[0].aszarr(level=chosen), mode="r")
 
         axes = [letter.lower() for letter in dataset.axes]
 
