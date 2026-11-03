@@ -618,12 +618,15 @@ def _tiff_pixel_size(pixels, downsample):
 
 
 def _tiff_origin(pixels, chosen, unit):
-    """The stage position of the plane read, from the OME Plane entries.
+    """The stage position of the image, from the OME Plane entries.
 
-    The entry of the chosen t, c and z is used, else the first. Returns {}
-    when no position was recorded (the origin is the image corner), and None
-    when one was recorded but cannot be put in the pixel size's unit: no
-    coordinate is better than a wrong one.
+    Y and x come from the entry of the chosen t, c and z, else the first. The
+    height comes from the first plane of the stack (z = 0) of the chosen t
+    and c, so the origin is the corner of the whole stack, as an OME-Zarr
+    position's origin is, whichever plane was read. Returns {} when no
+    position was recorded (the origin is the image corner), and None when one
+    was recorded but cannot be put in the pixel size's unit: no coordinate is
+    better than a wrong one.
     """
 
     if pixels is None or not pixels.planes or unit is None:
@@ -631,9 +634,14 @@ def _tiff_origin(pixels, chosen, unit):
 
     plane = next((one for one in pixels.planes if _is_chosen_plane(one, chosen)), pixels.planes[0])
 
+    bottom = next(
+        (one for one in pixels.planes if _is_chosen_plane(one, {**chosen, "z": 0})), plane
+    )
+
     origin = {}
 
     for axis, value, value_unit in (
+        ("z", bottom.position_z, bottom.position_z_unit),
         ("y", plane.position_y, plane.position_y_unit),
         ("x", plane.position_x, plane.position_x_unit),
     ):

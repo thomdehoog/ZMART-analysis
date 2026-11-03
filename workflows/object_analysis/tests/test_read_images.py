@@ -426,6 +426,36 @@ class TestOtherInputs:
         smaller, _ = load_plane(path, level=1, c="GFP", z=1)
         np.testing.assert_array_equal(smaller, stack[1, 1, ::2, ::2])
 
+    def test_an_ome_tiff_origin_is_the_corner_of_its_whole_stack(self):
+        """Like an OME-Zarr position's origin, the height is the first plane's,
+        whichever plane or projection was read."""
+        import tifffile
+
+        path = self.tmpdir / "stack_with_heights.ome.tif"
+        stack = np.zeros((4, 8, 8), dtype=np.uint16)
+        tifffile.imwrite(
+            path,
+            stack,
+            photometric="minisblack",
+            metadata={
+                "axes": "ZYX",
+                "PhysicalSizeX": 0.5,
+                "PhysicalSizeZ": 2.0,
+                "Plane": {
+                    "PositionX": [30.0] * 4,
+                    "PositionY": [20.0] * 4,
+                    "PositionZ": [10.0, 12.0, 14.0, 16.0],
+                    "PositionXUnit": ["\u00b5m"] * 4,
+                    "PositionYUnit": ["\u00b5m"] * 4,
+                    "PositionZUnit": ["\u00b5m"] * 4,
+                },
+            },
+        )
+
+        for z in (0, 2, "max"):
+            _, meta = load_plane(path, z=z)
+            assert meta["origin"] == {"z": 10.0, "y": 20.0, "x": 30.0}
+
     def test_rejects_an_rgb_file(self):
         from skimage.io import imsave
 
