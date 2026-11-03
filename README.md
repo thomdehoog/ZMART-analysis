@@ -89,14 +89,14 @@ possible.
 Install the engine into your Python environment (Python 3.12 or newer, and conda for the step environments):
 
 ```bash
-pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc9"
+pip install "zmart-analysis @ git+https://github.com/ZMB-UZH/ZMART-analysis@v0.6.0rc10"
 ```
 
 <sub><sub><br></sub></sub>
 
 ## Status
 
-This is version 0.6.0rc9, a beta. The step format, the pipeline layout and the `Engine` calls may still change.
+This is version 0.6.0rc10, a beta. The step format, the pipeline layout and the `Engine` calls may still change.
 
 <sub><sub><br></sub></sub>
 

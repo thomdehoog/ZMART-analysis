@@ -407,7 +407,9 @@ def _load_tiff(source, level, t, c, z, series):
         levels = chosen_series.levels
 
         try:
-            dataset = levels[_bounded(int(level), len(levels), "level")]
+            chosen_level = _bounded(int(level), len(levels), "level")
+
+            dataset = levels[chosen_level]
 
         except (TypeError, ValueError):
             raise ValueError(
@@ -415,8 +417,10 @@ def _load_tiff(source, level, t, c, z, series):
                 f"has {len(levels)} level(s)."
             ) from None
 
-        # A Zarr view of the TIFF decodes only the tiles behind the plane
-        array = zarr.open(dataset.aszarr(), mode="r")
+        # A Zarr view of the TIFF decodes only the tiles behind the plane. It
+        # is asked of the series by level: when a file keeps smaller copies,
+        # the first level's own view holds every size, not one picture
+        array = zarr.open(chosen_series.aszarr(level=chosen_level), mode="r")
 
         axes = [letter.lower() for letter in dataset.axes]
 
@@ -635,14 +639,17 @@ def _tiff_pixel_size(pixels, downsample):
 
 
 def _tiff_origin(pixels, chosen, unit):
-    """The stage position the OME Plane entries record for the plane read.
+    """The stage position the OME Plane entries record for the image.
 
-    The entry of the chosen t, c and z is used, else the first. The value is
-    passed on as recorded: writers differ on which point of the image it names
-    (the Leica driver writes the field centre, the controller's mock its
-    corner), so it is not a placement. Returns {} when no position was
-    recorded, and None when one was recorded but cannot be put in the pixel
-    size's unit: no coordinate is better than a wrong one.
+    Y and x come from the entry of the chosen t, c and z, else the first. The
+    height comes from the first plane of the stack (z = 0) of the chosen t
+    and c, so it is the height of the whole stack, as an OME-Zarr position's
+    origin gives it, whichever plane was read. The values are passed on as
+    recorded: writers differ on which point of the image x and y name (the
+    Leica driver writes the field centre, the controller's mock its corner),
+    so they are not a placement. Returns {} when no position was recorded,
+    and None when one was recorded but cannot be put in the pixel size's
+    unit: no coordinate is better than a wrong one.
     """
 
     if pixels is None or not pixels.planes or unit is None:
@@ -650,9 +657,14 @@ def _tiff_origin(pixels, chosen, unit):
 
     plane = next((one for one in pixels.planes if _is_chosen_plane(one, chosen)), pixels.planes[0])
 
+    bottom = next(
+        (one for one in pixels.planes if _is_chosen_plane(one, {**chosen, "z": 0})), plane
+    )
+
     origin = {}
 
     for axis, value, value_unit in (
+        ("z", bottom.position_z, bottom.position_z_unit),
         ("y", plane.position_y, plane.position_y_unit),
         ("x", plane.position_x, plane.position_x_unit),
     ):
